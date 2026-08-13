@@ -55,10 +55,11 @@ describe('browser success path', () => {
       throw new Error(`${error instanceof Error ? error.message : String(error)}\nAPP PROCESS:\n${app.output()}\nFAKE PROVIDER:\n${fake.output()}`);
     }
     expect(result.steps).toEqual([
-      'provider-added', 'server-added', 'server-inspected', 'tool-invoked', 'playground-complete',
+      'theme-checked', 'provider-added', 'server-added', 'server-inspected', 'tool-invoked', 'playground-complete',
       'suite-saved', 'first-run-inspected', 'second-run-inspected', 'runs-compared', 'mobile-checked',
     ]);
     expect(result.consoleErrors).toEqual([]);
+    expect(result.lightScreenshot).toMatch(/light-mode\.png$/);
     expect(result.serverScreenshot).toMatch(/stdio-server\.png$/);
     expect(result.desktopScreenshot).toMatch(/desktop\.png$/);
     expect(result.mobileScreenshot).toMatch(/mobile\.png$/);

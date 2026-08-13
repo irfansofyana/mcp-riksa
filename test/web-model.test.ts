@@ -19,12 +19,47 @@ import {
   signedDelta,
   traceWindowMs,
 } from '../web/src/model.js';
+import {
+  THEME_STORAGE_KEY,
+  persistThemePreference,
+  readThemePreference,
+  resolveTheme,
+} from '../web/src/theme.js';
 
 describe('workbench browser view model', () => {
   test('normalizes hash navigation to the six supported pages', () => {
     expect(normalizePage('#/playground')).toBe('Playground');
     expect(normalizePage('#/not-real')).toBe('Servers');
     expect(normalizePage('')).toBe('Servers');
+  });
+
+  test('resolves system appearance and preserves explicit theme preferences', () => {
+    const values = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => { values.set(key, value); },
+    };
+
+    expect(readThemePreference(storage)).toBe('system');
+    expect(resolveTheme('system', false)).toBe('light');
+    expect(resolveTheme('system', true)).toBe('dark');
+
+    persistThemePreference('light', storage);
+    expect(values.get(THEME_STORAGE_KEY)).toBe('light');
+    expect(readThemePreference(storage)).toBe('light');
+    expect(resolveTheme('light', true)).toBe('light');
+
+    values.set(THEME_STORAGE_KEY, 'sepia');
+    expect(readThemePreference(storage)).toBe('system');
+  });
+
+  test('falls back safely when browser theme storage is unavailable', () => {
+    const unavailable = {
+      getItem: () => { throw new Error('blocked'); },
+      setItem: () => { throw new Error('blocked'); },
+    };
+    expect(readThemePreference(unavailable)).toBe('system');
+    expect(() => persistThemePreference('dark', unavailable)).not.toThrow();
   });
 
   test('builds stdio and HTTP server payloads without shell strings or resolved secrets', () => {

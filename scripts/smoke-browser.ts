@@ -137,6 +137,26 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
 
   try {
     await wait(`document.querySelector('.app-shell')`, 'application shell');
+    await click('theme-dark');
+    await wait(`document.documentElement.dataset.theme === 'dark' && localStorage.getItem('mcp-workbench-theme') === 'dark'`, 'explicit dark theme');
+    await click('theme-light');
+    await wait(`document.documentElement.dataset.theme === 'light' && localStorage.getItem('mcp-workbench-theme') === 'light'`, 'explicit light theme');
+    await cdp.send('Page.reload', { ignoreCache: true });
+    await new Promise((resolveWait) => setTimeout(resolveWait, 300));
+    await wait(`document.querySelector('.app-shell') && document.documentElement.dataset.theme === 'light'`, 'persisted light theme after reload');
+    await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] });
+    await click('theme-system');
+    await wait(`document.documentElement.dataset.theme === 'dark' && localStorage.getItem('mcp-workbench-theme') === 'system'`, 'system dark theme');
+    await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] });
+    await wait(`document.documentElement.dataset.theme === 'light'`, 'live system light theme');
+    await click('theme-light');
+    await wait(`!document.querySelector('.loading')`, 'loaded light workbench');
+    mkdirSync(options.outputDirectory, { recursive: true });
+    const lightScreenshot = join(options.outputDirectory, 'light-mode.png');
+    const lightCapture = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    writeFileSync(lightScreenshot, Buffer.from(String(lightCapture.data), 'base64'));
+    steps.push('theme-checked');
+
     await navigate('settings');
     await setValue('provider-id', 'local');
     await setValue('provider-name', 'Local fake');
@@ -249,7 +269,7 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     const mobile = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     writeFileSync(mobileScreenshot, Buffer.from(String(mobile.data), 'base64'));
     steps.push('mobile-checked');
-    return { steps, consoleErrors, providersScreenshot, serverScreenshot, playgroundScreenshot, playgroundTraceScreenshot, desktopScreenshot, mobileScreenshot };
+    return { steps, consoleErrors, lightScreenshot, providersScreenshot, serverScreenshot, playgroundScreenshot, playgroundTraceScreenshot, desktopScreenshot, mobileScreenshot };
   } finally {
     cdp.close();
     if (child.exitCode === null) {

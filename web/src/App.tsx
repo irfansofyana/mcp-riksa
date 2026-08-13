@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { initialize, api } from './api.js';
-import { Notice } from './components.js';
+import { Notice, ThemeToggle } from './components.js';
 import { normalizePage, pages, type Page } from './model.js';
 import { ComparePage } from './pages/ComparePage.js';
 import { PlaygroundPage } from './pages/PlaygroundPage.js';
@@ -36,7 +36,7 @@ export function App() {
   return <div className="app-shell">
     <header className="topbar">
       <a className="brand" href="#/servers"><span className="brand-mark">M</span><span>MCP Local Workbench</span></a>
-      <div className="top-status"><span><i className="live-dot" /> Local mode</span><span>Sanitized before storage</span></div>
+      <div className="topbar-actions"><ThemeToggle /><div className="top-status"><span><i className="live-dot" /> Local mode</span><span>Sanitized before storage</span></div></div>
     </header>
     <aside className="nav-rail" aria-label="Primary navigation">
       <nav>{pages.map((entry) => <a key={entry} href={`#/${entry.toLowerCase()}`} className={page === entry ? 'active' : ''} aria-current={page === entry ? 'page' : undefined}><i />{entry}</a>)}</nav>

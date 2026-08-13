@@ -18,7 +18,9 @@ npm install
 npm run dev -- --config examples/workbench.config.yaml
 ```
 
-Open `http://127.0.0.1:4317`. The example config registers the deterministic stdio server and a provider alias. Start the bundled fake provider in a second terminal before running an agent case:
+Open `http://127.0.0.1:4317`. The header appearance control offers light, dark, and system themes. First visits follow the operating-system setting; explicit choices persist in browser-local storage.
+
+The example config registers the deterministic stdio server and a provider alias. Start the bundled fake provider in a second terminal before running an agent case:
 
 ```bash
 export WORKBENCH_PROVIDER_API_KEY=local-test-only

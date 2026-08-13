@@ -2,10 +2,29 @@ import { useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type Rea
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { buildTraceRows, normalizeMcpContent, traceWindowMs } from './model.js';
+import { themePreferences, useThemePreference, type ThemePreference } from './theme.js';
 import type { EventRecord } from './types.js';
 
 export function Button({ variant = 'default', className = '', ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: 'default' | 'primary' | 'danger' }) {
   return <button className={`button ${variant} ${className}`} {...props} />;
+}
+
+const themeLabels: Record<ThemePreference, string> = { system: 'System', light: 'Light', dark: 'Dark' };
+
+export function ThemeToggle() {
+  const { preference, resolvedTheme, setPreference } = useThemePreference();
+  return <div className="theme-toggle" role="group" aria-label="Appearance" title={`Appearance: ${themeLabels[preference]} (${resolvedTheme})`}>
+    <span className="theme-toggle-label">Theme</span>
+    {themePreferences.map((entry) => <button
+      key={entry}
+      type="button"
+      aria-label={`Use ${entry} theme`}
+      aria-pressed={preference === entry}
+      className={preference === entry ? 'selected' : ''}
+      data-testid={`theme-${entry}`}
+      onClick={() => setPreference(entry)}
+    >{themeLabels[entry]}</button>)}
+  </div>;
 }
 
 export function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
