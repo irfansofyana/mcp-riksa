@@ -1,4 +1,4 @@
-import type { AgentUpdate, Bootstrap, ConversationDetail, ConversationSummary, PlaygroundResult, Run } from './types.js';
+import type { AgentUpdate, Bootstrap, ConversationDetail, ConversationSummary, PlaygroundResult, Run, SuiteDetail } from './types.js';
 
 let sessionToken = '';
 
@@ -110,11 +110,14 @@ export const api = {
   playground: (body: unknown) => post<PlaygroundResult>('/api/playground', body),
   conversations: () => get<ConversationSummary[]>('/api/playground/conversations'),
   conversation: (id: string) => get<ConversationDetail>(`/api/playground/conversations/${encodeURIComponent(id)}`),
-  createConversation: (body: { serverId: string; providerId: string; model: string }) => post<ConversationDetail>('/api/playground/conversations', body),
+  createConversation: (body: { serverId: string; providerId: string; model: string; systemPrompt?: string }) => post<ConversationDetail>('/api/playground/conversations', body),
   deleteConversation: (id: string) => remove<{ id: string; deleted: boolean }>(`/api/playground/conversations/${encodeURIComponent(id)}`),
   streamPlayground,
   saveSuite: (source: string) => post<{ name: string; cases: number }>('/api/suites', { source }),
+  updateSuite: (name: string, source: string) => put<{ name: string; previousName: string; cases: number; renamed: boolean }>(`/api/suites/${encodeURIComponent(name)}`, { source }),
+  deleteSuite: (name: string) => remove<{ name: string; deleted: boolean }>(`/api/suites/${encodeURIComponent(name)}`),
   listSuites: () => get<string[]>('/api/suites'),
+  suite: (name: string) => get<SuiteDetail>(`/api/suites/${encodeURIComponent(name)}`),
   runSuite: (name: string) => post<{ id: string; status: string }>(`/api/suites/${encodeURIComponent(name)}/run`, {}),
   listRuns: () => get<Run[]>('/api/runs'),
   run: (id: string) => get<Run>(`/api/runs/${encodeURIComponent(id)}`),

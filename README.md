@@ -35,6 +35,12 @@ The bundled sample server is a real MCP process started directly over stdio—no
 
 ![Connected stdio MCP server with a completed add tool call](docs/screenshots/stdio-server.png)
 
+### Compose portable test suites
+
+The Suites workspace provides a visual case composer for direct tool calls and agent scenarios. Add expected tool calls, output assertions, JSONPath checks, and duration/token/cost budgets without hand-authoring every YAML field. The YAML tab remains canonical: visual edits serialize to strict version 1 YAML that can be committed and run unchanged through the CLI or CI.
+
+Existing suite files load back into the visual composer, while raw YAML remains editable for advanced cases. Suite library supports full CRUD: create, load/edit, rename, duplicate, and delete. Renaming moves the YAML artifact; deleting removes only suite definition and preserves historical run evidence.
+
 ### Inspect a completed agent evaluation
 
 The browser and CLI use the same YAML suite runner. This completed example records the provider turn, MCP tool call, latency, tokens, estimated cost, assertions, and sanitized timeline:
@@ -112,6 +118,8 @@ OAuth tokens, authorization codes, PKCE verifiers, and client secrets remain in 
 ## Playground conversations
 
 Playground sends provider output over a local SSE stream. OpenAI-compatible and Anthropic-compatible adapters emit text deltas while model turns and MCP tool calls continue through the same normalized agent loop used by suites. Suite execution stays non-streaming for deterministic assertions.
+
+New conversations start with an empty composer—no sample request is injected. An optional system prompt is fixed when the conversation is created and shown in the Model Context inspector. Raw view exposes a sanitized model-context preview: system prompt, prior chat messages, pending user turn, MCP tool source, and execution limits. Provider adapters may encode that context differently on wire—for example, Anthropic uses a top-level `system` field.
 
 Conversations and sanitized message traces persist in local SQLite. Conversation history survives browser and workbench restarts and includes input/output tokens, cumulative cost, agent time, tool calls, stop reason, and immutable normalized trace events. **Chat**, **Trace**, and **Raw** views provide rendered Markdown, an observability-style latency waterfall with expandable span data, and the complete sanitized record. Use **Save YAML case** to turn any completed turn into a portable regression case.
 

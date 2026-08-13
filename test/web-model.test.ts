@@ -6,6 +6,11 @@ import {
   buildTraceRows,
   buildServerPayload,
   buildSuiteFromPlayground,
+  createSuiteDraft,
+  duplicateSuiteCase,
+  duplicateSuiteDraft,
+  parseSuiteDraft,
+  serializeSuiteDraft,
   buildToolArguments,
   buildToolFields,
   groupTrace,
@@ -136,6 +141,49 @@ describe('workbench browser view model', () => {
     expect(source).toContain('kind: agent');
     expect(source).toContain('provider: local');
     expect(source).not.toMatch(/api[_-]?key|token:/i);
+  });
+
+  test('round-trips visual suite drafts through portable YAML', () => {
+    const draft = createSuiteDraft('checkout-regression', 'sample');
+    draft.description = 'Critical checkout tool contract';
+    const direct = draft.cases[0]!;
+    expect(direct.kind).toBe('direct');
+    if (direct.kind !== 'direct') throw new Error('Expected direct starter case');
+    direct.call = { tool: 'quote', arguments: { sku: 'A-1', quantity: 2 } };
+    direct.assertions = [
+      { type: 'jsonpath', path: '$.total', exists: true },
+      { type: 'duration', maxMs: 800 },
+    ];
+    const source = serializeSuiteDraft(draft);
+    expect(source).toContain('name: checkout-regression');
+    expect(source).toContain('tool: quote');
+    expect(parseSuiteDraft(source)).toEqual(draft);
+  });
+
+  test('rejects malformed YAML before opening it in the visual composer', () => {
+    expect(() => parseSuiteDraft('version: 1\nname: broken\ncases:\n  - nope\n')).toThrow(/case 1/i);
+    expect(() => parseSuiteDraft('version: 1\nname: broken\ncases:\n  - id: x\n    kind: agent\n    server: sample\n    assertions: []\n')).toThrow(/agent case/i);
+    expect(() => parseSuiteDraft('version: 1\nname: broken\ncases:\n  - id: x\n    kind: direct\n    server: sample\n    call: { tool: add, arguments: {} }\n    assertions:\n      - { type: tool_order }\n')).toThrow(/invalid assertion/i);
+    expect(() => parseSuiteDraft('version: 1\nname: broken\ncases:\n  - { id: same, kind: direct, server: sample, call: { tool: add, arguments: {} }, assertions: [] }\n  - { id: same, kind: direct, server: sample, call: { tool: add, arguments: {} }, assertions: [] }\n')).toThrow(/unique/i);
+  });
+
+  test('duplicates suites with collision-safe names and independent cases', () => {
+    const original = createSuiteDraft('sample-suite', 'sample');
+    original.description = 'Regression';
+    const duplicate = duplicateSuiteDraft(original, ['sample-suite', 'sample-suite-copy']);
+    expect(duplicate).toMatchObject({ name: 'sample-suite-copy-2', description: 'Regression (copy)' });
+    expect(duplicate.cases).not.toBe(original.cases);
+  });
+
+  test('duplicates cases with stable unique IDs and independent nested values', () => {
+    const original = createSuiteDraft('sample-suite', 'sample').cases[0]!;
+    if (original.kind !== 'direct') throw new Error('Expected direct starter case');
+    original.call.arguments = { nested: { value: 1 } };
+    const duplicate = duplicateSuiteCase(original, [original.id]);
+    expect(duplicate.id).toBe('direct-case-copy');
+    expect(duplicate).not.toBe(original);
+    if (duplicate.kind !== 'direct') throw new Error('Expected direct duplicate');
+    expect(duplicate.call.arguments).not.toBe(original.call.arguments);
   });
 
   test('formats signed comparison deltas', () => {

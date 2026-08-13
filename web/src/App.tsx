@@ -43,12 +43,12 @@ export function App() {
       <div className="rail-note"><b>Security boundary</b><span>Loopback · session token · Origin checked</span></div>
     </aside>
     <section className="main-area">
-      <header className="page-heading"><div><h1>{page}</h1><p>{page === 'Servers' ? 'Connect, discover, authorize, and invoke.' : page === 'Playground' ? 'Observe every model and tool turn.' : page === 'Suites' ? 'Portable YAML regression cases.' : page === 'Runs' ? 'Inspect evidence, not summaries.' : page === 'Compare' ? 'Measure movement between runs.' : 'Model Providers and local security.'}</p></div><span className="version">v0.1.0</span></header>
+      <header className="page-heading"><div><h1>{page}</h1><p>{page === 'Servers' ? 'Connect, discover, authorize, and invoke.' : page === 'Playground' ? 'Observe every model and tool turn.' : page === 'Suites' ? 'Compose regression cases visually. Ship portable YAML.' : page === 'Runs' ? 'Inspect evidence, not summaries.' : page === 'Compare' ? 'Measure movement between runs.' : 'Model Providers and local security.'}</p></div><span className="version">v0.1.0</span></header>
       {error ? <Notice error>{error}</Notice> : null}
       {!data ? <div className="loading"><i />Opening the local workbench…</div> : <>
         {page === 'Servers' ? <ServersPage servers={data.servers} onRefresh={refresh} /> : null}
         {page === 'Playground' ? <PlaygroundPage servers={data.servers} providers={data.providers} onRefresh={refresh} /> : null}
-        {page === 'Suites' ? <SuitesPage suites={data.suites} onRefresh={refresh} onRunStarted={(id) => { setSelectedRun(id); void refresh(); navigate('Runs'); }} /> : null}
+        {page === 'Suites' ? <SuitesPage suites={data.suites} servers={data.servers} providers={data.providers} onRefresh={refresh} onRunStarted={(id) => { setSelectedRun(id); void refresh(); navigate('Runs'); }} /> : null}
         {page === 'Runs' ? <RunsPage runs={data.runs} {...(selectedRun === undefined ? {} : { initialId: selectedRun })} onRefresh={refresh} /> : null}
         {page === 'Compare' ? <ComparePage runs={data.runs} /> : null}
         {page === 'Settings' ? <SettingsPage providers={data.providers} onRefresh={refresh} /> : null}

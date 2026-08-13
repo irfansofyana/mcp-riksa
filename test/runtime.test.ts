@@ -117,14 +117,17 @@ describe('concrete workbench runtime', () => {
       await runtime.addProvider({ id: 'local', name: 'Local', type: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, models: { fast: 'test' }, headerEnv: {}, pricing: { inputPerMillion: 1, outputPerMillion: 2 } });
       await runtime.addServer({ id: 'sample', name: 'Sample', transport: 'stdio', command: process.execPath, args: [tsxCli, sampleServer], envRefs: {} });
       await runtime.connectServer('sample');
-      const conversation = await runtime.createConversation({ serverId: 'sample', providerId: 'local', model: 'fast' });
+      const conversation = await runtime.createConversation({ serverId: 'sample', providerId: 'local', model: 'fast', systemPrompt: 'Use tools accurately.' });
+      expect(conversation).toMatchObject({ systemPrompt: 'Use tools accurately.' });
       const deltas: string[] = [];
       await runtime.streamPlayground({ conversationId: conversation.id, prompt: 'First' }, (update) => { if (update.type === 'text_delta') deltas.push(update.delta); });
       await runtime.streamPlayground({ conversationId: conversation.id, prompt: 'Second' }, () => undefined);
       const detail = await runtime.getConversation(conversation.id);
       expect(deltas).toEqual(['Hello ', 'there']);
       expect(detail).toMatchObject({ messageCount: 4, totals: { tokens: { total: 12 } } });
-      expect(receivedMessages[1]).toHaveLength(3);
+      expect(receivedMessages[0]?.[0]).toEqual({ role: 'system', content: 'Use tools accurately.' });
+      expect(receivedMessages[1]).toHaveLength(4);
+      expect(receivedMessages[1]?.[0]).toEqual({ role: 'system', content: 'Use tools accurately.' });
       await expect(runtime.streamPlayground({ conversationId: conversation.id, prompt: 'Fail' }, () => undefined)).rejects.toThrow();
       expect(await runtime.getConversation(conversation.id)).toMatchObject({ messageCount: 4 });
     } finally {
@@ -210,12 +213,30 @@ describe('concrete workbench runtime', () => {
     await runtime.connectServer('sample');
     await runtime.saveSuite(suite);
     expect(await runtime.listSuites()).toEqual(['sample-direct']);
+    expect(await runtime.getSuite('sample-direct')).toMatchObject({
+      name: 'sample-direct', source: expect.stringContaining('kind: direct'), suite: { version: 1, name: 'sample-direct' },
+    });
+    expect(await runtime.getSuite('../sample-direct')).toBeUndefined();
+    await expect(runtime.createSuite(suite)).rejects.toMatchObject({ status: 409 });
 
-    const firstStart = await runtime.startSuite('sample-direct');
+    const updatedSource = suite.replace('name: sample-direct', 'name: renamed-direct').replace('equals: 5', 'equals: 6');
+    expect(await runtime.updateSuite('sample-direct', updatedSource)).toMatchObject({ name: 'renamed-direct', previousName: 'sample-direct', renamed: true });
+    expect(await runtime.listSuites()).toEqual(['renamed-direct']);
+    expect(await runtime.getSuite('sample-direct')).toBeUndefined();
+    expect(await runtime.getSuite('renamed-direct')).toMatchObject({ source: expect.stringContaining('equals: 6') });
+    await runtime.updateSuite('renamed-direct', suite.replace('name: sample-direct', 'name: renamed-direct'));
+
+    const duplicate = suite.replace('name: sample-direct', 'name: copied-direct');
+    expect(await runtime.createSuite(duplicate)).toMatchObject({ name: 'copied-direct' });
+    expect(await runtime.deleteSuite('copied-direct')).toEqual({ name: 'copied-direct', deleted: true });
+    expect(await runtime.getSuite('copied-direct')).toBeUndefined();
+    await expect(runtime.deleteSuite('copied-direct')).rejects.toMatchObject({ status: 404 });
+
+    const firstStart = await runtime.startSuite('renamed-direct');
     const first = await waitForRun(runtime, firstStart.id) as { status: string; summary: { passRate: number } };
     expect(first).toMatchObject({ status: 'passed', summary: { passRate: 1 } });
 
-    const secondStart = await runtime.startSuite('sample-direct');
+    const secondStart = await runtime.startSuite('renamed-direct');
     await waitForRun(runtime, secondStart.id);
     expect(await runtime.compareRuns(firstStart.id, secondStart.id)).toMatchObject({
       runA: firstStart.id, runB: secondStart.id, passRateDelta: 0, toolCallDelta: 0,

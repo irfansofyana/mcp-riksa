@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync, closeSync, fsyncSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createProviderAdapter } from '../agent/providers.js';
@@ -29,6 +29,7 @@ type PlaygroundInput = {
   providerId?: string;
   model?: string;
   prompt: string;
+  systemPrompt?: string;
   limits?: { maxTurns: number; maxToolCalls: number; timeoutMs: number; maxCostUsd?: number };
 };
 
@@ -62,9 +63,16 @@ export class WorkbenchRuntime {
       const parsed = serverConfigSchema.parse(config);
       this.servers.set(parsed.id, parsed);
     }
+    const loadedNames = new Set<string>();
     for (const filename of readdirSync(options.suiteDirectory).filter((name) => name.endsWith('.yaml'))) {
-      const source = readFileSync(join(options.suiteDirectory, filename), 'utf8');
+      const path = join(options.suiteDirectory, filename);
+      if (lstatSync(path).isSymbolicLink()) throw new Error(`Suite file ${filename} cannot be a symbolic link`);
+      const source = readFileSync(path, 'utf8');
       const suite = parseSuite(source);
+      if (filename !== `${suite.name}.yaml`) throw new Error(`Suite filename ${filename} must match YAML name ${suite.name}`);
+      const folded = suite.name.toLocaleLowerCase('en-US');
+      if (loadedNames.has(folded)) throw new Error(`Suite name ${suite.name} conflicts by letter case`);
+      loadedNames.add(folded);
       this.suites.set(suite.name, { source, suite });
     }
   }
@@ -233,13 +241,14 @@ export class WorkbenchRuntime {
     const { serverId, providerId, model, config } = this.resolvePlayground(input);
     return this.withConfigUse([`server:${serverId}`, `provider:${providerId}`], () => runAgent({
       prompt: input.prompt,
+      systemPrompt: input.systemPrompt,
       model,
       serverId,
       limits: input.limits ?? { maxTurns: 8, maxToolCalls: 16, timeoutMs: 60_000 },
     }, { provider: createProviderAdapter(config), mcp: this.mcp }));
   }
 
-  async createConversation(input: { serverId: string; providerId: string; model: string }) {
+  async createConversation(input: { serverId: string; providerId: string; model: string; systemPrompt?: string }) {
     this.requireServer(input.serverId);
     const provider = this.requireProvider(input.providerId);
     if (!Object.hasOwn(provider.models, input.model)) throw new WorkbenchError(`Unknown model alias ${input.model} for provider ${input.providerId}`, 400);
@@ -261,21 +270,12 @@ export class WorkbenchRuntime {
     });
     const providerHistory: ProviderMessage[] = conversation.messages.flatMap((message): ProviderMessage[] => {
       if (message.role === 'user') return [{ role: 'user', content: message.content }];
-      const toolCalls = (message.toolCalls ?? []).map((call, index) => ({
-        id: `history-${message.id}-${index}`,
-        name: call.name,
-        arguments: call.arguments as Record<string, unknown>,
-      }));
-      return [
-        { role: 'assistant', content: message.content, toolCalls },
-        ...toolCalls.map((call, index): ProviderMessage => ({
-          role: 'tool', toolCallId: call.id, name: call.name,
-          content: JSON.stringify(message.toolCalls?.[index]?.result ?? null),
-        })),
-      ];
+      if (message.providerTranscript?.length) return message.providerTranscript;
+      return [{ role: 'assistant', content: message.content, toolCalls: [] }];
     });
     const result = await this.withConfigUse([`server:${resolved.serverId}`, `provider:${resolved.providerId}`], () => runAgent({
       prompt: input.prompt,
+      systemPrompt: conversation.systemPrompt,
       model: resolved.model,
       serverId: resolved.serverId,
       limits: input.limits ?? { maxTurns: 8, maxToolCalls: 16, timeoutMs: 60_000 },
@@ -287,24 +287,96 @@ export class WorkbenchRuntime {
       {
         role: 'assistant', content: result.output, durationMs: result.durationMs, tokens: result.tokens,
         costUsd: result.costUsd, toolCalls: result.toolCalls, events: result.events, stopReason: result.stopReason,
+        providerTranscript: result.transcript,
       },
     );
     return { conversationId: conversation.id, result, conversation: this.conversations.get(conversation.id) };
   }
 
-  async saveSuite(source: string) {
+  private suiteSource(source: string) {
     const suite = parseSuite(source);
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(suite.name)) {
-      throw new Error('Suite name may contain only letters, numbers, dot, underscore, and hyphen');
+      throw new WorkbenchError('Suite name may contain only letters, numbers, dot, underscore, and hyphen', 400);
     }
-    const normalized = source.endsWith('\n') ? source : `${source}\n`;
-    writeFileSync(join(this.options.suiteDirectory, `${suite.name}.yaml`), normalized, { encoding: 'utf8', mode: 0o600 });
+    return { suite, normalized: source.endsWith('\n') ? source : `${source}\n` };
+  }
+
+  private suitePath(name: string) {
+    return join(this.options.suiteDirectory, `${name}.yaml`);
+  }
+
+  private assertSuiteDestination(name: string, currentName?: string) {
+    const folded = name.toLocaleLowerCase('en-US');
+    const conflict = [...this.suites.keys()].find((entry) => entry !== currentName && entry.toLocaleLowerCase('en-US') === folded);
+    if (conflict) throw new WorkbenchError(`Suite ${name} conflicts with existing suite ${conflict}`, 409);
+    const path = this.suitePath(name);
+    if (existsSync(path) && name !== currentName) throw new WorkbenchError(`Suite file ${name}.yaml already exists`, 409);
+    if (existsSync(path) && lstatSync(path).isSymbolicLink()) throw new WorkbenchError(`Suite file ${name}.yaml cannot be a symbolic link`, 409);
+  }
+
+  private writeSuiteAtomic(name: string, source: string) {
+    const destination = this.suitePath(name);
+    const temporary = join(this.options.suiteDirectory, `.${name}.${randomUUID()}.tmp`);
+    const descriptor = openSync(temporary, 'wx', 0o600);
+    try {
+      writeFileSync(descriptor, source, 'utf8');
+      fsyncSync(descriptor);
+    } finally {
+      closeSync(descriptor);
+    }
+    try { renameSync(temporary, destination); }
+    catch (error) { if (existsSync(temporary)) unlinkSync(temporary); throw error; }
+  }
+
+  private persistSuite(source: string) {
+    const { suite, normalized } = this.suiteSource(source);
+    this.writeSuiteAtomic(suite.name, normalized);
     this.suites.set(suite.name, { source: normalized, suite });
     return { name: suite.name, cases: suite.cases.length };
   }
 
+  async saveSuite(source: string) {
+    return this.persistSuite(source);
+  }
+
+  async createSuite(source: string) {
+    const { suite } = this.suiteSource(source);
+    this.assertSuiteDestination(suite.name);
+    return this.persistSuite(source);
+  }
+
+  async updateSuite(name: string, source: string) {
+    if (basename(name) !== name || !this.suites.has(name)) throw new WorkbenchError(`Suite ${name} not found`, 404);
+    const { suite } = this.suiteSource(source);
+    this.assertSuiteDestination(suite.name, name);
+    const renamed = suite.name !== name;
+    const oldPath = this.suitePath(name);
+    const normalized = source.endsWith('\n') ? source : `${source}\n`;
+    this.writeSuiteAtomic(suite.name, normalized);
+    if (renamed) {
+      try { unlinkSync(oldPath); }
+      catch (error) { unlinkSync(this.suitePath(suite.name)); throw error; }
+      this.suites.delete(name);
+    }
+    this.suites.set(suite.name, { source: normalized, suite });
+    return { name: suite.name, cases: suite.cases.length, previousName: name, renamed };
+  }
+
+  async deleteSuite(name: string) {
+    if (basename(name) !== name || !this.suites.has(name)) throw new WorkbenchError(`Suite ${name} not found`, 404);
+    unlinkSync(join(this.options.suiteDirectory, `${name}.yaml`));
+    this.suites.delete(name);
+    return { name, deleted: true };
+  }
+
   async listSuites() {
     return [...this.suites.keys()].sort();
+  }
+
+  async getSuite(name: string) {
+    const stored = this.suites.get(basename(name));
+    if (!stored || stored.suite.name !== name) return undefined;
+    return { name, source: stored.source, suite: stored.suite };
   }
 
   async startSuite(name: string) {

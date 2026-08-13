@@ -1,3 +1,32 @@
+export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+
+export type SuiteAssertion =
+  | { type: 'tool_called'; tool: string }
+  | { type: 'tool_not_called'; tool: string }
+  | { type: 'tool_count'; tool?: string; count: number }
+  | { type: 'tool_order'; tools: string[] }
+  | { type: 'args'; tool: string; path?: string; equals: JsonValue }
+  | { type: 'jsonpath'; path: string; equals?: JsonValue; exists?: boolean }
+  | { type: 'contains'; path?: string; value: string }
+  | { type: 'regex'; path?: string; pattern: string; flags?: string }
+  | { type: 'duration'; maxMs: number }
+  | { type: 'tokens'; max: number }
+  | { type: 'cost'; maxUsd: number };
+
+export type SuiteLimits = { maxTurns: number; maxToolCalls: number; timeoutMs: number; maxCostUsd?: number };
+export type DirectSuiteCase = {
+  id: string; kind: 'direct'; server: string;
+  call: { tool: string; arguments: Record<string, JsonValue>; dangerous?: boolean };
+  assertions: SuiteAssertion[];
+};
+export type AgentSuiteCase = {
+  id: string; kind: 'agent'; server: string; provider: string; model: string; prompt: string;
+  limits: SuiteLimits; assertions: SuiteAssertion[];
+};
+export type SuiteCase = DirectSuiteCase | AgentSuiteCase;
+export type SuiteDraft = { version: 1; name: string; description?: string; cases: SuiteCase[] };
+export type SuiteDetail = { name: string; source: string; suite: SuiteDraft };
+
 export type Tool = {
   name: string;
   description?: string;
@@ -70,6 +99,7 @@ export type ConversationSummary = {
   serverId: string;
   providerId: string;
   model: string;
+  systemPrompt: string;
   createdAt: string;
   updatedAt: string;
   messageCount: number;

@@ -37,7 +37,15 @@ function runtime(): ApiRuntime {
       return { conversationId: 'conversation-1', result: { output: '5', tokens: { total: 2 } } };
     },
     saveSuite: async (source) => { calls.push({ method: 'saveSuite', value: source }); return { name: 'sample' }; },
+    createSuite: async (source) => { calls.push({ method: 'createSuite', value: source }); return { name: 'sample', cases: 1 }; },
+    updateSuite: async (name, source) => { calls.push({ method: 'updateSuite', value: { name, source } }); return { name: 'renamed', previousName: name, cases: 1, renamed: true }; },
+    deleteSuite: async (name) => { calls.push({ method: 'deleteSuite', value: name }); return { name, deleted: true }; },
     listSuites: async () => ['sample'],
+    getSuite: async (name) => name === 'sample' ? {
+      name,
+      source: 'version: 1\nname: sample\ncases: []\n',
+      suite: { version: 1, name, cases: [] },
+    } : undefined,
     startSuite: async (name) => ({ id: 'run-1', suite: name, status: 'running' }),
     listRuns: async () => [run],
     getRun: async (id) => id === 'run-1' ? run : undefined,
@@ -137,14 +145,22 @@ describe('API workbench flow', () => {
     const tool = await request('/api/servers/sample/call', mutation({ tool: 'add', arguments: { a: 2, b: 3 }, confirmDangerous: false }));
     expect(await tool.json()).toMatchObject({ structuredContent: { sum: 5 } });
     expect((await request('/api/playground', mutation({ prompt: 'add' }))).status).toBe(200);
-    expect((await request('/api/playground/conversations', mutation({ serverId: 'sample', providerId: 'local', model: 'default' }))).status).toBe(201);
+    expect((await request('/api/playground/conversations', mutation({ serverId: 'sample', providerId: 'local', model: 'default', systemPrompt: 'Use tools accurately.' }))).status).toBe(201);
     expect((await request('/api/playground/conversations')).status).toBe(200);
     expect((await request('/api/playground/conversations/conversation-1')).status).toBe(200);
     const stream = await request('/api/playground/stream', mutation({ conversationId: 'conversation-1', prompt: 'add' }));
     expect(stream.headers.get('content-type')).toContain('text/event-stream');
     expect(await stream.text()).toContain('text_delta');
     expect((await request('/api/suites', mutation({ source: 'version: 1' }))).status).toBe(201);
+    expect(calls).toContainEqual({ method: 'createSuite', value: 'version: 1' });
     expect((await request('/api/suites')).status).toBe(200);
+    expect(await (await request('/api/suites/sample')).json()).toMatchObject({
+      name: 'sample', suite: { version: 1, cases: [] }, source: expect.stringContaining('name: sample'),
+    });
+    expect((await request('/api/suites/missing')).status).toBe(404);
+    expect(await (await request('/api/suites/sample', { ...mutation({ source: 'version: 1\nname: renamed' }), method: 'PUT' })).json()).toMatchObject({ name: 'renamed', previousName: 'sample', renamed: true });
+    expect((await request('/api/suites/sample', { ...mutation(undefined), method: 'DELETE', body: undefined })).status).toBe(200);
+    expect(calls).toContainEqual({ method: 'deleteSuite', value: 'sample' });
 
     expect(await (await request('/api/suites/sample/run', mutation({}))).json()).toMatchObject({ id: 'run-1', status: 'running' });
     expect((await request('/api/runs')).status).toBe(200);

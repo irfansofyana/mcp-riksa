@@ -20,13 +20,17 @@ export type ApiRuntime = {
   inspectServer(id: string): Promise<unknown> | unknown;
   callTool(id: string, tool: string, args: Record<string, unknown>, options: { confirmDangerous: boolean }): Promise<unknown> | unknown;
   playground(value: unknown): Promise<unknown> | unknown;
-  createConversation(value: { serverId: string; providerId: string; model: string }): Promise<unknown> | unknown;
+  createConversation(value: { serverId: string; providerId: string; model: string; systemPrompt?: string }): Promise<unknown> | unknown;
   listConversations(): Promise<unknown> | unknown;
   getConversation(id: string): Promise<unknown | undefined> | unknown | undefined;
   deleteConversation(id: string): Promise<boolean> | boolean;
   streamPlayground(value: unknown, onUpdate: (update: unknown) => void, signal?: AbortSignal): Promise<unknown>;
   saveSuite(source: string): Promise<unknown> | unknown;
+  createSuite(source: string): Promise<unknown> | unknown;
+  updateSuite(name: string, source: string): Promise<unknown> | unknown;
+  deleteSuite(name: string): Promise<unknown> | unknown;
   listSuites(): Promise<unknown> | unknown;
+  getSuite(name: string): Promise<unknown | undefined> | unknown | undefined;
   startSuite(name: string): Promise<unknown> | unknown;
   listRuns(): Promise<unknown> | unknown;
   getRun(id: string): Promise<unknown | undefined> | unknown | undefined;
@@ -51,6 +55,7 @@ const playgroundSchema = z.strictObject({
   providerId: z.string().min(1).optional(),
   model: z.string().min(1).optional(),
   prompt: z.string().min(1),
+  systemPrompt: z.string().max(100_000).optional(),
   limits: z.object({
     maxTurns: z.number().int().min(1).max(50),
     maxToolCalls: z.number().int().min(1).max(100),
@@ -62,6 +67,7 @@ const conversationSchema = z.strictObject({
   serverId: z.string().min(1),
   providerId: z.string().min(1),
   model: z.string().min(1),
+  systemPrompt: z.string().max(100_000).optional(),
 });
 const streamingPlaygroundSchema = playgroundSchema.extend({ conversationId: z.string().min(1) });
 
@@ -177,7 +183,14 @@ export function createApp(runtime: ApiRuntime, options: { sessionToken?: string;
     }
   });
   app.get('/api/suites', async (_request, response) => send(response, await runtime.listSuites()));
-  app.post('/api/suites', async (request, response) => send(response, await runtime.saveSuite(suiteBodySchema.parse(request.body).source), 201));
+  app.post('/api/suites', async (request, response) => send(response, await runtime.createSuite(suiteBodySchema.parse(request.body).source), 201));
+  app.get('/api/suites/:name', async (request, response) => {
+    const suite = await runtime.getSuite(request.params.name!);
+    if (suite === undefined) return send(response, { error: 'Suite not found' }, 404);
+    send(response, suite);
+  });
+  app.put('/api/suites/:name', async (request, response) => send(response, await runtime.updateSuite(request.params.name!, suiteBodySchema.parse(request.body).source)));
+  app.delete('/api/suites/:name', async (request, response) => send(response, await runtime.deleteSuite(request.params.name!)));
   app.post('/api/suites/:name/run', async (request, response) => send(response, await runtime.startSuite(request.params.name!), 202));
 
   app.get('/api/runs', async (_request, response) => send(response, await runtime.listRuns()));

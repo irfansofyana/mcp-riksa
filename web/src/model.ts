@@ -1,5 +1,14 @@
-import { stringify } from 'yaml';
-import type { ProviderSummary, ServerSummary } from './types.js';
+import { parse as parseYaml, stringify } from 'yaml';
+import type {
+  AgentSuiteCase,
+  DirectSuiteCase,
+  JsonValue,
+  ProviderSummary,
+  ServerSummary,
+  SuiteAssertion,
+  SuiteCase,
+  SuiteDraft,
+} from './types.js';
 
 export const pages = ['Servers', 'Playground', 'Suites', 'Runs', 'Compare', 'Settings'] as const;
 export type Page = typeof pages[number];
@@ -367,6 +376,126 @@ export function buildToolArguments(fields: ToolField[], values: Record<string, s
     } else setPath(output, field.path, value);
   }
   return output;
+}
+
+function clone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function isJsonValue(value: unknown): value is JsonValue {
+  if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) return true;
+  if (Array.isArray(value)) return value.every(isJsonValue);
+  const object = objectValue(value);
+  return object !== undefined && Object.values(object).every(isJsonValue);
+}
+
+function isSuiteAssertion(value: unknown): value is SuiteAssertion {
+  const entry = objectValue(value);
+  if (!entry || typeof entry.type !== 'string') return false;
+  const optionalString = (field: unknown) => field === undefined || typeof field === 'string';
+  switch (entry.type) {
+    case 'tool_called':
+    case 'tool_not_called': return typeof entry.tool === 'string';
+    case 'tool_count': return optionalString(entry.tool) && typeof entry.count === 'number';
+    case 'tool_order': return Array.isArray(entry.tools) && entry.tools.every((tool) => typeof tool === 'string');
+    case 'args': return typeof entry.tool === 'string' && optionalString(entry.path) && isJsonValue(entry.equals);
+    case 'jsonpath': return typeof entry.path === 'string' && ((Object.hasOwn(entry, 'equals') && isJsonValue(entry.equals)) || typeof entry.exists === 'boolean');
+    case 'contains': return optionalString(entry.path) && typeof entry.value === 'string';
+    case 'regex': return optionalString(entry.path) && typeof entry.pattern === 'string' && optionalString(entry.flags);
+    case 'duration': return typeof entry.maxMs === 'number';
+    case 'tokens': return typeof entry.max === 'number';
+    case 'cost': return typeof entry.maxUsd === 'number';
+    default: return false;
+  }
+}
+
+export function createDirectSuiteCase(id: string, server = ''): DirectSuiteCase {
+  return { id, kind: 'direct', server, call: { tool: '', arguments: {} }, assertions: [] };
+}
+
+export function createAgentSuiteCase(id: string, server = '', provider = '', model = ''): AgentSuiteCase {
+  return {
+    id, kind: 'agent', server, provider, model, prompt: '',
+    limits: { maxTurns: 8, maxToolCalls: 16, timeoutMs: 60_000 }, assertions: [],
+  };
+}
+
+export function createSuiteDraft(name = 'new-suite', server = ''): SuiteDraft & { cases: [DirectSuiteCase, ...SuiteCase[]] } {
+  return { version: 1, name, description: '', cases: [createDirectSuiteCase('direct-case', server)] };
+}
+
+export function serializeSuiteDraft(draft: SuiteDraft): string {
+  return stringify(draft, { lineWidth: 0 });
+}
+
+export function parseSuiteDraft(source: string): SuiteDraft {
+  const value: unknown = parseYaml(source);
+  const root = objectValue(value);
+  if (!root) throw new Error('Suite YAML must contain an object');
+  if (root.version !== 1 || typeof root.name !== 'string' || !root.name || !Array.isArray(root.cases) || root.cases.length === 0) {
+    throw new Error('Suite YAML needs version: 1, a name, and at least one case');
+  }
+  if (root.description !== undefined && typeof root.description !== 'string') throw new Error('Suite description must be text');
+  const caseIds = new Set<string>();
+  root.cases.forEach((raw, index) => {
+    const entry = objectValue(raw);
+    const label = `Case ${index + 1}`;
+    if (!entry || typeof entry.id !== 'string' || !entry.id || typeof entry.server !== 'string' || !Array.isArray(entry.assertions)) {
+      throw new Error(`${label} needs an ID, server, and assertions`);
+    }
+    if (caseIds.has(entry.id)) throw new Error('Suite case IDs must be unique');
+    caseIds.add(entry.id);
+    if (!entry.assertions.every(isSuiteAssertion)) throw new Error(`${label} has an invalid assertion`);
+    if (entry.kind === 'direct') {
+      const call = objectValue(entry.call);
+      if (!call || typeof call.tool !== 'string' || !objectValue(call.arguments)) throw new Error(`${label} direct case needs a tool and arguments object`);
+      return;
+    }
+    if (entry.kind === 'agent') {
+      const limits = objectValue(entry.limits);
+      if (typeof entry.provider !== 'string' || typeof entry.model !== 'string' || typeof entry.prompt !== 'string' || !limits
+        || typeof limits.maxTurns !== 'number' || typeof limits.maxToolCalls !== 'number' || typeof limits.timeoutMs !== 'number') {
+        throw new Error(`${label} agent case needs provider, model, prompt, and limits`);
+      }
+      return;
+    }
+    throw new Error(`${label} kind must be direct or agent`);
+  });
+  return clone(root as SuiteDraft);
+}
+
+export function duplicateSuiteDraft(draft: SuiteDraft, existingNames: string[]): SuiteDraft {
+  const taken = new Set(existingNames);
+  const base = `${draft.name}-copy`;
+  let name = base;
+  let sequence = 2;
+  while (taken.has(name)) name = `${base}-${sequence++}`;
+  return { ...clone(draft), name, ...(draft.description ? { description: `${draft.description} (copy)` } : {}) };
+}
+
+export function duplicateSuiteCase(entry: SuiteCase, existingIds: string[]): SuiteCase {
+  const taken = new Set(existingIds);
+  const base = `${entry.id}-copy`;
+  let id = base;
+  let sequence = 2;
+  while (taken.has(id)) id = `${base}-${sequence++}`;
+  return { ...clone(entry), id };
+}
+
+export function createSuiteAssertion(type: SuiteAssertion['type']): SuiteAssertion {
+  switch (type) {
+    case 'tool_called': return { type, tool: '' };
+    case 'tool_not_called': return { type, tool: '' };
+    case 'tool_count': return { type, count: 1 };
+    case 'tool_order': return { type, tools: [] };
+    case 'args': return { type, tool: '', equals: null };
+    case 'jsonpath': return { type, path: '$', exists: true };
+    case 'contains': return { type, value: '' };
+    case 'regex': return { type, pattern: '' };
+    case 'duration': return { type, maxMs: 1_000 };
+    case 'tokens': return { type, max: 1_000 };
+    case 'cost': return { type, maxUsd: 0.1 };
+  }
 }
 
 export function buildSuiteFromPlayground(input: {
