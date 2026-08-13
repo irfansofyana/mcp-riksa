@@ -468,6 +468,9 @@ export class WorkbenchRuntime {
     if (hostname !== 'localhost' && hostname !== '127.0.0.1' && hostname !== '::1') {
       throw new WorkbenchError('Conformance execution is restricted to loopback MCP endpoints', 400);
     }
+    if (endpoint.username || endpoint.password || endpoint.search || endpoint.hash) {
+      throw new WorkbenchError('Conformance endpoints cannot contain credentials, query parameters, or fragments', 400);
+    }
     const id = randomUUID();
     const startedAt = new Date().toISOString();
     const controller = new AbortController();

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { Button, Empty, Field, Input, JsonView, Notice, RichToolResult, Section, Select, Status, Textarea } from '../components.js';
 import { buildServerPayload, buildToolArguments, buildToolFields, initialToolValues, serverToForm, type ServerForm } from '../model.js';
-import type { ConformanceReport, ServerSummary, Tool } from '../types.js';
+import type { ConformanceReportSummary, ServerSummary, Tool } from '../types.js';
 
 type OAuthStatus = { id?: string; state: string; scopes: string[]; timeline: unknown[]; authorizationUrl?: string; expiresAt?: string };
 
@@ -13,7 +13,7 @@ const initialForm = (): ServerForm => ({
 });
 
 export function ServersPage({ servers, conformanceReports, onRefresh, onConformanceStarted }: {
-  servers: ServerSummary[]; conformanceReports: ConformanceReport[]; onRefresh(): Promise<void>; onConformanceStarted(id: string): void;
+  servers: ServerSummary[]; conformanceReports: ConformanceReportSummary[]; onRefresh(): Promise<void>; onConformanceStarted(id: string): void;
 }) {
   const [form, setForm] = useState(initialForm);
   const [editingId, setEditingId] = useState('');

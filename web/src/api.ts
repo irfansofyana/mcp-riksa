@@ -1,4 +1,4 @@
-import type { AgentUpdate, Bootstrap, ConformanceReport, ConversationDetail, ConversationSummary, PlaygroundResult, Run, SuiteDetail } from './types.js';
+import type { AgentUpdate, Bootstrap, ConformanceReport, ConformanceReportSummary, ConversationDetail, ConversationSummary, PlaygroundResult, Run, SuiteDetail } from './types.js';
 
 let sessionToken = '';
 
@@ -125,7 +125,7 @@ export const api = {
   cancelRun: (id: string) => post(`/api/runs/${encodeURIComponent(id)}/cancel`, {}),
   compare: (a: string, b: string) => get<Record<string, number | string>>(`/api/compare?runA=${encodeURIComponent(a)}&runB=${encodeURIComponent(b)}`),
   startConformance: (body: { serverId: string; selection: { kind: 'suite'; suite: 'active' } | { kind: 'scenario'; scenario: string }; timeoutMs: number }) => post<{ id: string; status: 'running'; runnerVersion: string }>('/api/conformance', body),
-  conformanceReports: (serverId?: string) => get<ConformanceReport[]>(`/api/conformance${serverId ? `?serverId=${encodeURIComponent(serverId)}` : ''}`),
+  conformanceReports: (serverId?: string) => get<ConformanceReportSummary[]>(`/api/conformance${serverId ? `?serverId=${encodeURIComponent(serverId)}` : ''}`),
   conformanceReport: (id: string) => get<ConformanceReport>(`/api/conformance/${encodeURIComponent(id)}`),
   cancelConformance: (id: string) => post<{ id: string; cancelled: boolean }>(`/api/conformance/${encodeURIComponent(id)}/cancel`, {}),
 };

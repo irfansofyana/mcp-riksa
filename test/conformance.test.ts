@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { conformanceStatus, conformanceSummary, normalizeConformanceChecks } from '../src/conformance/model.js';
+import { OfficialConformanceRunner } from '../src/conformance/runner.js';
 
 describe('official conformance report model', () => {
   test('normalizes official statuses, spec references, warnings and harness errors', () => {
@@ -14,6 +15,13 @@ describe('official conformance report model', () => {
     expect(JSON.stringify(checks)).not.toContain('model-secret');
     expect(conformanceSummary(checks)).toEqual({ total: 4, passed: 1, failed: 0, warnings: 1, skipped: 1, harnessErrors: 1 });
   });
+
+  test('runs the pinned official CLI and preserves harness failure evidence', async () => {
+    const execution = await new OfficialConformanceRunner().run({ endpoint: 'http://127.0.0.1:1/mcp', selection: { kind: 'scenario', scenario: 'server-initialize' }, timeoutMs: 10_000 }, new AbortController().signal);
+    expect(execution.exitCode).not.toBe(0);
+    expect(execution.rawReport).toMatchObject({ runner: '@modelcontextprotocol/conformance' });
+    expect(execution.checks.length > 0 || execution.diagnostic).toBeTruthy();
+  }, 20_000);
 
   test('keeps runner failure distinct from tested scenario failure', () => {
     const failed = normalizeConformanceChecks([{ scenario: 'tools-list', value: [{ id: 'tools', name: 'Tools', description: '', status: 'FAILURE' }] }]);

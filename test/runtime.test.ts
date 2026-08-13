@@ -78,6 +78,8 @@ describe('concrete workbench runtime', () => {
     expect(await runtime.cancelConformance(started.id)).toBe(true);
     expect(await waitForConformance(runtime, started.id)).toMatchObject({ status: 'cancelled', runnerVersion: '0.1.10', selection: { scenario: 'server-initialize' } });
     expect(await runtime.listConformanceReports('http')).toHaveLength(1);
+    await runtime.addServer({ id: 'query-secret', name: 'Query secret', transport: 'http', url: 'http://127.0.0.1:3000/mcp?access_token=secret', headerEnv: {}, allowUnsafeEndpoint: false });
+    await expect(runtime.startConformance({ serverId: 'query-secret', selection: { kind: 'suite', suite: 'active' }, timeoutMs: 30_000 })).rejects.toMatchObject({ status: 400 });
     await runtime.addServer({ id: 'remote', name: 'Remote', transport: 'http', url: 'https://example.com/mcp', headerEnv: {}, allowUnsafeEndpoint: false });
     await expect(runtime.startConformance({ serverId: 'remote', selection: { kind: 'suite', suite: 'active' }, timeoutMs: 30_000 })).rejects.toMatchObject({ status: 400 });
     await runtime.close();

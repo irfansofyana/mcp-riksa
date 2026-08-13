@@ -75,13 +75,17 @@ export type ConformanceCheck = {
   specReferences: Array<{ id: string; url?: string }>; error?: string; details?: unknown;
 };
 
-export type ConformanceReport = {
+export type ConformanceReportSummary = {
   id: string; serverId: string; endpoint: string;
   selection: { kind: 'suite'; suite: 'active' } | { kind: 'scenario'; scenario: string };
   status: 'running' | 'passed' | 'failed' | 'warning' | 'harness_error' | 'cancelled' | 'timed_out' | 'interrupted';
   startedAt: string; completedAt?: string; runnerVersion: string;
   summary: { total: number; passed: number; failed: number; warnings: number; skipped: number; harnessErrors: number };
-  checks: ConformanceCheck[]; rawReport?: unknown; diagnostic?: string;
+  diagnostic?: string;
+};
+
+export type ConformanceReport = ConformanceReportSummary & {
+  checks: ConformanceCheck[]; rawReport?: unknown;
 };
 
 export type PlaygroundResult = {
@@ -134,5 +138,5 @@ export type Bootstrap = {
   providers: ProviderSummary[];
   suites: string[];
   runs: Run[];
-  conformanceReports: ConformanceReport[];
+  conformanceReports: ConformanceReportSummary[];
 };

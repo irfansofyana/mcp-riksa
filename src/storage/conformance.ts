@@ -1,6 +1,6 @@
 import { redact } from '../core/redaction.js';
 import { conformanceSummary } from '../conformance/model.js';
-import type { ConformanceCheck, ConformanceReport, ConformanceReportStatus, ConformanceSelection } from '../conformance/types.js';
+import type { ConformanceCheck, ConformanceReport, ConformanceReportStatus, ConformanceReportSummary, ConformanceSelection } from '../conformance/types.js';
 import type { WorkbenchDatabase } from './database.js';
 
 type ReportRow = {
@@ -63,10 +63,21 @@ export class ConformanceRepository {
     };
   }
 
-  list(serverId?: string): ConformanceReport[] {
+  list(serverId?: string): ConformanceReportSummary[] {
     const rows = (serverId
-      ? this.database.prepare('SELECT id FROM conformance_reports WHERE server_id = ? ORDER BY started_at DESC').all(serverId)
-      : this.database.prepare('SELECT id FROM conformance_reports ORDER BY started_at DESC').all()) as Array<{ id: string }>;
-    return rows.map(({ id }) => this.get(id)!).filter(Boolean);
+      ? this.database.prepare('SELECT * FROM conformance_reports WHERE server_id = ? ORDER BY started_at DESC LIMIT 100').all(serverId)
+      : this.database.prepare('SELECT * FROM conformance_reports ORDER BY started_at DESC LIMIT 100').all()) as ReportRow[];
+    return rows.map((row) => ({
+      id: row.id,
+      serverId: row.server_id,
+      endpoint: row.endpoint,
+      selection: JSON.parse(row.selection_json) as ConformanceSelection,
+      status: row.status,
+      startedAt: row.started_at,
+      ...(row.completed_at === null ? {} : { completedAt: row.completed_at }),
+      runnerVersion: row.runner_version,
+      summary: JSON.parse(row.summary_json) as ConformanceReport['summary'],
+      ...(row.diagnostic === null ? {} : { diagnostic: row.diagnostic }),
+    }));
   }
 }

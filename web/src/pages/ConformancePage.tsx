@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { Button, Empty, Field, Input, JsonView, Notice, Section, Select, Status } from '../components.js';
-import type { ConformanceReport, ServerSummary } from '../types.js';
+import type { ConformanceReport, ConformanceReportSummary, ServerSummary } from '../types.js';
 
 export function ConformancePage({ reports, servers, initialId, onRefresh }: {
-  reports: ConformanceReport[]; servers: ServerSummary[]; initialId?: string; onRefresh(): Promise<void>;
+  reports: ConformanceReportSummary[]; servers: ServerSummary[]; initialId?: string; onRefresh(): Promise<void>;
 }) {
   const httpServers = servers.filter((server) => server.transport === 'http');
   const [serverId, setServerId] = useState(httpServers[0]?.id ?? '');
@@ -12,8 +12,8 @@ export function ConformancePage({ reports, servers, initialId, onRefresh }: {
   const [scenario, setScenario] = useState('server-initialize');
   const [timeoutMs, setTimeoutMs] = useState('120000');
   const [selectedId, setSelectedId] = useState(initialId ?? reports[0]?.id ?? '');
+  const [selected, setSelected] = useState<ConformanceReport>();
   const [error, setError] = useState('');
-  const selected = reports.find((report) => report.id === selectedId);
   const running = reports.some((report) => report.status === 'running');
   const grouped = useMemo(() => Object.entries((selected?.checks ?? []).reduce<Record<string, ConformanceReport['checks']>>((groups, check) => {
     (groups[check.scenario] ??= []).push(check);
@@ -21,6 +21,12 @@ export function ConformancePage({ reports, servers, initialId, onRefresh }: {
   }, {})), [selected]);
 
   useEffect(() => { if (initialId) setSelectedId(initialId); }, [initialId]);
+  useEffect(() => {
+    if (!selectedId) { setSelected(undefined); return; }
+    let active = true;
+    void api.conformanceReport(selectedId).then((value) => { if (active) setSelected(value); }).catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : String(reason)); });
+    return () => { active = false; };
+  }, [selectedId, reports.find((report) => report.id === selectedId)?.status]);
   useEffect(() => {
     if (!running) return;
     const timer = window.setInterval(() => void onRefresh(), 1200);

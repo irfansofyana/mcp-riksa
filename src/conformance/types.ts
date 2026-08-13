@@ -31,7 +31,7 @@ export type ConformanceSummary = {
   harnessErrors: number;
 };
 
-export type ConformanceReport = {
+export type ConformanceReportSummary = {
   id: string;
   serverId: string;
   endpoint: string;
@@ -41,9 +41,12 @@ export type ConformanceReport = {
   completedAt?: string;
   runnerVersion: string;
   summary: ConformanceSummary;
+  diagnostic?: string;
+};
+
+export type ConformanceReport = ConformanceReportSummary & {
   checks: ConformanceCheck[];
   rawReport?: unknown;
-  diagnostic?: string;
 };
 
 export type ConformanceExecution = {

@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process';
+import { createServer, request as httpRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
 import { createRequire } from 'node:module';
 import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -36,6 +38,28 @@ async function checkFiles(root: string): Promise<string[]> {
   return output.sort();
 }
 
+async function guardedProxy(endpoint: string): Promise<{ endpoint: string; close(): Promise<void> }> {
+  const targetOrigin = new URL(endpoint);
+  const server = createServer((incoming, outgoing) => {
+    const target = new URL(incoming.url ?? '/', targetOrigin.origin);
+    const request = target.protocol === 'https:' ? httpsRequest : httpRequest;
+    const upstream = request(target, { method: incoming.method, headers: { ...incoming.headers, host: target.host } }, (response) => {
+      if ((response.statusCode ?? 0) >= 300 && (response.statusCode ?? 0) < 400 && response.headers.location) {
+        response.resume(); outgoing.writeHead(502, { 'content-type': 'text/plain' }); outgoing.end('Conformance proxy rejected an MCP endpoint redirect'); return;
+      }
+      outgoing.writeHead(response.statusCode ?? 502, response.headers);
+      response.pipe(outgoing);
+    });
+    upstream.on('error', (error) => { if (!outgoing.headersSent) outgoing.writeHead(502, { 'content-type': 'text/plain' }); outgoing.end(`Conformance proxy error: ${error.message}`); });
+    incoming.pipe(upstream);
+  });
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('Conformance proxy did not bind a loopback port');
+  const proxyEndpoint = new URL(targetOrigin.pathname, `http://127.0.0.1:${address.port}`);
+  return { endpoint: proxyEndpoint.href, close: () => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())) };
+}
+
 function scenarioFromPath(path: string, selection: ConformanceSelection): string {
   if (selection.kind === 'scenario') return selection.scenario;
   const directory = dirname(path).split(/[\\/]/).at(-1) ?? 'unknown';
@@ -45,8 +69,9 @@ function scenarioFromPath(path: string, selection: ConformanceSelection): string
 export class OfficialConformanceRunner implements ConformanceRunner {
   async run(input: { endpoint: string; selection: ConformanceSelection; timeoutMs: number }, signal: AbortSignal): Promise<ConformanceExecution> {
     const outputDirectory = await mkdtemp(join(tmpdir(), 'mcp-conformance-'));
+    const proxy = await guardedProxy(input.endpoint);
     const args = [
-      executablePath(), 'server', '--url', input.endpoint,
+      executablePath(), 'server', '--url', proxy.endpoint,
       ...(input.selection.kind === 'scenario' ? ['--scenario', input.selection.scenario] : ['--suite', 'active']),
       '--output-dir', outputDirectory, '--verbose',
     ];
@@ -94,8 +119,20 @@ export class OfficialConformanceRunner implements ConformanceRunner {
         files.push({ scenario: scenarioFromPath(path, input.selection), value });
       }
       const checks = normalizeConformanceChecks(files);
-      const diagnostic = checks.length === 0 || (exitCode !== 0 && checks.every((entry) => entry.status === 'passed'))
-        ? redact((stderr || stdout || `Conformance runner exited with code ${exitCode}`).slice(0, MAX_STREAM_BYTES))
+      const processDiagnostic = (stderr || stdout || `Conformance runner exited with code ${exitCode}`).slice(0, MAX_STREAM_BYTES);
+      const orchestrationFailed = exitCode !== 0 && (/failed to run scenario|unhandled|internal error|runner error/i.test(processDiagnostic) || checks.length === 0);
+      if (orchestrationFailed) checks.push({
+        sequence: checks.length,
+        scenario: 'harness',
+        id: 'runner-orchestration-error',
+        name: 'Conformance runner orchestration',
+        description: 'The official harness did not complete every selected scenario.',
+        status: 'harness_error',
+        specReferences: [],
+        error: redact(processDiagnostic),
+      });
+      const diagnostic = checks.length === 0 || orchestrationFailed || (exitCode !== 0 && checks.every((entry) => entry.status === 'passed'))
+        ? redact(processDiagnostic)
         : undefined;
       return {
         checks,
@@ -108,6 +145,7 @@ export class OfficialConformanceRunner implements ConformanceRunner {
     } finally {
       if (timeout) clearTimeout(timeout);
       if (terminationTimer) clearTimeout(terminationTimer);
+      await proxy.close();
       await rm(outputDirectory, { recursive: true, force: true });
     }
   }
