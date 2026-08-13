@@ -135,8 +135,8 @@ export class McpManager {
     const connection = this.require(id);
     const definition = connection.tools.find((entry) => entry.name === tool);
     if (!definition) throw new Error(`Tool ${tool} was not discovered on server ${id}`);
-    const potentiallyDestructive = definition.annotations?.readOnlyHint !== true && definition.annotations?.destructiveHint !== false;
-    if (potentiallyDestructive && options.confirmDangerous !== true) {
+    const explicitlyDestructive = definition.annotations?.destructiveHint === true;
+    if (explicitlyDestructive && options.confirmDangerous !== true) {
       throw new Error(`Tool ${tool} requires explicit dangerous-call confirmation`);
     }
     const response = await connection.client.callTool(

@@ -23,6 +23,19 @@ server.registerTool(
 );
 
 server.registerTool(
+  'unannotated_read',
+  {
+    description: 'Read deterministic data without optional tool annotations.',
+    inputSchema: {},
+    outputSchema: { value: z.string() },
+  },
+  async () => ({
+    content: [{ type: 'text', text: 'read-only' }],
+    structuredContent: { value: 'read-only' },
+  }),
+);
+
+server.registerTool(
   'echo',
   {
     description: 'Return exactly the supplied text.',

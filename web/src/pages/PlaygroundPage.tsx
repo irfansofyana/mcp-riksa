@@ -49,7 +49,7 @@ export function PlaygroundPage({ servers, providers, onRefresh }: { servers: Ser
   const conversationLoadEpoch = useRef(0);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const selectedTool = toolsServer === server ? tools.find((entry) => entry.name === selectedToolName) : undefined;
-  const selectedToolNeedsConfirmation = selectedTool?.annotations?.readOnlyHint !== true && selectedTool?.annotations?.destructiveHint !== false;
+  const selectedToolNeedsConfirmation = selectedTool?.annotations?.destructiveHint === true;
   const toolFields = useMemo(() => buildToolFields(selectedTool?.inputSchema), [selectedTool]);
 
   const loadTools = async () => {
@@ -187,7 +187,7 @@ export function PlaygroundPage({ servers, providers, onRefresh }: { servers: Ser
         {conversation ? <Button variant="danger" disabled={running || toolRunning} className="delete-conversation" onClick={() => void (async () => { await api.deleteConversation(conversation.id); setConversation(undefined); setResult(undefined); await loadList(true); })()}>Delete conversation</Button> : null}
       </> : <>
         <div className="conversation-rail-head"><div><span className="eyebrow">{tools.length} discovered</span><b>MCP tools</b></div><Button aria-label="Refresh tools" disabled={!server || running || toolRunning} onClick={() => void loadTools().catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)))}>↻</Button></div>
-        <div className="conversation-list tool-rail-list">{!server ? <Empty>Choose a server.</Empty> : tools.length === 0 ? <Empty>Connect server to load tools.</Empty> : tools.map((entry) => <button key={entry.name} className={`conversation-item ${selectedToolName === entry.name ? 'selected' : ''}`} onClick={() => setSelectedToolName(entry.name)}><span>{entry.name}</span><small>{entry.description ?? 'No description'}</small>{entry.annotations?.readOnlyHint !== true && entry.annotations?.destructiveHint !== false ? <Status value="confirm" /> : null}</button>)}</div>
+        <div className="conversation-list tool-rail-list">{!server ? <Empty>Choose a server.</Empty> : tools.length === 0 ? <Empty>Connect server to load tools.</Empty> : tools.map((entry) => <button key={entry.name} className={`conversation-item ${selectedToolName === entry.name ? 'selected' : ''}`} onClick={() => setSelectedToolName(entry.name)}><span>{entry.name}</span><small>{entry.description ?? 'No description'}</small>{entry.annotations?.destructiveHint === true ? <Status value="confirm" /> : null}</button>)}</div>
       </>}
     </aside>
 
@@ -222,7 +222,7 @@ export function PlaygroundPage({ servers, providers, onRefresh }: { servers: Ser
           </div>)}
         </div>}
         <details className="schema-source" open><summary>Input schema</summary><pre>{JSON.stringify(selectedTool.inputSchema ?? {}, null, 2)}</pre></details>
-        <div className="tool-call-actions"><label className="check"><input type="checkbox" checked={confirmDangerous} onChange={(event) => setConfirmDangerous(event.target.checked)} /> Confirm destructive call</label><Button variant="primary" disabled={toolRunning || running || toolsServer !== server || (selectedToolNeedsConfirmation && !confirmDangerous)} onClick={() => void runTool()} data-testid="playground-run-tool">{toolRunning ? 'Running…' : `Run ${selectedTool.name} ↗`}</Button></div>
+        <div className="tool-call-actions">{selectedToolNeedsConfirmation ? <label className="check"><input type="checkbox" checked={confirmDangerous} onChange={(event) => setConfirmDangerous(event.target.checked)} /> Confirm destructive call</label> : <span className="hint">Confirmation required only when server explicitly marks tool destructive.</span>}<Button variant="primary" disabled={toolRunning || running || toolsServer !== server || (selectedToolNeedsConfirmation && !confirmDangerous)} onClick={() => void runTool()} data-testid="playground-run-tool">{toolRunning ? 'Running…' : `Run ${selectedTool.name} ↗`}</Button></div>
         {toolResult !== undefined ? <div className="tool-result-panel"><header><div><span className="eyebrow">Latest result</span><b>Written to chat as Execute {selectedTool.name}</b></div><Status value="sanitized" /></header><RichToolResult value={toolResult} /><JsonView value={toolResult} label="Raw MCP response" defaultOpen={false} /></div> : null}
       </div> : view === 'chat' ? <div className="chat-transcript" ref={transcriptRef} aria-live="polite">
         {!conversation?.messages.length && !running ? <div className="chat-empty"><span className="chat-glyph">⌁</span><h2>Start a tool-aware conversation</h2><p>Responses stream live. Every message, tool call, token, cost, and trace stays local.</p></div> : null}
