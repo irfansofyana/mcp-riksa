@@ -5,6 +5,7 @@ import { afterEach, describe, expect, test } from 'vitest';
 import { event } from '../src/core/events.js';
 import type { RunResult } from '../src/core/types.js';
 import { openDatabase } from '../src/storage/database.js';
+import { ConformanceRepository } from '../src/storage/conformance.js';
 import { RunRepository } from '../src/storage/runs.js';
 
 const directories: string[] = [];
@@ -51,7 +52,25 @@ describe('SQLite run repository', () => {
   test('runs migrations in WAL mode', () => {
     const { database } = createRepository();
     expect(database.pragma('journal_mode', { simple: true })).toBe('wal');
-    expect(database.prepare('select max(version) as version from migrations').get()).toEqual({ version: 6 });
+    expect(database.prepare('select max(version) as version from migrations').get()).toEqual({ version: 7 });
+    database.close();
+  });
+
+  test('stores sanitized historical conformance reports and recovers interrupted executions', () => {
+    const { database } = createRepository();
+    const repository = new ConformanceRepository(database);
+    repository.start({ id: 'report', serverId: 'http-server', endpoint: 'http://127.0.0.1:3000/mcp', selection: { kind: 'suite', suite: 'active' }, startedAt: '2026-08-13T00:00:00.000Z', runnerVersion: '0.1.10' });
+    repository.complete('report', {
+      status: 'failed', completedAt: '2026-08-13T00:00:01.000Z',
+      checks: [{ sequence: 0, scenario: 'tools-list', id: 'tools', name: 'Tools', description: 'Lists tools', status: 'failed', specReferences: [], error: 'Bearer stored-secret' }],
+      rawReport: { authorization: 'Bearer raw-secret' },
+    });
+    expect(repository.get('report')).toMatchObject({ status: 'failed', summary: { total: 1, failed: 1 }, checks: [{ scenario: 'tools-list' }] });
+    expect(JSON.stringify(repository.get('report'))).not.toContain('stored-secret');
+    expect(JSON.stringify(repository.get('report'))).not.toContain('raw-secret');
+    repository.start({ id: 'stale-report', serverId: 'http-server', endpoint: 'http://127.0.0.1:3000/mcp', selection: { kind: 'scenario', scenario: 'server-initialize' }, startedAt: '2026-08-13T00:00:02.000Z', runnerVersion: '0.1.10' });
+    expect(repository.recoverInterrupted()).toBe(1);
+    expect(repository.get('stale-report')?.status).toBe('interrupted');
     database.close();
   });
 

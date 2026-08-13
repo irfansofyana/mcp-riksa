@@ -37,6 +37,10 @@ export type ApiRuntime = {
   getRun(id: string): Promise<unknown | undefined> | unknown | undefined;
   cancelRun(id: string): Promise<boolean> | boolean;
   compareRuns(runA: string, runB: string): Promise<unknown> | unknown;
+  startConformance(value: { serverId: string; selection: { kind: 'suite'; suite: 'active' } | { kind: 'scenario'; scenario: string }; timeoutMs: number }): Promise<unknown> | unknown;
+  listConformanceReports(serverId?: string): Promise<unknown> | unknown;
+  getConformanceReport(id: string): Promise<unknown | undefined> | unknown | undefined;
+  cancelConformance(id: string): Promise<boolean> | boolean;
   beginOAuth(id: string): Promise<unknown> | unknown;
   oauthCallback(parameters: Record<string, string>): Promise<unknown> | unknown;
   oauthStatus(id: string): Promise<unknown> | unknown;
@@ -75,6 +79,14 @@ const conversationSchema = z.strictObject({
   systemPrompt: z.string().max(100_000).optional(),
 });
 const streamingPlaygroundSchema = playgroundSchema.extend({ conversationId: z.string().min(1) });
+const conformanceSchema = z.strictObject({
+  serverId: z.string().min(1),
+  selection: z.discriminatedUnion('kind', [
+    z.strictObject({ kind: z.literal('suite'), suite: z.literal('active') }),
+    z.strictObject({ kind: z.literal('scenario'), scenario: z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._\/-]*$/) }),
+  ]),
+  timeoutMs: z.number().int().min(5_000).max(600_000).default(120_000),
+});
 
 function isLoopback(value: string | undefined): boolean {
   if (!value) return false;
@@ -221,6 +233,21 @@ export function createApp(runtime: ApiRuntime, options: { sessionToken?: string;
   app.get('/api/compare', async (request, response) => {
     const query = z.object({ runA: z.string().min(1), runB: z.string().min(1) }).parse(request.query);
     send(response, await runtime.compareRuns(query.runA, query.runB));
+  });
+
+  app.get('/api/conformance', async (request, response) => {
+    const query = z.object({ serverId: z.string().min(1).optional() }).parse(request.query);
+    send(response, await runtime.listConformanceReports(query.serverId));
+  });
+  app.post('/api/conformance', async (request, response) => send(response, await runtime.startConformance(conformanceSchema.parse(request.body)), 202));
+  app.get('/api/conformance/:id', async (request, response) => {
+    const report = await runtime.getConformanceReport(request.params.id!);
+    if (report === undefined) return send(response, { error: 'Conformance report not found' }, 404);
+    send(response, report);
+  });
+  app.post('/api/conformance/:id/cancel', async (request, response) => {
+    const cancelled = await runtime.cancelConformance(request.params.id!);
+    send(response, { id: request.params.id, cancelled }, cancelled ? 202 : 404);
   });
 
   app.post('/api/servers/:id/oauth/begin', async (request, response) => send(response, await runtime.beginOAuth(request.params.id!)));

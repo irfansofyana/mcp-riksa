@@ -27,8 +27,9 @@ import {
 } from '../web/src/theme.js';
 
 describe('workbench browser view model', () => {
-  test('normalizes hash navigation to the six supported pages', () => {
+  test('normalizes hash navigation including dedicated conformance page', () => {
     expect(normalizePage('#/playground')).toBe('Playground');
+    expect(normalizePage('#/conformance')).toBe('Conformance');
     expect(normalizePage('#/not-real')).toBe('Servers');
     expect(normalizePage('')).toBe('Servers');
   });

@@ -3,13 +3,14 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
+import type { ConformanceRunner } from '../src/conformance/types.js';
 import { WorkbenchRuntime } from '../src/server/runtime.js';
 
 const directories: string[] = [];
 const tsxCli = resolve('node_modules/tsx/dist/cli.mjs');
 const sampleServer = resolve('examples/sample-mcp-server.ts');
 
-function createRuntime() {
+function createRuntime(conformanceRunner?: ConformanceRunner) {
   const directory = mkdtempSync(join(tmpdir(), 'mcp-runtime-'));
   directories.push(directory);
   const databasePath = join(directory, 'workbench.db');
@@ -17,6 +18,7 @@ function createRuntime() {
     databasePath,
     suiteDirectory: join(directory, 'suites'),
     callbackUrl: 'http://127.0.0.1:4317/api/oauth/callback',
+    ...(conformanceRunner ? { conformanceRunner } : {}),
   });
   return { runtime, databasePath, directory };
 }
@@ -53,7 +55,33 @@ async function waitForRun(runtime: WorkbenchRuntime, id: string) {
   throw new Error('Run did not complete');
 }
 
+async function waitForConformance(runtime: WorkbenchRuntime, id: string) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const value = await runtime.getConformanceReport(id);
+    if (value && value.status !== 'running') return value;
+    await new Promise((resolveWait) => setTimeout(resolveWait, 10));
+  }
+  throw new Error('Conformance report did not complete');
+}
+
 describe('concrete workbench runtime', () => {
+  test('runs HTTP conformance with config locking, cancellation and transport safety', async () => {
+    const runner: ConformanceRunner = {
+      run: async (_input, signal) => new Promise((resolveRun) => signal.addEventListener('abort', () => resolveRun({ checks: [], rawReport: {}, exitCode: null, timedOut: false, cancelled: true }), { once: true })),
+    };
+    const { runtime } = createRuntime(runner);
+    await runtime.addServer({ id: 'http', name: 'HTTP', transport: 'http', url: 'http://127.0.0.1:3000/mcp', headerEnv: {}, allowUnsafeEndpoint: false });
+    await runtime.addServer({ id: 'stdio', name: 'Stdio', transport: 'stdio', command: process.execPath, args: [], envRefs: {} });
+    await expect(runtime.startConformance({ serverId: 'stdio', selection: { kind: 'suite', suite: 'active' }, timeoutMs: 30_000 })).rejects.toMatchObject({ status: 400 });
+    const started = await runtime.startConformance({ serverId: 'http', selection: { kind: 'scenario', scenario: 'server-initialize' }, timeoutMs: 30_000 });
+    await expect(runtime.updateServer('http', { id: 'http', name: 'Changed', transport: 'http', url: 'http://127.0.0.1:3000/mcp', headerEnv: {}, allowUnsafeEndpoint: false })).rejects.toMatchObject({ status: 409 });
+    expect(await runtime.cancelConformance(started.id)).toBe(true);
+    expect(await waitForConformance(runtime, started.id)).toMatchObject({ status: 'cancelled', runnerVersion: '0.1.10', selection: { scenario: 'server-initialize' } });
+    expect(await runtime.listConformanceReports('http')).toHaveLength(1);
+    await runtime.addServer({ id: 'remote', name: 'Remote', transport: 'http', url: 'https://example.com/mcp', headerEnv: {}, allowUnsafeEndpoint: false });
+    await expect(runtime.startConformance({ serverId: 'remote', selection: { kind: 'suite', suite: 'active' }, timeoutMs: 30_000 })).rejects.toMatchObject({ status: 400 });
+    await runtime.close();
+  });
   test('resolves a configured model alias before sending a playground request upstream', async () => {
     let receivedModel = '';
     const provider = createServer(async (request, response) => {

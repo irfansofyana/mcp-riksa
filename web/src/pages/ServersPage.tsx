@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { Button, Empty, Field, Input, JsonView, Notice, RichToolResult, Section, Select, Status, Textarea } from '../components.js';
 import { buildServerPayload, buildToolArguments, buildToolFields, initialToolValues, serverToForm, type ServerForm } from '../model.js';
-import type { ServerSummary, Tool } from '../types.js';
+import type { ConformanceReport, ServerSummary, Tool } from '../types.js';
 
 type OAuthStatus = { id?: string; state: string; scopes: string[]; timeline: unknown[]; authorizationUrl?: string; expiresAt?: string };
 
@@ -12,7 +12,9 @@ const initialForm = (): ServerForm => ({
   oauthEnabled: false, oauthScopes: '', oauthClientId: '', oauthClientSecretEnv: '', oauthTimeoutMs: '120000',
 });
 
-export function ServersPage({ servers, onRefresh }: { servers: ServerSummary[]; onRefresh(): Promise<void> }) {
+export function ServersPage({ servers, conformanceReports, onRefresh, onConformanceStarted }: {
+  servers: ServerSummary[]; conformanceReports: ConformanceReport[]; onRefresh(): Promise<void>; onConformanceStarted(id: string): void;
+}) {
   const [form, setForm] = useState(initialForm);
   const [editingId, setEditingId] = useState('');
   const [selected, setSelected] = useState(servers[0]?.id ?? '');
@@ -33,6 +35,8 @@ export function ServersPage({ servers, onRefresh }: { servers: ServerSummary[]; 
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const selectedTool = inspection?.tools.find((entry) => entry.name === tool);
+  const selectedServer = servers.find((server) => server.id === selected);
+  const latestConformance = conformanceReports.find((report) => report.serverId === selected);
   const toolFields = useMemo(() => buildToolFields(selectedTool?.inputSchema), [selectedTool]);
 
   useEffect(() => {
@@ -129,7 +133,12 @@ export function ServersPage({ servers, onRefresh }: { servers: ServerSummary[]; 
       <div className="button-row">
         <Button variant="primary" disabled={!selected} data-testid="connect-server" onClick={() => void act(async () => { await api.connectServer(selected); await inspect(selected); await onRefresh(); setMessage('Connected and inspected.'); })}>Connect & inspect</Button>
         <Button disabled={!selected} onClick={() => void act(async () => inspect(selected))}>Inspect</Button>
+        <Button disabled={selectedServer?.transport !== 'http'} title={selectedServer?.transport === 'stdio' ? 'Official conformance MVP does not support stdio' : undefined} onClick={() => void act(async () => {
+          const report = await api.startConformance({ serverId: selected, selection: { kind: 'suite', suite: 'active' }, timeoutMs: 120_000 });
+          onConformanceStarted(report.id);
+        })}>Run conformance</Button>
       </div>
+      {selectedServer ? <p className="hint">Conformance: {selectedServer.transport === 'stdio' ? 'unsupported for stdio' : latestConformance ? `latest ${latestConformance.status} · ${new Date(latestConformance.startedAt).toLocaleString()}` : 'not tested'}</p> : null}
     </Section>
 
     <div className="workspace-stack">

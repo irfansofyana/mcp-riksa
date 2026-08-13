@@ -10,7 +10,7 @@ import type {
   SuiteDraft,
 } from './types.js';
 
-export const pages = ['Servers', 'Playground', 'Suites', 'Runs', 'Compare', 'Settings'] as const;
+export const pages = ['Servers', 'Playground', 'Suites', 'Runs', 'Conformance', 'Compare', 'Settings'] as const;
 export type Page = typeof pages[number];
 
 export function normalizePage(hash: string): Page {

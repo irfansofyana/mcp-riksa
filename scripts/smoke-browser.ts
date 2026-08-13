@@ -256,6 +256,12 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     const desktop = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     writeFileSync(desktopScreenshot, Buffer.from(String(desktop.data), 'base64'));
 
+    await navigate('conformance');
+    await waitText('@modelcontextprotocol/conformance@0.1.10');
+    await waitText('Stdio and authenticated endpoints are unsupported');
+    await waitText('not universal MCP certification');
+    steps.push('conformance-page-checked');
+
     await navigate('compare');
     await click('compare-runs');
     await waitText('Regression ledger');

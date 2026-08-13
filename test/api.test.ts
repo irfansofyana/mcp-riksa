@@ -7,6 +7,12 @@ let origin: string;
 let server: ReturnType<typeof createServer>;
 let calls: Array<{ method: string; value?: unknown }>;
 
+const conformanceReport = {
+  id: 'report-1', serverId: 'sample-http', endpoint: 'http://127.0.0.1:3000/mcp', selection: { kind: 'suite', suite: 'active' }, status: 'passed',
+  startedAt: '2026-08-13T00:00:00.000Z', completedAt: '2026-08-13T00:00:01.000Z', runnerVersion: '0.1.10',
+  summary: { total: 1, passed: 1, failed: 0, warnings: 0, skipped: 0, harnessErrors: 0 }, checks: [],
+};
+
 const run = {
   id: 'run-1', suite: 'sample', status: 'passed',
   startedAt: '2026-08-13T00:00:00.000Z', completedAt: '2026-08-13T00:00:01.000Z',
@@ -15,7 +21,7 @@ const run = {
 
 function runtime(): ApiRuntime {
   return {
-    bootstrap: async () => ({ servers: [], providers: [], suites: ['sample'], runs: [run] }),
+    bootstrap: async () => ({ servers: [], providers: [], suites: ['sample'], runs: [run], conformanceReports: [conformanceReport] }),
     settings: async () => ({ providers: [{ id: 'local', apiKey: 'api-response-secret', apiKeyEnv: 'SAFE_ENV_NAME' }] }),
     createProvider: async (value) => { calls.push({ method: 'createProvider', value }); return { id: 'local' }; },
     updateProvider: async (id, value) => { calls.push({ method: 'updateProvider', value: { id, value } }); return { id }; },
@@ -52,6 +58,10 @@ function runtime(): ApiRuntime {
     getRun: async (id) => id === 'run-1' ? run : undefined,
     cancelRun: async (id) => { calls.push({ method: 'cancelRun', value: id }); return true; },
     compareRuns: async (a, b) => ({ runA: a, runB: b, passRateDelta: 0 }),
+    startConformance: async (value) => { calls.push({ method: 'startConformance', value }); return { id: 'report-1', status: 'running' }; },
+    listConformanceReports: async () => [conformanceReport],
+    getConformanceReport: async (id) => id === 'report-1' ? conformanceReport : undefined,
+    cancelConformance: async (id) => { calls.push({ method: 'cancelConformance', value: id }); return true; },
     beginOAuth: async (id) => ({ id, state: 'authorizing', authorizationUrl: `${origin}/authorize?state=secret-state`, scopes: [], timeline: [] }),
     oauthCallback: async (parameters) => { calls.push({ method: 'oauthCallback', value: parameters }); return { id: 'sample', state: 'authorized', scopes: ['mcp:read'], timeline: [] }; },
     oauthStatus: async (id) => ({ id, state: 'authorized', scopes: ['mcp:read'], timeline: [] }),
@@ -170,6 +180,13 @@ describe('API workbench flow', () => {
     expect(await (await request('/api/compare?runA=run-1&runB=run-2')).json()).toMatchObject({ runA: 'run-1', runB: 'run-2' });
     expect((await request('/api/runs/run-1/cancel', mutation({}))).status).toBe(202);
     expect(calls).toContainEqual({ method: 'cancelRun', value: 'run-1' });
+    expect((await request('/api/conformance')).status).toBe(200);
+    expect((await request('/api/conformance/report-1')).status).toBe(200);
+    expect((await request('/api/conformance/missing')).status).toBe(404);
+    expect((await request('/api/conformance', mutation({ serverId: 'sample-http', selection: { kind: 'scenario', scenario: 'server-initialize' }, timeoutMs: 30_000 }))).status).toBe(202);
+    expect(calls).toContainEqual({ method: 'startConformance', value: { serverId: 'sample-http', selection: { kind: 'scenario', scenario: 'server-initialize' }, timeoutMs: 30_000 } });
+    expect((await request('/api/conformance/report-1/cancel', mutation({}))).status).toBe(202);
+    expect(calls).toContainEqual({ method: 'cancelConformance', value: 'report-1' });
     expect((await request('/api/providers/local?force=true', { ...mutation(undefined), method: 'DELETE', body: undefined })).status).toBe(200);
     expect((await request('/api/servers/sample?force=true', { ...mutation(undefined), method: 'DELETE', body: undefined })).status).toBe(200);
     expect(calls).toContainEqual({ method: 'deleteProvider', value: { id: 'local', force: true } });

@@ -2,6 +2,9 @@ import { existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, 
 import { basename, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createProviderAdapter } from '../agent/providers.js';
+import { conformanceStatus } from '../conformance/model.js';
+import { OfficialConformanceRunner } from '../conformance/runner.js';
+import { CONFORMANCE_RUNNER_VERSION, type ConformanceRunner, type ConformanceSelection } from '../conformance/types.js';
 import { providerConfigSchema, type ProviderConfig, type ProviderMessage } from '../agent/types.js';
 import { runAgent, type AgentUpdate } from '../agent/loop.js';
 import { event } from '../core/events.js';
@@ -13,6 +16,7 @@ import { McpManager, serverConfigSchema, type ServerConfig } from '../mcp/manage
 import { OAuthCoordinator } from '../mcp/oauth.js';
 import { validateHttpEndpoint } from '../mcp/validation.js';
 import { ConfigurationRepository } from '../storage/configurations.js';
+import { ConformanceRepository } from '../storage/conformance.js';
 import { ConversationRepository } from '../storage/conversations.js';
 import { openDatabase, type WorkbenchDatabase } from '../storage/database.js';
 import { RunRepository } from '../storage/runs.js';
@@ -22,6 +26,7 @@ type RuntimeOptions = {
   databasePath: string;
   suiteDirectory: string;
   callbackUrl: string;
+  conformanceRunner?: ConformanceRunner;
 };
 
 type PlaygroundInput = {
@@ -39,6 +44,8 @@ export class WorkbenchRuntime {
   private readonly runs: RunRepository;
   private readonly configurations: ConfigurationRepository;
   private readonly conversations: ConversationRepository;
+  private readonly conformance: ConformanceRepository;
+  private readonly conformanceRunner: ConformanceRunner;
   private readonly mcp = new McpManager();
   private readonly oauth = new OAuthCoordinator();
   private readonly providers = new Map<string, ProviderConfig>();
@@ -46,6 +53,8 @@ export class WorkbenchRuntime {
   private readonly suites = new Map<string, { source: string; suite: Suite }>();
   private readonly activeRuns = new Map<string, AbortController>();
   private readonly activeRunTasks = new Map<string, Promise<void>>();
+  private readonly activeConformance = new Map<string, AbortController>();
+  private readonly activeConformanceTasks = new Map<string, Promise<void>>();
   private readonly activeConfigUses = new Map<string, number>();
   private readonly mutatingConfigs = new Set<string>();
 
@@ -55,7 +64,10 @@ export class WorkbenchRuntime {
     this.runs = new RunRepository(this.database);
     this.configurations = new ConfigurationRepository(this.database);
     this.conversations = new ConversationRepository(this.database);
+    this.conformance = new ConformanceRepository(this.database);
+    this.conformanceRunner = options.conformanceRunner ?? new OfficialConformanceRunner();
     this.runs.recoverInterrupted();
+    this.conformance.recoverInterrupted();
     for (const config of this.configurations.list<ProviderConfig>('provider')) {
       const parsed = providerConfigSchema.parse(config);
       this.providers.set(parsed.id, parsed);
@@ -84,6 +96,7 @@ export class WorkbenchRuntime {
       providers: (await this.settings()).providers,
       suites: await this.listSuites(),
       runs: await this.listRuns(),
+      conformanceReports: await this.listConformanceReports(),
     };
   }
 
@@ -444,6 +457,59 @@ export class WorkbenchRuntime {
     return true;
   }
 
+  async startConformance(input: { serverId: string; selection: ConformanceSelection; timeoutMs: number }) {
+    const config = this.requireServer(input.serverId);
+    if (config.transport !== 'http') throw new WorkbenchError('Official conformance MVP supports Streamable HTTP servers only; stdio is unsupported', 400);
+    if (Object.keys(config.headerEnv).length > 0 || config.oauth) {
+      throw new WorkbenchError('Pinned official conformance runner does not support workbench header or OAuth injection', 400);
+    }
+    const endpoint = await validateHttpEndpoint(config.url, false);
+    const hostname = endpoint.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    if (hostname !== 'localhost' && hostname !== '127.0.0.1' && hostname !== '::1') {
+      throw new WorkbenchError('Conformance execution is restricted to loopback MCP endpoints', 400);
+    }
+    const id = randomUUID();
+    const startedAt = new Date().toISOString();
+    const controller = new AbortController();
+    const configKeys = [`server:${input.serverId}`];
+    this.beginConfigUse(configKeys);
+    try {
+      this.conformance.start({ id, serverId: input.serverId, endpoint: endpoint.href, selection: input.selection, startedAt, runnerVersion: CONFORMANCE_RUNNER_VERSION });
+    } catch (error) {
+      this.endConfigUse(configKeys);
+      throw error;
+    }
+    this.activeConformance.set(id, controller);
+    const task = Promise.resolve()
+      .then(() => controller.signal.aborted
+        ? { checks: [], rawReport: {}, exitCode: null, timedOut: false, cancelled: true }
+        : this.conformanceRunner.run({ endpoint: endpoint.href, selection: input.selection, timeoutMs: input.timeoutMs }, controller.signal))
+      .then((execution) => this.conformance.complete(id, {
+        status: conformanceStatus(execution), completedAt: new Date().toISOString(), checks: execution.checks,
+        rawReport: execution.rawReport, ...(execution.diagnostic ? { diagnostic: execution.diagnostic } : {}),
+      }))
+      .catch((error: unknown) => this.conformance.complete(id, {
+        status: controller.signal.aborted ? 'cancelled' : 'harness_error', completedAt: new Date().toISOString(), checks: [], rawReport: {},
+        diagnostic: redact(error instanceof Error ? error.message : String(error)),
+      }))
+      .finally(() => {
+        this.activeConformance.delete(id);
+        this.activeConformanceTasks.delete(id);
+        this.endConfigUse(configKeys);
+      });
+    this.activeConformanceTasks.set(id, task);
+    return { id, serverId: input.serverId, status: 'running' as const, startedAt, runnerVersion: CONFORMANCE_RUNNER_VERSION };
+  }
+
+  async listConformanceReports(serverId?: string) { return this.conformance.list(serverId); }
+  async getConformanceReport(id: string) { return this.conformance.get(id); }
+  async cancelConformance(id: string) {
+    const controller = this.activeConformance.get(id);
+    if (!controller) return false;
+    controller.abort(new Error('Cancelled by user'));
+    return true;
+  }
+
   async beginOAuth(id: string) {
     const config = this.requireServer(id);
     if (config.transport !== 'http') throw new WorkbenchError('OAuth is available only for Streamable HTTP servers', 400);
@@ -472,7 +538,8 @@ export class WorkbenchRuntime {
 
   async close(): Promise<void> {
     for (const controller of this.activeRuns.values()) controller.abort(new Error('Runtime closing'));
-    await Promise.allSettled([...this.activeRunTasks.values()]);
+    for (const controller of this.activeConformance.values()) controller.abort(new Error('Runtime closing'));
+    await Promise.allSettled([...this.activeRunTasks.values(), ...this.activeConformanceTasks.values()]);
     const cleanups = await Promise.allSettled([this.mcp.closeAll(), this.oauth.close()]);
     this.database.close();
     const failure = cleanups.find((result): result is PromiseRejectedResult => result.status === 'rejected');

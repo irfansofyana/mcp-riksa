@@ -56,7 +56,7 @@ describe('browser success path', () => {
     }
     expect(result.steps).toEqual([
       'theme-checked', 'provider-added', 'server-added', 'server-inspected', 'tool-invoked', 'playground-complete',
-      'suite-saved', 'first-run-inspected', 'second-run-inspected', 'runs-compared', 'mobile-checked',
+      'suite-saved', 'first-run-inspected', 'second-run-inspected', 'conformance-page-checked', 'runs-compared', 'mobile-checked',
     ]);
     expect(result.consoleErrors).toEqual([]);
     expect(result.lightScreenshot).toMatch(/light-mode\.png$/);

@@ -69,6 +69,21 @@ export type Run = {
   cases: CaseResult[]; events: EventRecord[];
 };
 
+export type ConformanceCheck = {
+  sequence: number; scenario: string; id: string; name: string; description: string;
+  status: 'passed' | 'failed' | 'warning' | 'skipped' | 'harness_error'; timestamp?: string;
+  specReferences: Array<{ id: string; url?: string }>; error?: string; details?: unknown;
+};
+
+export type ConformanceReport = {
+  id: string; serverId: string; endpoint: string;
+  selection: { kind: 'suite'; suite: 'active' } | { kind: 'scenario'; scenario: string };
+  status: 'running' | 'passed' | 'failed' | 'warning' | 'harness_error' | 'cancelled' | 'timed_out' | 'interrupted';
+  startedAt: string; completedAt?: string; runnerVersion: string;
+  summary: { total: number; passed: number; failed: number; warnings: number; skipped: number; harnessErrors: number };
+  checks: ConformanceCheck[]; rawReport?: unknown; diagnostic?: string;
+};
+
 export type PlaygroundResult = {
   output: string;
   toolCalls: Array<{ name: string; arguments: unknown; result?: unknown; durationMs?: number }>;
@@ -119,4 +134,5 @@ export type Bootstrap = {
   providers: ProviderSummary[];
   suites: string[];
   runs: Run[];
+  conformanceReports: ConformanceReport[];
 };

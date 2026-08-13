@@ -40,7 +40,7 @@ export function Section({ title, action, children, className = '' }: { title: st
 }
 
 export function Status({ value }: { value: string }) {
-  const tone = ['passed', 'pass', 'authorized', 'connected', 'complete'].includes(value.toLowerCase()) ? 'pass' : ['failed', 'fail', 'denied', 'error'].includes(value.toLowerCase()) ? 'fail' : 'neutral';
+  const tone = ['passed', 'pass', 'authorized', 'connected', 'complete'].includes(value.toLowerCase()) ? 'pass' : ['failed', 'fail', 'denied', 'error', 'harness_error', 'timed_out', 'interrupted'].includes(value.toLowerCase()) ? 'fail' : 'neutral';
   return <span className={`status ${tone}`}>{value}</span>;
 }
 

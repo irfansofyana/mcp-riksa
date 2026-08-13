@@ -131,6 +131,14 @@ Assistant Markdown supports headings, emphasis, lists, tables, links, blockquote
 
 Direct tool invocation uses each tool's JSON Schema to generate typed fields for required/optional strings, numbers, booleans, enums, nested objects, and arrays. Raw JSON remains available as an advanced fallback.
 
+## Official MCP conformance reports
+
+The **Conformance** workspace runs the official `@modelcontextprotocol/conformance` package, pinned exactly at `0.1.10`. Package inspection shows this release publishes a CLI-only executable (`dist/index.js`) without a safe library export, so the workbench launches it with `process.execPath` plus a fixed argument array and never uses a shell. It supports the active server suite or one named server scenario.
+
+MVP execution is restricted to saved Streamable HTTP endpoints on `localhost`, `127.0.0.1`, or `::1`. Stdio servers are shown as unsupported. This pinned runner cannot receive workbench OAuth or custom header credentials, so those configurations are rejected rather than leaking secrets into a child process. Release `0.1.10` does not provide frozen dated requirements sets; UI states that limitation instead of approximating them.
+
+Reports persist separately from workbench Suites/Runs. Each report records normalized passed, failed, warning, skipped, and harness-error checks; spec references; runner version; bounded sanitized raw output; timeout/cancellation state; and startup interruption recovery. Server configuration stays locked while its report runs. “Passed” means all tested scenarios passed—it is not universal MCP certification.
+
 ## Suite format
 
 Suites use strict versioned YAML. Unknown keys, malformed calls, invalid budgets, and inline secret fields fail parsing. Direct cases invoke a named tool. Agent cases reference server, provider, and model aliases.
@@ -143,10 +151,10 @@ Supported assertions cover tool called or not called, count, order, arguments, J
 - The API still rejects non-loopback clients and external-origin mutations. External bind does not grant remote control.
 - Each process creates a random browser session token. Mutations require that token and a loopback `Origin`.
 - MCP and model endpoints accept HTTP or HTTPS. The runtime blocks URL credentials, link-local targets, and common cloud metadata hosts.
-- Stdio spawns an executable with an argument array and no shell.
+- Stdio and official conformance runners spawn fixed executables with argument arrays and no shell. Conformance children receive a minimal environment, bounded output, timeout, cancellation, and forced-kill fallback.
 - Tool definitions marked destructive require explicit confirmation for manual calls.
 - The runtime redacts authorization headers, cookies, token fields, URL query secrets, bearer strings, and nested payloads before SQLite writes, API output, logs, or reports.
-- SQLite uses WAL, forward migrations, transactional completion, interrupted-run recovery, immutable run/playground event rows, configuration deletion tombstones, and sanitized local playground history.
+- SQLite uses WAL, forward migrations, transactional completion, interrupted run/conformance recovery, immutable run/playground event rows, configuration deletion tombstones, sanitized conformance history, and sanitized local playground history.
 
 ## Verification
 
