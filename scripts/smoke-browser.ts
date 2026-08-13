@@ -149,6 +149,10 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     await click('invoke-tool');
     await waitText('"sum": 5');
     steps.push('tool-invoked');
+    mkdirSync(options.outputDirectory, { recursive: true });
+    const serverScreenshot = join(options.outputDirectory, 'stdio-server.png');
+    const serverCapture = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    writeFileSync(serverScreenshot, Buffer.from(String(serverCapture.data), 'base64'));
 
     await navigate('playground');
     await setValue('playground-server', 'sample');
@@ -178,7 +182,6 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     await runAndInspect('first-run-inspected');
     await runAndInspect('second-run-inspected');
 
-    mkdirSync(options.outputDirectory, { recursive: true });
     const desktopScreenshot = join(options.outputDirectory, 'desktop.png');
     const desktop = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     writeFileSync(desktopScreenshot, Buffer.from(String(desktop.data), 'base64'));
@@ -196,7 +199,7 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     const mobile = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     writeFileSync(mobileScreenshot, Buffer.from(String(mobile.data), 'base64'));
     steps.push('mobile-checked');
-    return { steps, consoleErrors, desktopScreenshot, mobileScreenshot };
+    return { steps, consoleErrors, serverScreenshot, desktopScreenshot, mobileScreenshot };
   } finally {
     cdp.close();
     if (child.exitCode === null) {

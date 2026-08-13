@@ -149,9 +149,10 @@ program.command('serve')
     const port = address && typeof address !== 'string' ? address.port : options.port;
     process.stdout.write(`MCP Local Workbench listening at http://${options.host}:${port}\n`);
     const shutdown = async () => {
-      await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
-      await vite?.close();
-      await runtime.close();
+      const serverClose = new Promise<void>((resolveClose, rejectClose) => server.close((error) => error ? rejectClose(error) : resolveClose()));
+      const results = await Promise.allSettled([serverClose, vite?.close(), runtime.close()]);
+      const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+      if (failure) throw failure.reason;
     };
     const stop = () => {
       void shutdown().then(

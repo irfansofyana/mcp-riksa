@@ -39,6 +39,7 @@ export class WorkbenchRuntime {
   private readonly servers = new Map<string, ServerConfig>();
   private readonly suites = new Map<string, { source: string; suite: Suite }>();
   private readonly activeRuns = new Map<string, AbortController>();
+  private readonly activeRunTasks = new Map<string, Promise<void>>();
 
   constructor(private readonly options: RuntimeOptions) {
     mkdirSync(options.suiteDirectory, { recursive: true });
@@ -161,7 +162,7 @@ export class WorkbenchRuntime {
     const controller = new AbortController();
     this.activeRuns.set(id, controller);
     this.runs.start(id, name, startedAt);
-    void runSuite(stored.suite, {
+    const task = runSuite(stored.suite, {
       direct: (entry, signal) => this.directObservation(entry.server, entry.call.tool, entry.call.arguments, entry.call.dangerous ?? false, signal),
       agent: (entry) => runAgent({ prompt: entry.prompt, model: entry.model, serverId: entry.server, limits: entry.limits }, {
         provider: createProviderAdapter(this.requireProvider(entry.provider)), mcp: this.mcp,
@@ -169,7 +170,11 @@ export class WorkbenchRuntime {
     }, { signal: controller.signal, id })
       .then((result) => this.runs.complete(result))
       .catch((error: unknown) => this.runs.fail(id, error))
-      .finally(() => this.activeRuns.delete(id));
+      .finally(() => {
+        this.activeRuns.delete(id);
+        this.activeRunTasks.delete(id);
+      });
+    this.activeRunTasks.set(id, task);
     return { id, suite: name, status: 'running' as const, startedAt };
   }
 
@@ -204,9 +209,11 @@ export class WorkbenchRuntime {
 
   async close(): Promise<void> {
     for (const controller of this.activeRuns.values()) controller.abort(new Error('Runtime closing'));
-    await this.mcp.closeAll();
-    await this.oauth.close();
+    await Promise.allSettled([...this.activeRunTasks.values()]);
+    const cleanups = await Promise.allSettled([this.mcp.closeAll(), this.oauth.close()]);
     this.database.close();
+    const failure = cleanups.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+    if (failure) throw failure.reason;
   }
 
   private async directObservation(server: string, tool: string, args: Record<string, unknown>, dangerous: boolean, signal: AbortSignal): Promise<Observation> {

@@ -146,8 +146,11 @@ export class McpManager {
     const connection = this.connections.get(id);
     if (!connection) return;
     this.connections.delete(id);
-    await connection.client.close();
-    await connection.dispatcher?.close();
+    try {
+      await connection.client.close();
+    } finally {
+      await connection.dispatcher?.close();
+    }
   }
 
   async closeAll(): Promise<void> {

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { OAuthCoordinator } from '../src/mcp/oauth.js';
+import { redact } from '../src/core/redaction.js';
 
 type FakeState = {
   registrations: number;
@@ -122,6 +123,7 @@ describe('OAuth Authorization Code + PKCE lifecycle', () => {
     expect(status).toMatchObject({ state: 'authorized', scopes: ['mcp:read', 'mcp:write'] });
     expect(status.expiresAt).toBeTruthy();
     expect(JSON.stringify(status)).not.toMatch(/raw-access-secret|refresh-secret|dynamic-secret|code-1/);
+    expect(JSON.stringify(redact({ reflected: 'raw-access-secret refresh-secret dynamic-secret' }))).not.toMatch(/raw-access-secret|refresh-secret|dynamic-secret/);
     expect(status.timeline.map((entry) => entry.type)).toEqual(expect.arrayContaining(['discovery', 'registration', 'redirect', 'token']));
   });
 

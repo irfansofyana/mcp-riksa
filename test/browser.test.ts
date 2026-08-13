@@ -59,6 +59,7 @@ describe('browser success path', () => {
       'suite-saved', 'first-run-inspected', 'second-run-inspected', 'runs-compared', 'mobile-checked',
     ]);
     expect(result.consoleErrors).toEqual([]);
+    expect(result.serverScreenshot).toMatch(/stdio-server\.png$/);
     expect(result.desktopScreenshot).toMatch(/desktop\.png$/);
     expect(result.mobileScreenshot).toMatch(/mobile\.png$/);
   }, 120_000);

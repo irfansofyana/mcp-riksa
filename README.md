@@ -27,6 +27,20 @@ npx tsx scripts/fake-provider.ts --port 4000
 
 The API key stays in the process environment. The config stores `WORKBENCH_PROVIDER_API_KEY`, which is the environment variable name.
 
+## Browser tour
+
+### Connect and invoke a simple stdio MCP server
+
+The bundled sample server is a real MCP process started directly over stdio—no shell and no remote service. The workbench discovers its identity, capabilities, and three tools, then invokes `add` with `{"a":2,"b":3}`:
+
+![Connected stdio MCP server with a completed add tool call](docs/screenshots/stdio-server.png)
+
+### Inspect a completed agent evaluation
+
+The browser and CLI use the same YAML suite runner. This completed example records the provider turn, MCP tool call, latency, tokens, estimated cost, assertions, and sanitized timeline:
+
+![Completed MCP agent evaluation run](docs/screenshots/desktop.png)
+
 Build and serve the production bundle with:
 
 ```bash
@@ -119,7 +133,7 @@ node dist/src/cli/index.js run examples/sample-suite.yaml \
   --output reports
 ```
 
-`npm test` includes real stdio MCP discovery/invocation, fake OpenAI-compatible and Anthropic-compatible agent loops, the fake OAuth lifecycle, API security, SQLite transactions, reporters, CLI subprocesses, and the Chrome desktop/mobile journey. GitHub Actions uploads the CLI reports.
+`npm test` includes real stdio and Streamable HTTP MCP discovery/invocation, fake OpenAI-compatible and Anthropic-compatible agent loops, the fake OAuth lifecycle, API security, SQLite transactions, reporters, CLI subprocesses, and the Chrome desktop/mobile journey. GitHub Actions uploads the CLI reports.
 
 The deterministic fake OpenAI-compatible endpoint exercises a standard `/v1/chat/completions` tool-call contract without requiring any particular gateway product or external credentials during tests.
 

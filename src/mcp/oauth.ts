@@ -92,6 +92,7 @@ class MemoryOAuthProvider implements OAuthClientProvider {
   }
 
   saveClientInformation(information: OAuthClientInformationMixed): void {
+    registerSecretValue(information.client_secret);
     this.information = information;
     timeline(this.session, 'registration', 'Dynamic client registration completed');
   }
@@ -102,6 +103,8 @@ class MemoryOAuthProvider implements OAuthClientProvider {
 
   saveTokens(tokens: OAuthTokens): void {
     const refresh = this.savedTokens !== undefined;
+    registerSecretValue(tokens.access_token);
+    registerSecretValue(tokens.refresh_token);
     this.savedTokens = tokens;
     this.session.expiresAt = tokens.expires_in === undefined
       ? undefined
