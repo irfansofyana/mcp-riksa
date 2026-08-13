@@ -23,6 +23,14 @@ function runtime(): ApiRuntime {
     inspectServer: async (id) => ({ id, identity: { name: 'sample' }, tools: [{ name: 'add' }] }),
     callTool: async (id, tool, args, options) => ({ id, tool, args, options, structuredContent: { sum: 5 } }),
     playground: async () => ({ output: '5', toolCalls: [{ name: 'add' }], events: [] }),
+    createConversation: async (value) => ({ id: 'conversation-1', title: 'New conversation', messages: [], ...value }),
+    listConversations: async () => [{ id: 'conversation-1', title: 'Add numbers', messageCount: 2 }],
+    getConversation: async (id) => id === 'conversation-1' ? { id, title: 'Add numbers', messages: [] } : undefined,
+    deleteConversation: async () => true,
+    streamPlayground: async (_value, onUpdate) => {
+      onUpdate({ type: 'text_delta', turn: 1, delta: '5' });
+      return { conversationId: 'conversation-1', result: { output: '5', tokens: { total: 2 } } };
+    },
     saveSuite: async (source) => { calls.push({ method: 'saveSuite', value: source }); return { name: 'sample' }; },
     listSuites: async () => ['sample'],
     startSuite: async (name) => ({ id: 'run-1', suite: name, status: 'running' }),
@@ -105,6 +113,12 @@ describe('API workbench flow', () => {
     const tool = await request('/api/servers/sample/call', mutation({ tool: 'add', arguments: { a: 2, b: 3 }, confirmDangerous: false }));
     expect(await tool.json()).toMatchObject({ structuredContent: { sum: 5 } });
     expect((await request('/api/playground', mutation({ prompt: 'add' }))).status).toBe(200);
+    expect((await request('/api/playground/conversations', mutation({ serverId: 'sample', providerId: 'local', model: 'default' }))).status).toBe(201);
+    expect((await request('/api/playground/conversations')).status).toBe(200);
+    expect((await request('/api/playground/conversations/conversation-1')).status).toBe(200);
+    const stream = await request('/api/playground/stream', mutation({ conversationId: 'conversation-1', prompt: 'add' }));
+    expect(stream.headers.get('content-type')).toContain('text/event-stream');
+    expect(await stream.text()).toContain('text_delta');
     expect((await request('/api/suites', mutation({ source: 'version: 1' }))).status).toBe(201);
     expect((await request('/api/suites')).status).toBe(200);
 
@@ -121,7 +135,15 @@ describe('API workbench flow', () => {
     expect((await request('/api/servers/sample/oauth')).status).toBe(200);
     const callback = await request('/api/oauth/callback?code=code-value&state=state-value');
     expect(callback.status).toBe(200);
+    expect(await callback.json()).toMatchObject({ id: 'sample', state: 'authorized' });
     expect(calls).toContainEqual({ method: 'oauthCallback', value: { code: 'code-value', state: 'state-value' } });
+
+    const browserCallback = await request('/api/oauth/callback?code=browser-code&state=browser-state', { headers: { accept: 'text/html' } });
+    expect(browserCallback.headers.get('content-type')).toContain('text/html');
+    const html = await browserCallback.text();
+    expect(html).toContain('workbench:oauth');
+    expect(html).toContain('window.close');
+    expect(html).not.toContain('browser-code');
     expect((await request('/api/servers/sample/oauth/forget', mutation({}))).status).toBe(204);
   });
 });

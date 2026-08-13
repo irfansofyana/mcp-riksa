@@ -31,6 +31,7 @@ export type ProviderRequest = {
   messages: ProviderMessage[];
   tools: ProviderTool[];
   signal?: AbortSignal;
+  onTextDelta?(delta: string): void;
 };
 
 export type ProviderResponse = {

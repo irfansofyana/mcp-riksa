@@ -56,6 +56,32 @@ CREATE TABLE IF NOT EXISTS configurations (
 );
 `;
 
+const conversationMigration = `
+CREATE TABLE IF NOT EXISTS playground_conversations (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  server_id TEXT NOT NULL,
+  provider_id TEXT NOT NULL,
+  model TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS playground_messages (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES playground_conversations(id) ON DELETE CASCADE,
+  sequence INTEGER NOT NULL,
+  role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+  content TEXT NOT NULL,
+  detail_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(conversation_id, sequence)
+);
+
+CREATE INDEX IF NOT EXISTS playground_messages_conversation
+ON playground_messages(conversation_id, sequence);
+`;
+
 export type WorkbenchDatabase = Database.Database;
 
 export function openDatabase(path: string): WorkbenchDatabase {
@@ -78,6 +104,13 @@ export function openDatabase(path: string): WorkbenchDatabase {
     database.transaction(() => {
       database.exec(configurationMigration);
       database.prepare('INSERT INTO migrations(version, applied_at) VALUES (?, ?)').run(2, new Date().toISOString());
+    })();
+    version = 2;
+  }
+  if (version < 3) {
+    database.transaction(() => {
+      database.exec(conversationMigration);
+      database.prepare('INSERT INTO migrations(version, applied_at) VALUES (?, ?)').run(3, new Date().toISOString());
     })();
   }
   return database;

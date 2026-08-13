@@ -51,7 +51,7 @@ describe('SQLite run repository', () => {
   test('runs migrations in WAL mode', () => {
     const { database } = createRepository();
     expect(database.pragma('journal_mode', { simple: true })).toBe('wal');
-    expect(database.prepare('select max(version) as version from migrations').get()).toEqual({ version: 2 });
+    expect(database.prepare('select max(version) as version from migrations').get()).toEqual({ version: 3 });
     database.close();
   });
 

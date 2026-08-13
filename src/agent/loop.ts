@@ -13,7 +13,14 @@ export type AgentInput = {
   model: string;
   serverId: string;
   limits: Limits;
+  history?: ProviderMessage[];
 };
+
+export type AgentUpdate =
+  | { type: 'text_delta'; turn: number; delta: string }
+  | { type: 'model_turn'; turn: number; usage: { input: number; output: number; total: number }; tokens: { input: number; output: number; total: number }; costUsd: number; durationMs: number }
+  | { type: 'tool_call'; turn: number; call: ToolCallObservation }
+  | { type: 'stop'; reason: AgentResult['stopReason']; durationMs: number };
 
 export type AgentResult = Observation & {
   output: string;
@@ -27,7 +34,7 @@ function estimatedCost(adapter: ProviderAdapter, input: number, output: number):
 export async function runAgent(
   input: AgentInput,
   dependencies: { provider: ProviderAdapter; mcp: McpForAgent },
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; onUpdate?(update: AgentUpdate): void } = {},
 ): Promise<AgentResult> {
   const started = Date.now();
   const controller = new AbortController();
@@ -40,7 +47,8 @@ export async function runAgent(
     controller.abort(new Error('Maximum elapsed time reached'));
   }, input.limits.timeoutMs);
 
-  const messages: ProviderMessage[] = [{ role: 'user', content: input.prompt }];
+  const emit = (update: AgentUpdate) => options.onUpdate?.(redact(update));
+  const messages: ProviderMessage[] = [...(input.history ?? []), { role: 'user', content: input.prompt }];
   const calls: ToolCallObservation[] = [];
   const events: NormalizedEvent[] = [];
   const tokens = { input: 0, output: 0, total: 0 };
@@ -62,12 +70,16 @@ export async function runAgent(
         break;
       }
       let response;
+      const turnStarted = Date.now();
       try {
         response = await dependencies.provider.complete({
           model: input.model,
           messages,
           tools,
           signal: controller.signal,
+          ...(options.onUpdate === undefined ? {} : {
+            onTextDelta: (delta: string) => emit({ type: 'text_delta', turn: turn + 1, delta }),
+          }),
         });
       } catch (error) {
         if (!controller.signal.aborted) throw error;
@@ -80,6 +92,10 @@ export async function runAgent(
       costUsd += estimatedCost(dependencies.provider, response.usage.input, response.usage.output);
       events.push(event(input.serverId, 'model_turn', { turn: turn + 1, response: response.raw, usage: response.usage }));
       output = response.text;
+      emit({
+        type: 'model_turn', turn: turn + 1, usage: response.usage, tokens: { ...tokens }, costUsd,
+        durationMs: Date.now() - turnStarted,
+      });
 
       if (input.limits.maxCostUsd !== undefined && costUsd > input.limits.maxCostUsd) {
         stopReason = 'max_cost';
@@ -115,6 +131,7 @@ export async function runAgent(
         };
         calls.push(observed);
         events.push(event(input.serverId, 'tool_call', observed, observed.durationMs));
+        emit({ type: 'tool_call', turn: turn + 1, call: observed });
         messages.push({ role: 'tool', toolCallId: toolCall.id, name: toolCall.name, content: JSON.stringify(result) });
       }
     }
@@ -125,6 +142,7 @@ export async function runAgent(
   }
 
   events.push(event(input.serverId, 'stop', { reason: stopReason }));
+  emit({ type: 'stop', reason: stopReason, durationMs: Date.now() - started });
   return redact({
     output,
     toolCalls: calls,

@@ -60,6 +60,10 @@ export class McpManager {
     return this.connections.size;
   }
 
+  isConnected(id: string): boolean {
+    return this.connections.has(id);
+  }
+
   async connect(input: unknown, oauthProvider?: OAuthClientProvider): Promise<ReturnType<McpManager['inspect']>> {
     const config = serverConfigSchema.parse(input);
     if (this.connections.has(config.id)) await this.disconnect(config.id);

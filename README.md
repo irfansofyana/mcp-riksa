@@ -100,7 +100,15 @@ oauth:
 
 The workbench discovers RFC 9728 protected-resource metadata and RFC 8414 authorization-server metadata. It uses the MCP SDK OAuth provider interface for DCR, Authorization Code + PKCE, token exchange, refresh, and invalidation. `oauth4webapi` supplies standards-based random OAuth state. The callback accepts loopback HTTP URLs and checks state before code exchange.
 
+Interactive authorization opens in a popup. Successful callbacks notify the opener through a same-origin channel, close the popup, refresh authorization status, and reconnect the MCP server automatically. A bounded status poll covers browsers that suppress popup messaging.
+
 OAuth tokens, authorization codes, PKCE verifiers, and client secrets remain in memory. “Forget authorization” clears them. A process restart requires authorization again. CI can use client credentials outside the interactive UI or inject a short-lived bearer token through a header environment reference.
+
+## Playground conversations
+
+Playground sends provider output over a local SSE stream. OpenAI-compatible and Anthropic-compatible adapters emit text deltas while model turns and MCP tool calls continue through the same normalized agent loop used by suites. Suite execution stays non-streaming for deterministic assertions.
+
+Conversations and sanitized message traces persist in local SQLite. Conversation history survives browser and workbench restarts and includes input/output tokens, cumulative cost, agent time, tool calls, stop reason, and raw normalized events. Use **Save YAML case** to turn any completed turn into a portable regression case.
 
 ## Suite format
 
@@ -117,7 +125,7 @@ Supported assertions cover tool called or not called, count, order, arguments, J
 - Stdio spawns an executable with an argument array and no shell.
 - Tool definitions marked destructive require explicit confirmation for manual calls.
 - The runtime redacts authorization headers, cookies, token fields, URL query secrets, bearer strings, and nested payloads before SQLite writes, API output, logs, or reports.
-- SQLite uses WAL, forward migrations, transactional completion, interrupted-run recovery, and immutable event rows.
+- SQLite uses WAL, forward migrations, transactional completion, interrupted-run recovery, immutable run event rows, and sanitized local playground history.
 
 ## Verification
 
@@ -133,7 +141,7 @@ node dist/src/cli/index.js run examples/sample-suite.yaml \
   --output reports
 ```
 
-`npm test` includes real stdio and Streamable HTTP MCP discovery/invocation, fake OpenAI-compatible and Anthropic-compatible agent loops, the fake OAuth lifecycle, API security, SQLite transactions, reporters, CLI subprocesses, and the Chrome desktop/mobile journey. GitHub Actions uploads the CLI reports.
+`npm test` includes real stdio and Streamable HTTP MCP discovery/invocation, streamed and non-streamed fake OpenAI-compatible and Anthropic-compatible agent loops, durable conversations, OAuth callback handoff, API security, SQLite transactions, reporters, CLI subprocesses, and the Chrome desktop/mobile journey. GitHub Actions uploads the CLI reports.
 
 The deterministic fake OpenAI-compatible endpoint exercises a standard `/v1/chat/completions` tool-call contract without requiring any particular gateway product or external credentials during tests.
 

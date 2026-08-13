@@ -60,6 +60,19 @@ beforeAll(async () => {
     if (url.endsWith('/chat/completions')) {
       const hasToolResult = Array.isArray(payload.messages)
         && payload.messages.some((entry) => (entry as { role?: string }).role === 'tool');
+      if (payload.stream === true) {
+        response.writeHead(200, { 'content-type': 'text/event-stream' });
+        const chunks = hasToolResult
+          ? [
+              { choices: [{ index: 0, delta: { content: 'The sum ' }, finish_reason: null }] },
+              { choices: [{ index: 0, delta: { content: 'is 5' }, finish_reason: 'stop' }] },
+            ]
+          : [{ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'call-1', function: { name: 'add', arguments: '{"a":2,"b":3}' } }] }, finish_reason: 'tool_calls' }] }];
+        for (const chunk of chunks) response.write(`data: ${JSON.stringify({ id: `openai-${count}`, object: 'chat.completion.chunk', created: 1, model: 'test-model', ...chunk })}\n\n`);
+        response.write(`data: ${JSON.stringify({ id: `openai-${count}`, object: 'chat.completion.chunk', created: 1, model: 'test-model', choices: [], usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 } })}\n\n`);
+        response.end('data: [DONE]\n\n');
+        return;
+      }
       return json(response, {
         id: `openai-${count}`,
         object: 'chat.completion',
@@ -78,6 +91,23 @@ beforeAll(async () => {
     if (url.endsWith('/messages')) {
       const content = payload.messages as Array<{ content?: unknown }>;
       const hasToolResult = JSON.stringify(content).includes('tool_result');
+      if (payload.stream === true) {
+        response.writeHead(200, { 'content-type': 'text/event-stream' });
+        const send = (value: unknown) => response.write(`data: ${JSON.stringify(value)}\n\n`);
+        send({ type: 'message_start', message: { usage: { input_tokens: 80 } } });
+        if (hasToolResult) {
+          send({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } });
+          send({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'The sum ' } });
+          send({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'is 5' } });
+          send({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 10 } });
+        } else {
+          send({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'call-1', name: 'add', input: {} } });
+          send({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"a":2,"b":3}' } });
+          send({ type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 10 } });
+        }
+        response.end();
+        return;
+      }
       return json(response, {
         id: `anthropic-${count}`,
         type: 'message',
@@ -142,6 +172,41 @@ describe.each([
     expect(receivedPrivateHeader).toBe(true);
     expect(JSON.stringify(result)).not.toContain('provider-secret-value');
   });
+
+  test('streams provider text deltas through the agent loop', async () => {
+    const updates: Array<{ type: string; [key: string]: unknown }> = [];
+    const result = await runAgent(
+      { prompt: 'Add 2 and 3', model: 'default', serverId: 'sample', limits: { maxTurns: 4, maxToolCalls: 3, timeoutMs: 5000 } },
+      { provider: createProviderAdapter(config(type)), mcp: manager },
+      { onUpdate: (update) => updates.push(update) },
+    );
+    expect(result.output).toBe('The sum is 5');
+    expect(updates.filter((update) => update.type === 'text_delta').map((update) => update.delta)).toEqual(['The sum ', 'is 5']);
+    expect(updates).toContainEqual(expect.objectContaining({ type: 'tool_call' }));
+    expect(result.tokens.total).toBeGreaterThan(0);
+  });
+});
+
+test('streams text deltas and progress while retaining normalized final result', async () => {
+  const updates: Array<{ type: string; [key: string]: unknown }> = [];
+  const provider = scriptedAdapter(async (request) => {
+    request.onTextDelta?.('Hello');
+    request.onTextDelta?.(' world');
+    return {
+      text: 'Hello world', toolCalls: [], usage: { input: 3, output: 2, total: 5 },
+      stopReason: 'complete', raw: { streamed: true },
+    };
+  });
+  const result = await runAgent(
+    { prompt: 'hello', model: 'x', serverId: 'sample', limits: { maxTurns: 2, maxToolCalls: 1, timeoutMs: 5000 } },
+    { provider, mcp: manager },
+    { onUpdate: (update) => updates.push(update) },
+  );
+
+  expect(result.output).toBe('Hello world');
+  expect(updates.filter((update) => update.type === 'text_delta').map((update) => update.delta)).toEqual(['Hello', ' world']);
+  expect(updates).toContainEqual(expect.objectContaining({ type: 'model_turn', turn: 1 }));
+  expect(updates).toContainEqual(expect.objectContaining({ type: 'stop', reason: 'complete' }));
 });
 
 test('normalizes missing usage to zero', async () => {

@@ -34,6 +34,50 @@ export type Run = {
   cases: CaseResult[]; events: EventRecord[];
 };
 
+export type PlaygroundResult = {
+  output: string;
+  toolCalls: Array<{ name: string; arguments: unknown; result?: unknown; durationMs?: number }>;
+  events: EventRecord[];
+  durationMs: number;
+  tokens: { input: number; output: number; total: number };
+  costUsd: number;
+  stopReason: string;
+};
+
+export type ConversationMessage = {
+  id: string;
+  sequence: number;
+  role: 'user' | 'assistant';
+  content: string;
+  createdAt: string;
+  durationMs?: number;
+  tokens?: { input: number; output: number; total: number };
+  costUsd?: number;
+  toolCalls?: PlaygroundResult['toolCalls'];
+  events?: EventRecord[];
+  stopReason?: string;
+};
+
+export type ConversationSummary = {
+  id: string;
+  title: string;
+  serverId: string;
+  providerId: string;
+  model: string;
+  createdAt: string;
+  updatedAt: string;
+  messageCount: number;
+  totals: { tokens: { input: number; output: number; total: number }; costUsd: number; toolCalls: number; durationMs: number };
+};
+
+export type ConversationDetail = ConversationSummary & { messages: ConversationMessage[] };
+
+export type AgentUpdate =
+  | { type: 'text_delta'; turn: number; delta: string }
+  | { type: 'model_turn'; turn: number; usage: { input: number; output: number; total: number }; tokens: { input: number; output: number; total: number }; costUsd: number; durationMs: number }
+  | { type: 'tool_call'; turn: number; call: PlaygroundResult['toolCalls'][number] }
+  | { type: 'stop'; reason: string; durationMs: number };
+
 export type Bootstrap = {
   servers: ServerSummary[];
   providers: ProviderSummary[];

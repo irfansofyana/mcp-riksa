@@ -21,8 +21,8 @@ export function Status({ value }: { value: string }) {
   return <span className={`status ${tone}`}>{value}</span>;
 }
 
-export function JsonView({ value, label = 'Sanitized JSON' }: { value: unknown; label?: string }) {
-  return <details className="json-view" open><summary>{label}</summary><pre>{JSON.stringify(value, null, 2)}</pre></details>;
+export function JsonView({ value, label = 'Sanitized JSON', defaultOpen = true }: { value: unknown; label?: string; defaultOpen?: boolean }) {
+  return <details className="json-view" open={defaultOpen || undefined}><summary>{label}</summary><pre>{JSON.stringify(value, null, 2)}</pre></details>;
 }
 
 export function Empty({ children }: { children: ReactNode }) { return <p className="empty">{children}</p>; }

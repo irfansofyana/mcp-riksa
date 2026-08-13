@@ -91,6 +91,48 @@ describe('concrete workbench runtime', () => {
     }
   });
 
+  test('streams and persists multi-turn playground conversations', async () => {
+    const receivedMessages: unknown[][] = [];
+    const provider = createServer(async (request, response) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      const payload = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { messages?: unknown[]; stream?: boolean };
+      receivedMessages.push(payload.messages ?? []);
+      if (JSON.stringify(payload.messages).includes('Fail')) {
+        response.writeHead(500, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ error: 'provider failed' }));
+        return;
+      }
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      response.write(`data: ${JSON.stringify({ id: 'chunk-1', object: 'chat.completion.chunk', created: 1, model: 'test', choices: [{ index: 0, delta: { content: 'Hello ' }, finish_reason: null }] })}\n\n`);
+      response.write(`data: ${JSON.stringify({ id: 'chunk-2', object: 'chat.completion.chunk', created: 1, model: 'test', choices: [{ index: 0, delta: { content: 'there' }, finish_reason: 'stop' }] })}\n\n`);
+      response.write(`data: ${JSON.stringify({ id: 'usage', object: 'chat.completion.chunk', created: 1, model: 'test', choices: [], usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 } })}\n\n`);
+      response.end('data: [DONE]\n\n');
+    });
+    await new Promise<void>((resolveListen) => provider.listen(0, '127.0.0.1', resolveListen));
+    const address = provider.address();
+    if (!address || typeof address === 'string') throw new Error('Provider did not bind');
+    const { runtime } = createRuntime();
+    try {
+      await runtime.addProvider({ id: 'local', name: 'Local', type: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, models: { fast: 'test' }, headerEnv: {}, pricing: { inputPerMillion: 1, outputPerMillion: 2 } });
+      await runtime.addServer({ id: 'sample', name: 'Sample', transport: 'stdio', command: process.execPath, args: [tsxCli, sampleServer], envRefs: {} });
+      await runtime.connectServer('sample');
+      const conversation = await runtime.createConversation({ serverId: 'sample', providerId: 'local', model: 'fast' });
+      const deltas: string[] = [];
+      await runtime.streamPlayground({ conversationId: conversation.id, prompt: 'First' }, (update) => { if (update.type === 'text_delta') deltas.push(update.delta); });
+      await runtime.streamPlayground({ conversationId: conversation.id, prompt: 'Second' }, () => undefined);
+      const detail = await runtime.getConversation(conversation.id);
+      expect(deltas).toEqual(['Hello ', 'there']);
+      expect(detail).toMatchObject({ messageCount: 4, totals: { tokens: { total: 12 } } });
+      expect(receivedMessages[1]).toHaveLength(3);
+      await expect(runtime.streamPlayground({ conversationId: conversation.id, prompt: 'Fail' }, () => undefined)).rejects.toThrow();
+      expect(await runtime.getConversation(conversation.id)).toMatchObject({ messageCount: 4 });
+    } finally {
+      await runtime.close();
+      await new Promise<void>((resolveClose, reject) => provider.close((error) => error ? reject(error) : resolveClose()));
+    }
+  });
+
   test('persists only environment references and restores provider/server configuration', async () => {
     process.env.RUNTIME_PROVIDER_SECRET = 'must-never-reach-disk';
     const { runtime, databasePath, directory } = createRuntime();

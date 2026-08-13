@@ -1,4 +1,4 @@
-import type { Bootstrap, Run } from './types.js';
+import type { AgentUpdate, Bootstrap, ConversationDetail, ConversationSummary, PlaygroundResult, Run } from './types.js';
 
 let sessionToken = '';
 
@@ -24,6 +24,56 @@ export async function post<T>(path: string, body: unknown): Promise<T> {
   }));
 }
 
+export async function remove<T>(path: string): Promise<T> {
+  return parse<T>(await fetch(path, {
+    method: 'DELETE',
+    headers: { 'x-workbench-session': sessionToken },
+  }));
+}
+
+async function streamPlayground(
+  body: unknown,
+  onUpdate: (update: AgentUpdate) => void,
+  signal?: AbortSignal,
+): Promise<{ conversationId: string; result: PlaygroundResult; conversation: ConversationDetail }> {
+  const response = await fetch('/api/playground/stream', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-workbench-session': sessionToken },
+    body: JSON.stringify(body),
+    ...(signal === undefined ? {} : { signal }),
+  });
+  if (!response.ok || !response.body) return parse(response);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let completed: { conversationId: string; result: PlaygroundResult; conversation: ConversationDetail } | undefined;
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    const frames = buffer.split(/\r?\n\r?\n/);
+    buffer = frames.pop() ?? '';
+    for (const frame of frames) {
+      let eventName = 'message';
+      const data: string[] = [];
+      for (const line of frame.split(/\r?\n/)) {
+        if (line.startsWith('event:')) eventName = line.slice(6).trim();
+        if (line.startsWith('data:')) data.push(line.slice(5).trim());
+      }
+      if (data.length === 0) continue;
+      const payload = JSON.parse(data.join('\n')) as unknown;
+      if (eventName === 'update') onUpdate(payload as AgentUpdate);
+      if (eventName === 'done') completed = payload as typeof completed;
+      if (eventName === 'error') {
+        const message = payload && typeof payload === 'object' && 'error' in payload ? String((payload as { error: unknown }).error) : 'Playground stream failed';
+        throw new Error(message);
+      }
+    }
+    if (done) break;
+  }
+  if (!completed) throw new Error('Playground stream ended before completion');
+  return completed;
+}
+
 export async function initialize(): Promise<Bootstrap> {
   const [session, bootstrap] = await Promise.all([
     get<{ sessionToken: string }>('/api/session'),
@@ -42,10 +92,15 @@ export const api = {
   connectServer: (id: string) => post(`/api/servers/${encodeURIComponent(id)}/connect`, {}),
   inspectServer: (id: string) => get<{ identity: unknown; capabilities: unknown; tools: import('./types.js').Tool[] }>(`/api/servers/${encodeURIComponent(id)}`),
   callTool: (id: string, body: unknown) => post(`/api/servers/${encodeURIComponent(id)}/call`, body),
-  beginOAuth: (id: string) => post<{ authorizationUrl?: string; state: string }>(`/api/servers/${encodeURIComponent(id)}/oauth/begin`, {}),
-  oauthStatus: (id: string) => get<{ state: string; scopes: string[]; timeline: unknown[] }>(`/api/servers/${encodeURIComponent(id)}/oauth`),
+  beginOAuth: (id: string) => post<{ id: string; authorizationUrl?: string; state: string; scopes: string[]; timeline: unknown[]; expiresAt?: string }>(`/api/servers/${encodeURIComponent(id)}/oauth/begin`, {}),
+  oauthStatus: (id: string) => get<{ id: string; state: string; scopes: string[]; timeline: unknown[]; expiresAt?: string }>(`/api/servers/${encodeURIComponent(id)}/oauth`),
   forgetOAuth: (id: string) => post(`/api/servers/${encodeURIComponent(id)}/oauth/forget`, {}),
-  playground: (body: unknown) => post<{ output: string; toolCalls: unknown[]; events: import('./types.js').EventRecord[]; tokens: { total: number }; costUsd: number; stopReason: string }>('/api/playground', body),
+  playground: (body: unknown) => post<PlaygroundResult>('/api/playground', body),
+  conversations: () => get<ConversationSummary[]>('/api/playground/conversations'),
+  conversation: (id: string) => get<ConversationDetail>(`/api/playground/conversations/${encodeURIComponent(id)}`),
+  createConversation: (body: { serverId: string; providerId: string; model: string }) => post<ConversationDetail>('/api/playground/conversations', body),
+  deleteConversation: (id: string) => remove<{ id: string; deleted: boolean }>(`/api/playground/conversations/${encodeURIComponent(id)}`),
+  streamPlayground,
   saveSuite: (source: string) => post<{ name: string; cases: number }>('/api/suites', { source }),
   listSuites: () => get<string[]>('/api/suites'),
   runSuite: (name: string) => post<{ id: string; status: string }>(`/api/suites/${encodeURIComponent(name)}/run`, {}),

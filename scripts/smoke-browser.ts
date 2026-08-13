@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -54,7 +54,10 @@ class Cdp {
 
 async function startChrome(appUrl: string) {
   const profile = mkdtempSync(join(tmpdir(), 'mcp-workbench-chrome-'));
-  const child = spawn('/usr/bin/google-chrome', [
+  const candidates = [process.env.CHROME_BIN, '/usr/bin/google-chrome', '/usr/bin/chromium', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].filter((value): value is string => Boolean(value));
+  const executable = candidates.find(existsSync);
+  if (!executable) throw new Error('Chrome executable not found; set CHROME_BIN');
+  const child = spawn(executable, [
     '--headless=new', '--no-sandbox', '--disable-gpu', '--hide-scrollbars', '--remote-debugging-port=0',
     '--remote-allow-origins=*', `--user-data-dir=${profile}`, '--window-size=1440,1000', appUrl,
   ], { stdio: ['ignore', 'ignore', 'pipe'] });
@@ -70,9 +73,15 @@ async function startChrome(appUrl: string) {
   });
   const endpoint = new URL(browserWebSocket);
   let pageWebSocket = '';
-  for (let attempt = 0; attempt < 50; attempt += 1) {
+  try {
+    const created = await (await fetch(`http://${endpoint.host}/json/new?${encodeURIComponent(appUrl)}`, { method: 'PUT' })).json() as { webSocketDebuggerUrl?: string };
+    pageWebSocket = created.webSocketDebuggerUrl ?? '';
+  } catch { /* Fall back to an existing page target. */ }
+  for (let attempt = 0; attempt < 50 && !pageWebSocket; attempt += 1) {
     const targets = await (await fetch(`http://${endpoint.host}/json/list`)).json() as Array<{ type: string; url: string; webSocketDebuggerUrl: string }>;
-    pageWebSocket = targets.find((target) => target.type === 'page' && target.url.startsWith(appUrl))?.webSocketDebuggerUrl ?? '';
+    pageWebSocket = targets.find((target) => target.type === 'page' && target.url.startsWith(appUrl))?.webSocketDebuggerUrl
+      ?? targets.find((target) => target.type === 'page')?.webSocketDebuggerUrl
+      ?? '';
     if (pageWebSocket) break;
     await new Promise((resolveWait) => setTimeout(resolveWait, 100));
   }
@@ -161,6 +170,9 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     await click('run-playground');
     await waitText('The sum is 5', 20_000);
     steps.push('playground-complete');
+    const playgroundScreenshot = join(options.outputDirectory, 'playground.png');
+    const playgroundCapture = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    writeFileSync(playgroundScreenshot, Buffer.from(String(playgroundCapture.data), 'base64'));
     await setValue('playground-suite-name', 'smoke-agent');
     await click('save-playground-suite');
     await waitText('Interaction saved as a versioned YAML suite.');
@@ -199,7 +211,7 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     const mobile = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     writeFileSync(mobileScreenshot, Buffer.from(String(mobile.data), 'base64'));
     steps.push('mobile-checked');
-    return { steps, consoleErrors, serverScreenshot, desktopScreenshot, mobileScreenshot };
+    return { steps, consoleErrors, serverScreenshot, playgroundScreenshot, desktopScreenshot, mobileScreenshot };
   } finally {
     cdp.close();
     if (child.exitCode === null) {

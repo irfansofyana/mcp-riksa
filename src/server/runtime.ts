@@ -2,8 +2,8 @@ import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createProviderAdapter } from '../agent/providers.js';
-import { providerConfigSchema, type ProviderConfig } from '../agent/types.js';
-import { runAgent } from '../agent/loop.js';
+import { providerConfigSchema, type ProviderConfig, type ProviderMessage } from '../agent/types.js';
+import { runAgent, type AgentUpdate } from '../agent/loop.js';
 import { event } from '../core/events.js';
 import { parseSuite } from '../core/suite.js';
 import { runSuite } from '../core/runner.js';
@@ -12,6 +12,7 @@ import { McpManager, serverConfigSchema, type ServerConfig } from '../mcp/manage
 import { OAuthCoordinator } from '../mcp/oauth.js';
 import { validateHttpEndpoint } from '../mcp/validation.js';
 import { ConfigurationRepository } from '../storage/configurations.js';
+import { ConversationRepository } from '../storage/conversations.js';
 import { openDatabase, type WorkbenchDatabase } from '../storage/database.js';
 import { RunRepository } from '../storage/runs.js';
 
@@ -22,6 +23,7 @@ type RuntimeOptions = {
 };
 
 type PlaygroundInput = {
+  conversationId?: string;
   serverId?: string;
   providerId?: string;
   model?: string;
@@ -33,6 +35,7 @@ export class WorkbenchRuntime {
   private readonly database: WorkbenchDatabase;
   private readonly runs: RunRepository;
   private readonly configurations: ConfigurationRepository;
+  private readonly conversations: ConversationRepository;
   private readonly mcp = new McpManager();
   private readonly oauth = new OAuthCoordinator();
   private readonly providers = new Map<string, ProviderConfig>();
@@ -46,6 +49,7 @@ export class WorkbenchRuntime {
     this.database = openDatabase(options.databasePath);
     this.runs = new RunRepository(this.database);
     this.configurations = new ConfigurationRepository(this.database);
+    this.conversations = new ConversationRepository(this.database);
     this.runs.recoverInterrupted();
     for (const config of this.configurations.list<ProviderConfig>('provider')) {
       const parsed = providerConfigSchema.parse(config);
@@ -64,7 +68,7 @@ export class WorkbenchRuntime {
 
   async bootstrap() {
     return {
-      servers: [...this.servers.values()].map((config) => ({ ...config, connected: false })),
+      servers: [...this.servers.values()].map((config) => ({ ...config, connected: this.mcp.isConnected(config.id) })),
       providers: (await this.settings()).providers,
       suites: await this.listSuites(),
       runs: await this.listRuns(),
@@ -127,16 +131,66 @@ export class WorkbenchRuntime {
   }
 
   async playground(input: PlaygroundInput) {
-    const serverId = input.serverId ?? [...this.servers.keys()][0];
-    const providerId = input.providerId ?? [...this.providers.keys()][0];
-    if (!serverId || !providerId) throw new Error('Playground requires a connected server and model provider');
-    const config = this.requireProvider(providerId);
+    const { serverId, providerId, model, config } = this.resolvePlayground(input);
     return runAgent({
       prompt: input.prompt,
-      model: input.model ?? Object.keys(config.models)[0]!,
+      model,
       serverId,
       limits: input.limits ?? { maxTurns: 8, maxToolCalls: 16, timeoutMs: 60_000 },
     }, { provider: createProviderAdapter(config), mcp: this.mcp });
+  }
+
+  async createConversation(input: { serverId: string; providerId: string; model: string }) {
+    this.requireServer(input.serverId);
+    const provider = this.requireProvider(input.providerId);
+    if (!provider.models[input.model]) throw new Error(`Unknown model alias ${input.model} for provider ${input.providerId}`);
+    return this.conversations.create(input);
+  }
+
+  async listConversations() { return this.conversations.list(); }
+  async getConversation(id: string) { return this.conversations.get(id); }
+  async deleteConversation(id: string) { return this.conversations.delete(id); }
+
+  async streamPlayground(input: PlaygroundInput & { conversationId: string }, onUpdate: (update: AgentUpdate) => void, signal?: AbortSignal) {
+    const conversation = this.conversations.get(input.conversationId);
+    if (!conversation) throw new Error(`Playground conversation ${input.conversationId} not found`);
+    const resolved = this.resolvePlayground({
+      ...input,
+      serverId: conversation.serverId,
+      providerId: conversation.providerId,
+      model: conversation.model,
+    });
+    const providerHistory: ProviderMessage[] = conversation.messages.flatMap((message): ProviderMessage[] => {
+      if (message.role === 'user') return [{ role: 'user', content: message.content }];
+      const toolCalls = (message.toolCalls ?? []).map((call, index) => ({
+        id: `history-${message.id}-${index}`,
+        name: call.name,
+        arguments: call.arguments as Record<string, unknown>,
+      }));
+      return [
+        { role: 'assistant', content: message.content, toolCalls },
+        ...toolCalls.map((call, index): ProviderMessage => ({
+          role: 'tool', toolCallId: call.id, name: call.name,
+          content: JSON.stringify(message.toolCalls?.[index]?.result ?? null),
+        })),
+      ];
+    });
+    const result = await runAgent({
+      prompt: input.prompt,
+      model: resolved.model,
+      serverId: resolved.serverId,
+      limits: input.limits ?? { maxTurns: 8, maxToolCalls: 16, timeoutMs: 60_000 },
+      history: providerHistory,
+    }, { provider: createProviderAdapter(resolved.config), mcp: this.mcp }, { signal, onUpdate });
+    this.conversations.appendTurn(
+      conversation.id,
+      { role: 'user', content: input.prompt },
+      {
+        role: 'assistant', content: result.output, durationMs: result.durationMs, tokens: result.tokens,
+        costUsd: result.costUsd, toolCalls: result.toolCalls, events: result.events, stopReason: result.stopReason,
+      },
+    );
+    return { conversationId: conversation.id, result, conversation: this.conversations.get(conversation.id) };
   }
 
   async saveSuite(source: string) {
@@ -229,6 +283,15 @@ export class WorkbenchRuntime {
       costUsd: 0,
       events: [event(server, 'tool_call', { tool, arguments: args, result: response }, durationMs)],
     };
+  }
+
+  private resolvePlayground(input: PlaygroundInput) {
+    const serverId = input.serverId ?? [...this.servers.keys()][0];
+    const providerId = input.providerId ?? [...this.providers.keys()][0];
+    if (!serverId || !providerId) throw new Error('Playground requires a connected server and model provider');
+    const config = this.requireProvider(providerId);
+    const model = input.model ?? Object.keys(config.models)[0]!;
+    return { serverId, providerId, model, config };
   }
 
   private requireProvider(id: string): ProviderConfig {

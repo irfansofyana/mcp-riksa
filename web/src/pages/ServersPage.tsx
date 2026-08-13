@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { Button, Empty, Field, Input, JsonView, Notice, Section, Select, Status, Textarea } from '../components.js';
 import { buildServerPayload, type ServerForm } from '../model.js';
 import type { ServerSummary, Tool } from '../types.js';
+
+type OAuthStatus = { id?: string; state: string; scopes: string[]; timeline: unknown[]; authorizationUrl?: string; expiresAt?: string };
 
 const initialForm: ServerForm = {
   id: '', name: '', transport: 'stdio', command: 'node', args: '', url: 'http://127.0.0.1:3000/mcp', headerEnv: '',
@@ -17,7 +19,13 @@ export function ServersPage({ servers, onRefresh }: { servers: ServerSummary[]; 
   const [argumentsText, setArgumentsText] = useState('{}');
   const [confirmed, setConfirmed] = useState(false);
   const [result, setResult] = useState<unknown>();
-  const [oauth, setOauth] = useState<unknown>();
+  const [oauth, setOauth] = useState<OAuthStatus>();
+  const [authorizationUrl, setAuthorizationUrl] = useState('');
+  const [oauthServer, setOauthServer] = useState('');
+  const [oauthSignal, setOauthSignal] = useState('');
+  const oauthCompleting = useRef(false);
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
@@ -33,6 +41,57 @@ export function ServersPage({ servers, onRefresh }: { servers: ServerSummary[]; 
     setTool(value.tools[0]?.name ?? '');
     setSelected(id);
   };
+
+  const finishOAuth = async (id: string, value: OAuthStatus) => {
+    setOauth(value);
+    if (value.state !== 'authorized' || oauthCompleting.current) return;
+    oauthCompleting.current = true;
+    try {
+      setAuthorizationUrl('');
+      await api.connectServer(id);
+      if (selectedRef.current === id) await inspect(id);
+      await onRefresh();
+      if (selectedRef.current === id) setMessage('OAuth connected. Server reconnected and ready.');
+    } finally {
+      oauthCompleting.current = false;
+    }
+  };
+
+  const refreshOAuth = async (id = selectedRef.current) => {
+    const value = await api.oauthStatus(id);
+    await finishOAuth(id, value);
+    return value;
+  };
+
+  useEffect(() => {
+    const receive = (payload: unknown) => {
+      const signal = payload as { type?: string; value?: { id?: string } } | undefined;
+      if (signal?.type === 'workbench:oauth' && signal.value?.id) setOauthSignal(signal.value.id);
+    };
+    const onMessage = (event: MessageEvent) => { if (event.origin === window.location.origin) receive(event.data); };
+    window.addEventListener('message', onMessage);
+    const channel = typeof BroadcastChannel === 'undefined' ? undefined : new BroadcastChannel('workbench-oauth');
+    if (channel) channel.onmessage = (event) => receive(event.data);
+    return () => { window.removeEventListener('message', onMessage); channel?.close(); };
+  }, []);
+
+  useEffect(() => {
+    setOauth(undefined);
+    if (selected) void api.oauthStatus(selected).then(setOauth).catch(() => undefined);
+  }, [selected]);
+
+  useEffect(() => {
+    if (!oauthSignal) return;
+    void act(async () => { await refreshOAuth(oauthSignal); setOauthSignal(''); });
+  }, [oauthSignal]);
+
+  useEffect(() => {
+    if (oauth?.state !== 'authorizing' || !oauthServer) return;
+    const timer = window.setInterval(() => void api.oauthStatus(oauthServer)
+      .then((value) => finishOAuth(oauthServer, value))
+      .catch(() => undefined), 1200);
+    return () => window.clearInterval(timer);
+  }, [oauth?.state, oauthServer]);
 
   return <div className="page-grid servers-page">
     <Section title="MCP servers" className="rail-section" action={<span className="count">{servers.length}</span>}>
@@ -85,10 +144,25 @@ export function ServersPage({ servers, onRefresh }: { servers: ServerSummary[]; 
         </div>}
       </Section>
 
-      {servers.find((server) => server.id === selected)?.transport === 'http' ? <Section title="OAuth connection" action={<Status value={(oauth as { state?: string } | undefined)?.state ?? 'not connected'} />}>
-        <p className="section-copy">Authorization Code + PKCE with metadata discovery, DCR when advertised, or a pre-registered client.</p>
-        <div className="button-row"><Button variant="primary" onClick={() => void act(async () => { const value = await api.beginOAuth(selected); setOauth(value); if (value.authorizationUrl) window.open(value.authorizationUrl, '_blank', 'noopener,noreferrer'); })}>{(oauth as { state?: string } | undefined)?.state === 'authorized' ? 'Reconnect with OAuth' : 'Connect with OAuth'}</Button><Button onClick={() => void act(async () => setOauth(await api.oauthStatus(selected)))}>Refresh status</Button><Button variant="danger" onClick={() => void act(async () => { await api.forgetOAuth(selected); setOauth(undefined); })}>Forget authorization</Button></div>
-        {oauth ? <JsonView value={oauth} label="Sanitized OAuth timeline" /> : null}
+      {servers.find((server) => server.id === selected)?.transport === 'http' ? <Section title="OAuth connection" action={<Status value={oauth?.state ?? 'not connected'} />}>
+        <div className="oauth-summary">
+          <div><span className="eyebrow">Secure handoff</span><b>{oauth?.state === 'authorized' ? 'Authorization active' : oauth?.state === 'authorizing' ? 'Waiting for provider' : 'Connect account'}</b><p>Authorization Code + PKCE. Callback returns here, refreshes status, and reconnects server automatically.</p></div>
+          {oauth?.scopes?.length ? <div className="scope-list">{oauth.scopes.map((scope) => <code key={scope}>{scope}</code>)}</div> : null}
+        </div>
+        <div className="button-row">
+          <Button variant="primary" onClick={() => void act(async () => {
+            const value = await api.beginOAuth(selected);
+            setOauthServer(selected);
+            setOauth(value);
+            setAuthorizationUrl(value.authorizationUrl ?? '');
+            if (value.authorizationUrl) window.open(value.authorizationUrl, 'workbench-oauth', 'popup,width=560,height=720');
+          })}>{oauth?.state === 'authorized' ? 'Reconnect with OAuth' : 'Connect with OAuth'}</Button>
+          <Button onClick={() => void act(async () => { setOauthServer(selected); await refreshOAuth(selected); })}>Check status</Button>
+          <Button variant="danger" onClick={() => void act(async () => { await api.forgetOAuth(selected); setOauth(undefined); setOauthServer(''); setAuthorizationUrl(''); await onRefresh(); })}>Forget authorization</Button>
+          {authorizationUrl ? <a className="inline-link" href={authorizationUrl} target="workbench-oauth">Open authorization window ↗</a> : null}
+        </div>
+        {oauth?.state === 'authorizing' ? <div className="oauth-waiting"><i /><span>Complete authorization in popup. This page updates automatically.</span></div> : null}
+        {oauth ? <JsonView value={oauth.timeline} label="Sanitized OAuth timeline" /> : null}
       </Section> : null}
     </div>
   </div>;

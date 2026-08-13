@@ -15,6 +15,11 @@ export type ApiRuntime = {
   inspectServer(id: string): Promise<unknown> | unknown;
   callTool(id: string, tool: string, args: Record<string, unknown>, options: { confirmDangerous: boolean }): Promise<unknown> | unknown;
   playground(value: unknown): Promise<unknown> | unknown;
+  createConversation(value: { serverId: string; providerId: string; model: string }): Promise<unknown> | unknown;
+  listConversations(): Promise<unknown> | unknown;
+  getConversation(id: string): Promise<unknown | undefined> | unknown | undefined;
+  deleteConversation(id: string): Promise<boolean> | boolean;
+  streamPlayground(value: unknown, onUpdate: (update: unknown) => void, signal?: AbortSignal): Promise<unknown>;
   saveSuite(source: string): Promise<unknown> | unknown;
   listSuites(): Promise<unknown> | unknown;
   startSuite(name: string): Promise<unknown> | unknown;
@@ -36,6 +41,7 @@ const toolCallSchema = z.strictObject({
 });
 const suiteBodySchema = z.strictObject({ source: z.string().min(1) });
 const playgroundSchema = z.strictObject({
+  conversationId: z.string().min(1).optional(),
   serverId: z.string().min(1).optional(),
   providerId: z.string().min(1).optional(),
   model: z.string().min(1).optional(),
@@ -47,6 +53,12 @@ const playgroundSchema = z.strictObject({
     maxCostUsd: z.number().nonnegative().optional(),
   }).optional(),
 });
+const conversationSchema = z.strictObject({
+  serverId: z.string().min(1),
+  providerId: z.string().min(1),
+  model: z.string().min(1),
+});
+const streamingPlaygroundSchema = playgroundSchema.extend({ conversationId: z.string().min(1) });
 
 function isLoopback(value: string | undefined): boolean {
   if (!value) return false;
@@ -65,6 +77,16 @@ function originIsLoopback(value: string | undefined): boolean {
 
 function send(response: Response, value: unknown, status = 200): void {
   response.status(status).json(redact(value));
+}
+
+function oauthCallbackHtml(value: unknown, ok: boolean): string {
+  const payload = JSON.stringify(redact({ type: 'workbench:oauth', ok, value })).replaceAll('<', '\\u003c');
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>OAuth ${ok ? 'connected' : 'failed'}</title><style>body{margin:0;background:#11110f;color:#eee2c8;font:16px system-ui;display:grid;place-items:center;min-height:100vh}.card{max-width:420px;padding:32px;border:1px solid #674323;background:#171512;text-align:center}b{color:${ok ? '#9ed39f' : '#ee958a'}}a{color:#f0a44f}</style></head><body><main class="card"><b>${ok ? 'Authorization complete' : 'Authorization failed'}</b><p>${ok ? 'Returning to MCP Local Workbench…' : 'Return to workbench for details.'}</p><a href="/#/servers">Back to workbench</a></main><script>const message=${payload};try{window.opener?.postMessage(message,location.origin);const channel=new BroadcastChannel('workbench-oauth');channel.postMessage(message);channel.close()}catch{}setTimeout(()=>window.close(),250)</script></body></html>`;
+}
+
+function writeStream(response: Response, eventName: string, value: unknown): void {
+  if (response.writableEnded || response.destroyed) return;
+  response.write(`event: ${eventName}\ndata: ${JSON.stringify(redact(value))}\n\n`);
 }
 
 export function createApp(runtime: ApiRuntime, options: { sessionToken?: string; staticDirectory?: string } = {}): Express {
@@ -107,6 +129,38 @@ export function createApp(runtime: ApiRuntime, options: { sessionToken?: string;
   });
 
   app.post('/api/playground', async (request, response) => send(response, await runtime.playground(playgroundSchema.parse(request.body))));
+  app.get('/api/playground/conversations', async (_request, response) => send(response, await runtime.listConversations()));
+  app.post('/api/playground/conversations', async (request, response) => send(response, await runtime.createConversation(conversationSchema.parse(request.body)), 201));
+  app.get('/api/playground/conversations/:id', async (request, response) => {
+    const conversation = await runtime.getConversation(request.params.id!);
+    if (conversation === undefined) return send(response, { error: 'Conversation not found' }, 404);
+    send(response, conversation);
+  });
+  app.delete('/api/playground/conversations/:id', async (request, response) => {
+    const deleted = await runtime.deleteConversation(request.params.id!);
+    send(response, { id: request.params.id, deleted }, deleted ? 200 : 404);
+  });
+  app.post('/api/playground/stream', async (request, response) => {
+    const input = streamingPlaygroundSchema.parse(request.body);
+    const controller = new AbortController();
+    response.status(200);
+    response.set({
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache, no-transform',
+      connection: 'keep-alive',
+      'x-accel-buffering': 'no',
+    });
+    response.flushHeaders();
+    response.on('close', () => { if (!response.writableEnded) controller.abort(new Error('Playground client disconnected')); });
+    try {
+      const result = await runtime.streamPlayground(input, (update) => writeStream(response, 'update', update), controller.signal);
+      writeStream(response, 'done', result);
+    } catch (error) {
+      writeStream(response, 'error', { error: error instanceof Error ? error.message : 'Playground stream failed' });
+    } finally {
+      if (!response.writableEnded && !response.destroyed) response.end();
+    }
+  });
   app.get('/api/suites', async (_request, response) => send(response, await runtime.listSuites()));
   app.post('/api/suites', async (request, response) => send(response, await runtime.saveSuite(suiteBodySchema.parse(request.body).source), 201));
   app.post('/api/suites/:name/run', async (request, response) => send(response, await runtime.startSuite(request.params.name!), 202));
@@ -132,14 +186,24 @@ export function createApp(runtime: ApiRuntime, options: { sessionToken?: string;
     await runtime.forgetOAuth(request.params.id!);
     response.status(204).end();
   });
-  app.get('/api/oauth/callback', async (request, response) => {
-    const query = z.object({
-      code: z.string().optional(),
-      state: z.string().optional(),
-      error: z.string().optional(),
-      error_description: z.string().optional(),
-    }).parse(request.query);
-    send(response, await runtime.oauthCallback(Object.fromEntries(Object.entries(query).filter((entry): entry is [string, string] => entry[1] !== undefined))));
+  app.get('/api/oauth/callback', async (request, response, next) => {
+    const browser = (request.get('accept') ?? '').includes('text/html');
+    try {
+      const query = z.object({
+        code: z.string().optional(),
+        state: z.string().optional(),
+        error: z.string().optional(),
+        error_description: z.string().optional(),
+      }).parse(request.query);
+      const value = await runtime.oauthCallback(Object.fromEntries(Object.entries(query).filter((entry): entry is [string, string] => entry[1] !== undefined)));
+      if (!browser) return send(response, value);
+      response.set('content-security-policy', "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'");
+      response.status(200).type('html').send(oauthCallbackHtml(value, true));
+    } catch (error) {
+      if (!browser) return next(error);
+      response.set('content-security-policy', "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'");
+      response.status(400).type('html').send(oauthCallbackHtml({ error: error instanceof Error ? error.message : 'OAuth callback failed' }, false));
+    }
   });
 
   if (options.staticDirectory) {
