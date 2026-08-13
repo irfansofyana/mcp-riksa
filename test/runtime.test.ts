@@ -84,6 +84,17 @@ describe('concrete workbench runtime', () => {
     await expect(runtime.startConformance({ serverId: 'remote', selection: { kind: 'suite', suite: 'active' }, timeoutMs: 30_000 })).rejects.toMatchObject({ status: 400 });
     await runtime.close();
   });
+  test('rejects credential-bearing provider URLs before seeding configuration', async () => {
+    const { runtime } = createRuntime();
+    await expect(runtime.seedProvider({
+      id: 'credentialed', name: 'Credentialed', type: 'openai-compatible',
+      baseUrl: 'http://user:password@127.0.0.1:4000/v1', models: { default: 'test' },
+      headerEnv: {}, pricing: { inputPerMillion: 0, outputPerMillion: 0 },
+    })).rejects.toThrow('Credentials are not allowed');
+    expect((await runtime.bootstrap() as { providers: unknown[] }).providers).toEqual([]);
+    await runtime.close();
+  });
+
   test('resolves a configured model alias before sending a playground request upstream', async () => {
     let receivedModel = '';
     const provider = createServer(async (request, response) => {

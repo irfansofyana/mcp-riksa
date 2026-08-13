@@ -122,6 +122,7 @@ export class WorkbenchRuntime {
 
   async seedProvider(input: ProviderConfig) {
     const config = providerConfigSchema.parse(input);
+    await validateHttpEndpoint(config.baseUrl);
     if (!this.configurations.seed('provider', config.id, config)) return false;
     this.providers.set(config.id, config);
     return true;
