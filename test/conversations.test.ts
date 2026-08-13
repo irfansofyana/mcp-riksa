@@ -22,7 +22,11 @@ test('persists sanitized multi-turn playground conversations and cumulative stat
     role: 'assistant', content: '5', durationMs: 42,
     tokens: { input: 10, output: 2, total: 12 }, costUsd: 0.001,
     toolCalls: [{ name: 'add', arguments: { a: 2, b: 3 }, result: { sum: 5 }, durationMs: 3 }],
-    events: [], stopReason: 'complete',
+    events: [], stopReason: 'complete', providerTranscript: [
+      { role: 'assistant', content: '', toolCalls: [{ id: 'call-1', name: 'add', arguments: { a: 2, b: 3 } }] },
+      { role: 'tool', toolCallId: 'call-1', name: 'add', content: '{"sum":5}' },
+      { role: 'assistant', content: '5', toolCalls: [] },
+    ],
   });
   conversations.append(created.id, { role: 'user', content: 'Now add 4' });
 
@@ -35,6 +39,7 @@ test('persists sanitized multi-turn playground conversations and cumulative stat
     totals: { tokens: { input: 10, output: 2, total: 12 }, costUsd: 0.001, toolCalls: 1, durationMs: 42 },
   });
   expect(detail?.messages.map((message) => message.role)).toEqual(['user', 'assistant', 'user']);
+  expect(detail?.messages[1]?.providerTranscript).toHaveLength(3);
   expect(conversations.list()[0]).toMatchObject({ id: created.id, messageCount: 3 });
   const redactedConversation = conversations.create({ serverId: 'sample', providerId: 'local', model: 'fast', systemPrompt: 'Authorization: Bearer raw-system-secret' });
   expect(conversations.get(redactedConversation.id)?.systemPrompt).toContain('[REDACTED]');

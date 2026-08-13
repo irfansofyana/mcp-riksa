@@ -122,14 +122,17 @@ describe('concrete workbench runtime', () => {
       const deltas: string[] = [];
       await runtime.streamPlayground({ conversationId: conversation.id, prompt: 'First' }, (update) => { if (update.type === 'text_delta') deltas.push(update.delta); });
       await runtime.streamPlayground({ conversationId: conversation.id, prompt: 'Second' }, () => undefined);
+      const direct = await runtime.invokePlaygroundTool(conversation.id, 'add', { a: 4, b: 5 }, false);
+      expect(direct).toMatchObject({ prompt: expect.stringContaining('Execute add'), result: { output: { sum: 9 } }, conversation: { messageCount: 6 } });
+      expect(direct.prompt).toContain('"a": 4');
       const detail = await runtime.getConversation(conversation.id);
       expect(deltas).toEqual(['Hello ', 'there']);
-      expect(detail).toMatchObject({ messageCount: 4, totals: { tokens: { total: 12 } } });
+      expect(detail).toMatchObject({ messageCount: 6, totals: { tokens: { total: 12 }, toolCalls: 1 } });
       expect(receivedMessages[0]?.[0]).toEqual({ role: 'system', content: 'Use tools accurately.' });
       expect(receivedMessages[1]).toHaveLength(4);
       expect(receivedMessages[1]?.[0]).toEqual({ role: 'system', content: 'Use tools accurately.' });
       await expect(runtime.streamPlayground({ conversationId: conversation.id, prompt: 'Fail' }, () => undefined)).rejects.toThrow();
-      expect(await runtime.getConversation(conversation.id)).toMatchObject({ messageCount: 4 });
+      expect(await runtime.getConversation(conversation.id)).toMatchObject({ messageCount: 6 });
     } finally {
       await runtime.close();
       await new Promise<void>((resolveClose, reject) => provider.close((error) => error ? reject(error) : resolveClose()));

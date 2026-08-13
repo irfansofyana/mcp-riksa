@@ -188,6 +188,13 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     await setValue('playground-provider', 'local');
     await setValue('playground-model', 'default');
     await setValue('playground-system-prompt', 'Use connected MCP tools when needed and explain the result clearly.');
+    await waitText('MCP tools');
+    await clickText('.tool-rail-list button', 'add');
+    await setValue('playground-tool-field-a', '2');
+    await setValue('playground-tool-field-b', '3');
+    await click('playground-run-tool');
+    await waitText('Execute add');
+    await waitText('"sum": 5');
     await setValue('playground-prompt', 'Add 2 and 3 using the available tool.');
     await click('run-playground');
     await waitText('The sum is 5', 20_000);

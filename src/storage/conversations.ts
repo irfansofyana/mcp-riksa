@@ -92,6 +92,7 @@ export class ConversationRepository {
       ...(clean.toolCalls === undefined ? {} : { toolCalls: clean.toolCalls }),
       ...(clean.events === undefined ? {} : { events: clean.events }),
       ...(clean.stopReason === undefined ? {} : { stopReason: clean.stopReason }),
+      ...(clean.providerTranscript === undefined ? {} : { providerTranscript: clean.providerTranscript }),
     };
     this.database.transaction(() => {
       this.database.prepare(`

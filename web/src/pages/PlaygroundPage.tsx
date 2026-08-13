@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
-import { Button, Empty, Field, Input, JsonView, MarkdownContent, Notice, Select, Status, Textarea, TraceTimeline } from '../components.js';
-import { buildSuiteFromPlayground } from '../model.js';
-import type { AgentUpdate, ConversationDetail, ConversationSummary, PlaygroundResult, ProviderSummary, ServerSummary } from '../types.js';
+import { Button, Empty, Field, Input, JsonView, MarkdownContent, Notice, RichToolResult, Select, Status, Textarea, TraceTimeline } from '../components.js';
+import { buildSuiteFromPlayground, buildToolArguments, buildToolFields, initialToolValues } from '../model.js';
+import type { AgentUpdate, ConversationDetail, ConversationSummary, PlaygroundResult, ProviderSummary, ServerSummary, Tool } from '../types.js';
 
 const limits = { maxTurns: 8, maxToolCalls: 16, timeoutMs: 60_000 };
 
@@ -21,8 +21,18 @@ export function PlaygroundPage({ servers, providers, onRefresh }: { servers: Ser
   const aliases = useMemo(() => Object.keys(selectedProvider?.models ?? {}), [selectedProvider]);
   const [model, setModel] = useState('');
   const selectedModel = aliases.includes(model) ? model : aliases[0] ?? '';
+  const [railTab, setRailTab] = useState<'tools' | 'sessions'>('tools');
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [conversation, setConversation] = useState<ConversationDetail>();
+  const [tools, setTools] = useState<Tool[]>([]);
+  const [toolsServer, setToolsServer] = useState('');
+  const [selectedToolName, setSelectedToolName] = useState('');
+  const [toolValues, setToolValues] = useState<Record<string, string | boolean>>({});
+  const [toolArgumentsText, setToolArgumentsText] = useState('{}');
+  const [rawToolArguments, setRawToolArguments] = useState(false);
+  const [confirmDangerous, setConfirmDangerous] = useState(false);
+  const [toolResult, setToolResult] = useState<unknown>();
+  const [toolRunning, setToolRunning] = useState(false);
   const [systemPrompt, setSystemPrompt] = useState('');
   const [prompt, setPrompt] = useState('');
   const [draft, setDraft] = useState('');
@@ -36,7 +46,17 @@ export function PlaygroundPage({ servers, providers, onRefresh }: { servers: Ser
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const abortRef = useRef<AbortController | undefined>(undefined);
+  const conversationLoadEpoch = useRef(0);
   const transcriptRef = useRef<HTMLDivElement>(null);
+  const selectedTool = toolsServer === server ? tools.find((entry) => entry.name === selectedToolName) : undefined;
+  const selectedToolNeedsConfirmation = selectedTool?.annotations?.readOnlyHint !== true && selectedTool?.annotations?.destructiveHint !== false;
+  const toolFields = useMemo(() => buildToolFields(selectedTool?.inputSchema), [selectedTool]);
+
+  const loadTools = async () => {
+    if (!server) { setTools([]); setToolsServer(''); setSelectedToolName(''); return; }
+    const inspection = await api.inspectServer(server);
+    setTools(inspection.tools); setToolsServer(server); setSelectedToolName(inspection.tools[0]?.name ?? ''); setToolResult(undefined);
+  };
 
   const loadList = async (selectFirst = false) => {
     const list = await api.conversations();
@@ -46,7 +66,9 @@ export function PlaygroundPage({ servers, providers, onRefresh }: { servers: Ser
 
   const openConversation = async (id: string) => {
     abortRef.current?.abort();
+    const epoch = ++conversationLoadEpoch.current;
     const value = await api.conversation(id);
+    if (epoch !== conversationLoadEpoch.current) return;
     setConversation(value);
     setServer(value.serverId);
     setProvider(value.providerId);
@@ -61,10 +83,17 @@ export function PlaygroundPage({ servers, providers, onRefresh }: { servers: Ser
     void loadList(true).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
     return () => abortRef.current?.abort();
   }, []);
+  useEffect(() => {
+    setTools([]); setToolsServer(''); setSelectedToolName(''); setToolResult(undefined); setConfirmDangerous(false);
+    if (railTab === 'tools' && server) void loadTools().catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
+  }, [server]);
+  useEffect(() => {
+    setToolValues(initialToolValues(toolFields)); setToolArgumentsText('{}'); setRawToolArguments(false); setConfirmDangerous(false); setToolResult(undefined);
+  }, [selectedToolName, toolsServer]);
   useEffect(() => { transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight, behavior: 'smooth' }); }, [conversation?.messages.length, draft, running]);
 
   const newConversation = () => {
-    abortRef.current?.abort();
+    abortRef.current?.abort(); conversationLoadEpoch.current += 1;
     setConversation(undefined); setSystemPrompt(''); setPrompt(''); setResult(undefined); setUpdates([]); setDraft(''); setPendingPrompt(''); setMessage('New conversation draft. Set instructions, then send first message.'); setError('');
   };
 
@@ -77,6 +106,21 @@ export function PlaygroundPage({ servers, providers, onRefresh }: { servers: Ser
     setDraft('');
     await loadList();
     return value;
+  };
+
+  const runTool = async () => {
+    if (!selectedTool || toolRunning || running) return;
+    setError(''); setMessage(''); setToolRunning(true);
+    try {
+      let target = conversation;
+      const configurationChanged = target && (target.serverId !== server || target.providerId !== provider || target.model !== selectedModel);
+      if (!target || configurationChanged) target = await createConversation();
+      const args = rawToolArguments ? JSON.parse(toolArgumentsText) as Record<string, unknown> : buildToolArguments(toolFields, toolValues);
+      const completed = await api.invokePlaygroundTool(target.id, selectedTool.name, { arguments: args, confirmDangerous });
+      setConversation(completed.conversation); setResult(completed.result); setToolResult(completed.result.output); setView('chat'); setRailTab('sessions');
+      setMessage(`${completed.prompt} completed and was written to chat.`); await loadList();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { setToolRunning(false); }
   };
 
   const run = async () => {
@@ -132,13 +176,19 @@ export function PlaygroundPage({ servers, providers, onRefresh }: { servers: Ser
 
   return <div className="playground-shell">
     <aside className="conversation-rail">
-      <div className="conversation-rail-head"><div><span className="eyebrow">Sessions</span><b>Conversations</b></div><Button aria-label="New conversation" disabled={running} onClick={newConversation}>＋</Button></div>
-      <div className="conversation-list">
-        {conversations.length === 0 ? <Empty>No conversations yet.</Empty> : conversations.map((entry) => <button key={entry.id} disabled={running} className={`conversation-item ${conversation?.id === entry.id ? 'selected' : ''}`} onClick={() => void openConversation(entry.id)}>
-          <span>{entry.title}</span><small>{entry.messageCount} msgs · {compact(entry.totals.tokens.total)} tok</small>
-        </button>)}
-      </div>
-      {conversation ? <Button variant="danger" disabled={running} className="delete-conversation" onClick={() => void (async () => { await api.deleteConversation(conversation.id); setConversation(undefined); setResult(undefined); await loadList(true); })()}>Delete conversation</Button> : null}
+      <div className="playground-rail-tabs" role="tablist"><button className={railTab === 'tools' ? 'selected' : ''} onClick={() => { setRailTab('tools'); if (server && toolsServer !== server) void loadTools().catch((reason) => setError(reason instanceof Error ? reason.message : String(reason))); }}>Tools</button><button className={railTab === 'sessions' ? 'selected' : ''} onClick={() => setRailTab('sessions')}>Sessions</button></div>
+      {railTab === 'sessions' ? <>
+        <div className="conversation-rail-head"><div><span className="eyebrow">Saved locally</span><b>Conversations</b></div><Button aria-label="New conversation" disabled={running || toolRunning} onClick={newConversation}>＋</Button></div>
+        <div className="conversation-list">
+          {conversations.length === 0 ? <Empty>No conversations yet.</Empty> : conversations.map((entry) => <button key={entry.id} disabled={running || toolRunning} className={`conversation-item ${conversation?.id === entry.id ? 'selected' : ''}`} onClick={() => void openConversation(entry.id)}>
+            <span>{entry.title}</span><small>{entry.messageCount} msgs · {compact(entry.totals.tokens.total)} tok</small>
+          </button>)}
+        </div>
+        {conversation ? <Button variant="danger" disabled={running || toolRunning} className="delete-conversation" onClick={() => void (async () => { await api.deleteConversation(conversation.id); setConversation(undefined); setResult(undefined); await loadList(true); })()}>Delete conversation</Button> : null}
+      </> : <>
+        <div className="conversation-rail-head"><div><span className="eyebrow">{tools.length} discovered</span><b>MCP tools</b></div><Button aria-label="Refresh tools" disabled={!server || running || toolRunning} onClick={() => void loadTools().catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)))}>↻</Button></div>
+        <div className="conversation-list tool-rail-list">{!server ? <Empty>Choose a server.</Empty> : tools.length === 0 ? <Empty>Connect server to load tools.</Empty> : tools.map((entry) => <button key={entry.name} className={`conversation-item ${selectedToolName === entry.name ? 'selected' : ''}`} onClick={() => setSelectedToolName(entry.name)}><span>{entry.name}</span><small>{entry.description ?? 'No description'}</small>{entry.annotations?.readOnlyHint !== true && entry.annotations?.destructiveHint !== false ? <Status value="confirm" /> : null}</button>)}</div>
+      </>}
     </aside>
 
     <main className="chat-workspace">
@@ -162,7 +212,19 @@ export function PlaygroundPage({ servers, providers, onRefresh }: { servers: Ser
         <div><span>Agent time</span><b>{elapsed(totals.durationMs + (liveMetrics?.durationMs ?? 0))}</b><small>{conversation?.messageCount ?? 0} persisted msgs</small></div>
       </div>
 
-      {view === 'chat' ? <div className="chat-transcript" ref={transcriptRef} aria-live="polite">
+      {railTab === 'tools' && selectedTool ? <div className="playground-tool-panel">
+        <header className="tool-detail-heading"><div><span className="eyebrow">Manual MCP invocation</span><h3>{selectedTool.name}</h3><p>{selectedTool.description ?? 'No description provided by server.'}</p></div>{selectedToolNeedsConfirmation ? <Status value="confirm" /> : <Status value="ready" />}</header>
+        <div className="argument-mode" role="tablist"><button className={!rawToolArguments ? 'selected' : ''} onClick={() => setRawToolArguments(false)}>Parameters</button><button className={rawToolArguments ? 'selected' : ''} onClick={() => setRawToolArguments(true)}>Raw JSON</button></div>
+        {rawToolArguments ? <Field label="JSON parameters"><Textarea rows={10} value={toolArgumentsText} onChange={(event) => setToolArgumentsText(event.target.value)} data-testid="playground-tool-arguments" /></Field> : <div className="schema-form">
+          {toolFields.length === 0 ? <div className="no-arguments"><i>✓</i><span><b>No parameters required</b><small>Tool accepts empty input object.</small></span></div> : toolFields.map((field) => <div className="schema-field" key={field.key}>
+            <label><span>{field.label}{field.required ? <em>required</em> : <small>optional</small>}</span><code>{field.key} · {field.kind}</code></label>{field.description ? <p>{field.description}</p> : null}
+            {field.enumValues ? <Select value={String(toolValues[field.key] ?? '')} onChange={(event) => setToolValues((current) => ({ ...current, [field.key]: event.target.value }))}><option value="">Choose value</option>{field.enumValues.map((value, index) => <option key={index} value={`enum:${index}`}>{value === null ? 'null' : typeof value === 'string' ? value : JSON.stringify(value)}</option>)}</Select> : field.kind === 'boolean' ? <Select value={String(toolValues[field.key] ?? '')} required={field.required} onChange={(event) => setToolValues((current) => ({ ...current, [field.key]: event.target.value }))}><option value="">Use server default</option><option value="true">True</option><option value="false">False</option></Select> : field.kind === 'array' || field.kind === 'object' || field.kind === 'json' ? <Textarea rows={4} value={String(toolValues[field.key] ?? '')} onChange={(event) => setToolValues((current) => ({ ...current, [field.key]: event.target.value }))} placeholder={field.kind === 'array' ? '[]' : '{}'} /> : <Input type={field.kind === 'number' || field.kind === 'integer' ? 'number' : field.format === 'date-time' ? 'datetime-local' : 'text'} required={field.required} min={field.minimum} max={field.maximum} step={field.kind === 'integer' ? 1 : field.kind === 'number' ? 'any' : undefined} value={String(toolValues[field.key] ?? '')} onChange={(event) => setToolValues((current) => ({ ...current, [field.key]: event.target.value }))} data-testid={`playground-tool-field-${field.key}`} />}
+          </div>)}
+        </div>}
+        <details className="schema-source" open><summary>Input schema</summary><pre>{JSON.stringify(selectedTool.inputSchema ?? {}, null, 2)}</pre></details>
+        <div className="tool-call-actions"><label className="check"><input type="checkbox" checked={confirmDangerous} onChange={(event) => setConfirmDangerous(event.target.checked)} /> Confirm destructive call</label><Button variant="primary" disabled={toolRunning || running || toolsServer !== server || (selectedToolNeedsConfirmation && !confirmDangerous)} onClick={() => void runTool()} data-testid="playground-run-tool">{toolRunning ? 'Running…' : `Run ${selectedTool.name} ↗`}</Button></div>
+        {toolResult !== undefined ? <div className="tool-result-panel"><header><div><span className="eyebrow">Latest result</span><b>Written to chat as Execute {selectedTool.name}</b></div><Status value="sanitized" /></header><RichToolResult value={toolResult} /><JsonView value={toolResult} label="Raw MCP response" defaultOpen={false} /></div> : null}
+      </div> : view === 'chat' ? <div className="chat-transcript" ref={transcriptRef} aria-live="polite">
         {!conversation?.messages.length && !running ? <div className="chat-empty"><span className="chat-glyph">⌁</span><h2>Start a tool-aware conversation</h2><p>Responses stream live. Every message, tool call, token, cost, and trace stays local.</p></div> : null}
         {conversation?.messages.map((entry) => <article key={entry.id} className={`chat-message ${entry.role}`}>
           <div className="message-avatar">{entry.role === 'user' ? 'YOU' : 'AI'}</div>

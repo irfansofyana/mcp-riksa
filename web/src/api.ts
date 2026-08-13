@@ -112,6 +112,7 @@ export const api = {
   conversation: (id: string) => get<ConversationDetail>(`/api/playground/conversations/${encodeURIComponent(id)}`),
   createConversation: (body: { serverId: string; providerId: string; model: string; systemPrompt?: string }) => post<ConversationDetail>('/api/playground/conversations', body),
   deleteConversation: (id: string) => remove<{ id: string; deleted: boolean }>(`/api/playground/conversations/${encodeURIComponent(id)}`),
+  invokePlaygroundTool: (id: string, tool: string, body: { arguments: Record<string, unknown>; confirmDangerous: boolean }) => post<{ conversationId: string; prompt: string; result: PlaygroundResult; conversation: ConversationDetail }>(`/api/playground/conversations/${encodeURIComponent(id)}/tools/${encodeURIComponent(tool)}`, body),
   streamPlayground,
   saveSuite: (source: string) => post<{ name: string; cases: number }>('/api/suites', { source }),
   updateSuite: (name: string, source: string) => put<{ name: string; previousName: string; cases: number; renamed: boolean }>(`/api/suites/${encodeURIComponent(name)}`, { source }),

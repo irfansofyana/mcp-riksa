@@ -25,6 +25,7 @@ export type ApiRuntime = {
   getConversation(id: string): Promise<unknown | undefined> | unknown | undefined;
   deleteConversation(id: string): Promise<boolean> | boolean;
   streamPlayground(value: unknown, onUpdate: (update: unknown) => void, signal?: AbortSignal): Promise<unknown>;
+  invokePlaygroundTool(id: string, tool: string, args: Record<string, unknown>, confirmDangerous: boolean): Promise<unknown> | unknown;
   saveSuite(source: string): Promise<unknown> | unknown;
   createSuite(source: string): Promise<unknown> | unknown;
   updateSuite(name: string, source: string): Promise<unknown> | unknown;
@@ -45,6 +46,10 @@ export type ApiRuntime = {
 
 const toolCallSchema = z.strictObject({
   tool: z.string().min(1),
+  arguments: z.record(z.string(), z.unknown()).default({}),
+  confirmDangerous: z.boolean().default(false),
+});
+const playgroundToolCallSchema = z.strictObject({
   arguments: z.record(z.string(), z.unknown()).default({}),
   confirmDangerous: z.boolean().default(false),
 });
@@ -86,6 +91,12 @@ function originIsLoopback(value: string | undefined): boolean {
   }
 }
 
+function hostIsLoopback(value: string | undefined): boolean {
+  if (!value) return false;
+  try { return isLoopback(new URL(`http://${value}`).hostname); }
+  catch { return false; }
+}
+
 function send(response: Response, value: unknown, status = 200): void {
   response.status(status).json(redact(value));
 }
@@ -107,7 +118,7 @@ export function createApp(runtime: ApiRuntime, options: { sessionToken?: string;
   app.use(express.json({ limit: '1mb', strict: true }));
 
   app.use('/api', (request, response, next) => {
-    if (!isLoopback(request.socket.remoteAddress)) {
+    if (!isLoopback(request.socket.remoteAddress) || !hostIsLoopback(request.get('host'))) {
       return send(response, { error: 'API is available only from loopback' }, 403);
     }
     const mutating = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method);
@@ -160,6 +171,10 @@ export function createApp(runtime: ApiRuntime, options: { sessionToken?: string;
   app.delete('/api/playground/conversations/:id', async (request, response) => {
     const deleted = await runtime.deleteConversation(request.params.id!);
     send(response, { id: request.params.id, deleted }, deleted ? 200 : 404);
+  });
+  app.post('/api/playground/conversations/:id/tools/:tool', async (request, response) => {
+    const input = playgroundToolCallSchema.parse(request.body);
+    send(response, await runtime.invokePlaygroundTool(request.params.id!, request.params.tool!, input.arguments, input.confirmDangerous));
   });
   app.post('/api/playground/stream', async (request, response) => {
     const input = streamingPlaygroundSchema.parse(request.body);

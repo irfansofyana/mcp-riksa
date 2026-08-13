@@ -240,6 +240,9 @@ textarea { resize: vertical; font-family: ui-monospace, monospace; font-size: 11
 .playground-shell { min-height: calc(100vh - 171px); display: grid; grid-template-columns: 220px minmax(430px, 1fr) 250px; border: 1px solid var(--line); background: rgba(17,17,15,.92); overflow: hidden; }
 .conversation-rail, .playground-inspector { min-width: 0; background: #141310; }
 .conversation-rail { display: flex; flex-direction: column; border-right: 1px solid var(--line); }
+.playground-rail-tabs { display: grid; grid-template-columns: 1fr 1fr; min-height: 38px; border-bottom: 1px solid var(--line); }
+.playground-rail-tabs button { color: var(--muted); background: #11100e; border: 0; border-bottom: 2px solid transparent; font: 8px ui-monospace, monospace; text-transform: uppercase; letter-spacing: .08em; }
+.playground-rail-tabs button.selected { color: #f3c890; border-bottom-color: var(--copper); background: #211a13; }
 .conversation-rail-head { min-height: 62px; display: flex; align-items: center; justify-content: space-between; padding: 12px; border-bottom: 1px solid var(--line); }
 .conversation-rail-head > div { display: grid; gap: 3px; }
 .conversation-rail-head b { font: 600 14px Georgia, serif; }
@@ -250,6 +253,9 @@ textarea { resize: vertical; font-family: ui-monospace, monospace; font-size: 11
 .conversation-item.selected { color: var(--text); background: #2a2017; border-color: var(--line-strong); box-shadow: inset 2px 0 var(--copper); }
 .conversation-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 650; }
 .conversation-item small { color: var(--faint); font: 8px ui-monospace, monospace; }
+.tool-rail-list .conversation-item { grid-template-columns: minmax(0,1fr) auto; }
+.tool-rail-list .conversation-item > span, .tool-rail-list .conversation-item > small { grid-column: 1; }
+.tool-rail-list .status { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
 .delete-conversation { margin: 8px; }
 .chat-workspace { min-width: 0; display: grid; grid-template-rows: auto auto auto minmax(360px, 1fr) auto; background: rgba(18,17,15,.75); }
 .chat-toolbar { min-height: 62px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 14px; border-bottom: 1px solid var(--line); background: #171512; }
@@ -311,6 +317,10 @@ textarea { resize: vertical; font-family: ui-monospace, monospace; font-size: 11
 .playground-view-tabs button.selected { color: #f3c890; border-bottom-color: var(--copper); background: #1d1813; }
 .playground-view-tabs button span { min-width: 16px; padding: 1px 4px; color: var(--muted); background: #2a221b; border-radius: 8px; font-size: 8px; }
 .playground-trace-view, .playground-raw-view { min-height: 0; overflow: auto; padding: 20px clamp(14px, 3vw, 44px); }
+.playground-tool-panel { min-height: 0; overflow: auto; padding: 20px clamp(14px, 3vw, 44px); background: rgba(18,17,15,.75); }
+.playground-tool-panel > .schema-form { margin-top: 12px; }
+.playground-tool-panel > .field { margin-top: 12px; }
+.playground-tool-panel .tool-result-panel { margin-bottom: 18px; }
 .playground-raw-view .json-view { max-width: 920px; margin: auto; }
 .raw-context-stack { max-width: 920px; margin: auto; display: grid; gap: 12px; }
 .context-inspector .field { margin-top: 10px; }

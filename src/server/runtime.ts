@@ -5,6 +5,7 @@ import { createProviderAdapter } from '../agent/providers.js';
 import { providerConfigSchema, type ProviderConfig, type ProviderMessage } from '../agent/types.js';
 import { runAgent, type AgentUpdate } from '../agent/loop.js';
 import { event } from '../core/events.js';
+import { redact } from '../core/redaction.js';
 import { parseSuite } from '../core/suite.js';
 import { runSuite } from '../core/runner.js';
 import type { Observation, Suite } from '../core/types.js';
@@ -258,6 +259,25 @@ export class WorkbenchRuntime {
   async listConversations() { return this.conversations.list(); }
   async getConversation(id: string) { return this.conversations.get(id); }
   async deleteConversation(id: string) { return this.conversations.delete(id); }
+
+  async invokePlaygroundTool(conversationId: string, tool: string, args: Record<string, unknown>, confirmDangerous: boolean) {
+    const conversation = this.conversations.get(conversationId);
+    if (!conversation) throw new WorkbenchError(`Playground conversation ${conversationId} not found`, 404);
+    const prompt = `Execute ${tool}\n\nArguments:\n${JSON.stringify(redact(args), null, 2)}`;
+    const result = await this.withConfigUse([`server:${conversation.serverId}`], () => this.directObservation(
+      conversation.serverId, tool, args, confirmDangerous, new AbortController().signal,
+    ));
+    const assistantText = typeof result.output === 'string' ? result.output : JSON.stringify(result.output, null, 2);
+    this.conversations.appendTurn(
+      conversationId,
+      { role: 'user', content: prompt },
+      {
+        role: 'assistant', content: assistantText, durationMs: result.durationMs, tokens: result.tokens,
+        costUsd: result.costUsd, toolCalls: result.toolCalls, events: result.events, stopReason: 'direct_tool',
+      },
+    );
+    return { conversationId, prompt, result, conversation: this.conversations.get(conversationId) };
+  }
 
   async streamPlayground(input: PlaygroundInput & { conversationId: string }, onUpdate: (update: AgentUpdate) => void, signal?: AbortSignal) {
     const conversation = this.conversations.get(input.conversationId);

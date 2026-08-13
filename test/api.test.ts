@@ -36,6 +36,7 @@ function runtime(): ApiRuntime {
       onUpdate({ type: 'text_delta', turn: 1, delta: '5' });
       return { conversationId: 'conversation-1', result: { output: '5', tokens: { total: 2 } } };
     },
+    invokePlaygroundTool: async (id, tool, args, confirmDangerous) => ({ conversationId: id, prompt: `Execute ${tool}\n\nArguments:\n${JSON.stringify(args, null, 2)}`, result: { output: { sum: 5 }, toolCalls: [{ name: tool, arguments: args }] }, confirmDangerous }),
     saveSuite: async (source) => { calls.push({ method: 'saveSuite', value: source }); return { name: 'sample' }; },
     createSuite: async (source) => { calls.push({ method: 'createSuite', value: source }); return { name: 'sample', cases: 1 }; },
     updateSuite: async (name, source) => { calls.push({ method: 'updateSuite', value: { name, source } }); return { name: 'renamed', previousName: name, cases: 1, renamed: true }; },
@@ -151,6 +152,7 @@ describe('API workbench flow', () => {
     const stream = await request('/api/playground/stream', mutation({ conversationId: 'conversation-1', prompt: 'add' }));
     expect(stream.headers.get('content-type')).toContain('text/event-stream');
     expect(await stream.text()).toContain('text_delta');
+    expect(await (await request('/api/playground/conversations/conversation-1/tools/add', mutation({ arguments: { a: 2, b: 3 }, confirmDangerous: false }))).json()).toMatchObject({ prompt: expect.stringContaining('Execute add'), result: { output: { sum: 5 } } });
     expect((await request('/api/suites', mutation({ source: 'version: 1' }))).status).toBe(201);
     expect(calls).toContainEqual({ method: 'createSuite', value: 'version: 1' });
     expect((await request('/api/suites')).status).toBe(200);

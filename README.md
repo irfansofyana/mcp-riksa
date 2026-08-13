@@ -121,6 +121,8 @@ Playground sends provider output over a local SSE stream. OpenAI-compatible and 
 
 New conversations start with an empty composer—no sample request is injected. An optional system prompt is fixed when the conversation is created and shown in the Model Context inspector. Raw view exposes a sanitized model-context preview: system prompt, prior chat messages, pending user turn, MCP tool source, and execution limits. Provider adapters may encode that context differently on wire—for example, Anthropic uses a top-level `system` field.
 
+Playground left rail switches between **Tools** and **Sessions**. Tools tab discovers selected server’s tools, shows descriptions and input schemas, generates typed parameter forms, and supports raw JSON. **Run Tool** performs a direct invocation and writes a truthful `Execute <tool>` user turn plus sanitized result into chat history; destructive tools still require explicit confirmation.
+
 Conversations and sanitized message traces persist in local SQLite. Conversation history survives browser and workbench restarts and includes input/output tokens, cumulative cost, agent time, tool calls, stop reason, and immutable normalized trace events. **Chat**, **Trace**, and **Raw** views provide rendered Markdown, an observability-style latency waterfall with expandable span data, and the complete sanitized record. Use **Save YAML case** to turn any completed turn into a portable regression case.
 
 Assistant Markdown supports headings, emphasis, lists, tables, links, blockquotes, and fenced code without executing raw HTML. MCP tool results render text, inline image, resource-link, embedded-resource, and structured-content blocks while retaining raw JSON inspection.
