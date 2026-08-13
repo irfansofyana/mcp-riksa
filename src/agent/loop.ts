@@ -90,11 +90,12 @@ export async function runAgent(
       tokens.output += response.usage.output;
       tokens.total += response.usage.total;
       costUsd += estimatedCost(dependencies.provider, response.usage.input, response.usage.output);
-      events.push(event(input.serverId, 'model_turn', { turn: turn + 1, response: response.raw, usage: response.usage }));
+      const turnDurationMs = Date.now() - turnStarted;
+      events.push(event(input.serverId, 'model_turn', { turn: turn + 1, response: response.raw, usage: response.usage }, turnDurationMs));
       output = response.text;
       emit({
         type: 'model_turn', turn: turn + 1, usage: response.usage, tokens: { ...tokens }, costUsd,
-        durationMs: Date.now() - turnStarted,
+        durationMs: turnDurationMs,
       });
 
       if (input.limits.maxCostUsd !== undefined && costUsd > input.limits.maxCostUsd) {

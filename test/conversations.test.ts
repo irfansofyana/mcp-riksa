@@ -35,5 +35,29 @@ test('persists sanitized multi-turn playground conversations and cumulative stat
   });
   expect(detail?.messages.map((message) => message.role)).toEqual(['user', 'assistant', 'user']);
   expect(conversations.list()[0]).toMatchObject({ id: created.id, messageCount: 3 });
+  expect(conversations.events(created.id)).toHaveLength(0);
+  database.close();
+});
+
+test('persists immutable sanitized playground trace events with assistant turn', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'mcp-traces-'));
+  directories.push(directory);
+  const database = openDatabase(join(directory, 'workbench.db'));
+  const conversations = new ConversationRepository(database);
+  const created = conversations.create({ serverId: 'sample', providerId: 'local', model: 'fast' });
+  conversations.appendTurn(created.id, { role: 'user', content: 'Run tool' }, {
+    role: 'assistant', content: '**Done**', tokens: { input: 1, output: 1, total: 2 }, costUsd: 0,
+    toolCalls: [], stopReason: 'complete', events: [{
+      id: 'trace-event-1', caseId: 'sample', type: 'model_turn', timestamp: new Date().toISOString(),
+      durationMs: 12, data: { secret: 'safe trace' }, sanitized: true,
+    }],
+  });
+  expect(conversations.events(created.id)).toMatchObject([{ id: 'trace-event-1', type: 'model_turn', durationMs: 12, sanitized: true }]);
+  database.prepare('UPDATE playground_messages SET detail_json = ? WHERE conversation_id = ? AND role = ?').run(JSON.stringify({ events: [{ id: 'tampered', type: 'error' }] }), created.id, 'assistant');
+  expect(conversations.get(created.id)?.messages.find((entry) => entry.role === 'assistant')?.events).toMatchObject([{ id: 'trace-event-1', type: 'model_turn' }]);
+  expect(() => database.prepare('UPDATE playground_events SET type = ? WHERE id = ?').run('changed', 'trace-event-1')).toThrow(/immutable/i);
+  expect(() => database.prepare('DELETE FROM playground_events WHERE id = ?').run('trace-event-1')).toThrow(/immutable/i);
+  expect(conversations.delete(created.id)).toBe(true);
+  expect(conversations.events(created.id)).toEqual([]);
   database.close();
 });

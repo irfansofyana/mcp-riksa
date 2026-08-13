@@ -1,11 +1,16 @@
 import { describe, expect, test } from 'vitest';
 import {
   buildProviderPayload,
+  buildTraceRows,
   buildServerPayload,
   buildSuiteFromPlayground,
+  buildToolArguments,
+  buildToolFields,
   groupTrace,
+  normalizeMcpContent,
   normalizePage,
   signedDelta,
+  traceWindowMs,
 } from '../web/src/model.js';
 
 describe('workbench browser view model', () => {
@@ -45,6 +50,66 @@ describe('workbench browser view model', () => {
     ]);
     expect(groups.a?.map((event) => event.id)).toEqual(['1', '2']);
     expect(groups.b?.[0]?.type).toBe('assertion');
+  });
+
+  test('builds observability trace rows with relative waterfall positions', () => {
+    const rows = buildTraceRows([
+      { id: 'model', caseId: 'sample', type: 'model_turn', timestamp: '2026-08-13T10:00:00.100Z', durationMs: 100, data: { turn: 1, usage: { total: 12 } }, sanitized: true },
+      { id: 'tool', caseId: 'sample', type: 'tool_call', timestamp: '2026-08-13T10:00:00.160Z', durationMs: 40, data: { name: 'calendar' }, sanitized: true },
+      { id: 'stop', caseId: 'sample', type: 'stop', timestamp: '2026-08-13T10:00:00.180Z', data: { reason: 'complete' }, sanitized: true },
+    ], 180);
+    expect(rows.map((row) => row.kind)).toEqual(['model', 'tool', 'agent']);
+    expect(rows[0]).toMatchObject({ name: 'Model turn 1', durationMs: 100, offsetPct: 0 });
+    expect(rows[1]!.offsetPct).toBeGreaterThan(rows[0]!.offsetPct);
+    expect(rows[1]!.widthPct).toBeGreaterThan(0);
+    expect(traceWindowMs([
+      { id: 'first', caseId: 'a', type: 'model_turn', timestamp: '2026-08-13T10:00:00.100Z', durationMs: 100 },
+      { id: 'second', caseId: 'a', type: 'model_turn', timestamp: '2026-08-13T10:00:10.100Z', durationMs: 100 },
+    ], 200)).toBe(10_100);
+  });
+
+  test('normalizes rich MCP result content without accepting unsafe image types', () => {
+    const blocks = normalizeMcpContent({ content: [
+      { type: 'text', text: '**done**' },
+      { type: 'image', mimeType: 'image/png', data: 'AAAA' },
+      { type: 'image', mimeType: 'text/html', data: 'bad' },
+      { type: 'resource_link', uri: 'https://example.test/report', name: 'Report' },
+      { type: 'resource', resource: { uri: 'file:///tmp/result.md', mimeType: 'text/markdown', text: '# Result' } },
+    ], structuredContent: { ok: true } });
+    expect(blocks.map((block) => block.type)).toEqual(['text', 'image', 'unsupported', 'resource_link', 'resource', 'structured']);
+    expect(blocks[2]).toMatchObject({ type: 'unsupported' });
+  });
+
+  test('builds schema-driven tool fields and typed nested arguments', () => {
+    const fields = buildToolFields({
+      type: 'object',
+      required: ['query', 'limit'],
+      properties: {
+        query: { type: 'string', title: 'Search query', description: 'Words to search' },
+        limit: { type: 'integer', minimum: 1, maximum: 20, default: 5 },
+        mode: { type: 'string', enum: ['fast', 'deep'], default: 'fast' },
+        includeArchived: { type: 'boolean' },
+        filters: { type: 'object', properties: { tags: { type: 'array', items: { type: 'string' } } } },
+      },
+    });
+    expect(fields.map((field) => field.key)).toEqual(['query', 'limit', 'mode', 'includeArchived', 'filters']);
+    expect(fields[0]).toMatchObject({ label: 'Search query', required: true, kind: 'string' });
+    expect(buildToolArguments(fields, {
+      query: 'MCP', limit: '3', mode: 'enum:1', includeArchived: 'true', filters: '{"tags":["tools","ai"]}',
+    })).toEqual({ query: 'MCP', limit: 3, mode: 'deep', includeArchived: true, filters: { tags: ['tools', 'ai'] } });
+    expect(buildToolArguments(fields, { query: 'MCP', limit: '3', mode: 'enum:0', includeArchived: '', filters: '' })).toEqual({ query: 'MCP', limit: 3, mode: 'fast' });
+    expect(buildToolArguments(fields, { query: 'MCP', limit: '3', mode: 'enum:0', includeArchived: 'false', filters: '' })).toEqual({ query: 'MCP', limit: 3, mode: 'fast', includeArchived: false });
+    expect(() => buildToolArguments(fields, { query: '', limit: '', mode: 'enum:0', includeArchived: '', filters: '' })).toThrow(/query.*required/i);
+  });
+
+  test('supports root map arguments and RFC 3339 date-time values', () => {
+    const mapFields = buildToolFields({ type: 'object', additionalProperties: { type: 'string' } });
+    expect(mapFields).toMatchObject([{ key: '$', kind: 'object', required: true }]);
+    expect(buildToolArguments(mapFields, { $: '{"x-team":"platform"}' })).toEqual({ 'x-team': 'platform' });
+
+    const dateFields = buildToolFields({ type: 'object', required: ['startsAt'], properties: { startsAt: { type: 'string', format: 'date-time' } } });
+    expect(buildToolArguments(dateFields, { startsAt: '2026-08-13T10:30:00Z' })).toEqual({ startsAt: '2026-08-13T10:30:00.000Z' });
+    expect(() => buildToolArguments(dateFields, { startsAt: 'not-a-date' })).toThrow(/valid date-time/i);
   });
 
   test('creates a versioned agent suite from a playground interaction', () => {

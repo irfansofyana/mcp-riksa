@@ -67,10 +67,12 @@ export class ConversationRepository {
   }
 
   appendTurn(conversationId: string, user: ConversationMessageInput, assistant: ConversationMessageInput): [ConversationMessage, ConversationMessage] {
-    return this.database.transaction((): [ConversationMessage, ConversationMessage] => [
-      this.append(conversationId, user),
-      this.append(conversationId, assistant),
-    ])();
+    return this.database.transaction((): [ConversationMessage, ConversationMessage] => {
+      const userMessage = this.append(conversationId, user);
+      const assistantMessage = this.append(conversationId, assistant);
+      this.persistEvents(conversationId, assistantMessage.id, assistant.events ?? []);
+      return [userMessage, assistantMessage];
+    })();
   }
 
   append(conversationId: string, input: ConversationMessageInput): ConversationMessage {
@@ -128,19 +130,64 @@ export class ConversationRepository {
     return this.database.prepare('DELETE FROM playground_conversations WHERE id = ?').run(id).changes > 0;
   }
 
+  events(conversationId: string): NormalizedEvent[] {
+    return [...this.eventMap(conversationId).values()].flat();
+  }
+
+  private persistEvents(conversationId: string, messageId: string, events: NormalizedEvent[]): void {
+    if (events.length === 0) return;
+    const next = ((this.database.prepare('SELECT max(sequence) AS value FROM playground_events WHERE conversation_id = ?').get(conversationId) as { value: number | null }).value ?? 0) + 1;
+    const insert = this.database.prepare(`
+      INSERT INTO playground_events(id, conversation_id, message_id, sequence, type, timestamp, duration_ms, data_json, sanitized)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+    `);
+    events.forEach((entry, index) => {
+      const clean = redact(entry);
+      insert.run(clean.id, conversationId, messageId, next + index, clean.type, clean.timestamp, clean.durationMs ?? null, JSON.stringify(clean.data));
+    });
+  }
+
+  private eventMap(conversationId: string): Map<string, NormalizedEvent[]> {
+    const rows = this.database.prepare(`
+      SELECT id, message_id, type, timestamp, duration_ms, data_json
+      FROM playground_events WHERE conversation_id = ? ORDER BY sequence
+    `).all(conversationId) as Array<{ id: string; message_id: string; type: NormalizedEvent['type']; timestamp: string; duration_ms: number | null; data_json: string }>;
+    const output = new Map<string, NormalizedEvent[]>();
+    for (const row of rows) {
+      const entries = output.get(row.message_id) ?? [];
+      entries.push({
+        id: row.id,
+        caseId: conversationId,
+        type: row.type,
+        timestamp: row.timestamp,
+        ...(row.duration_ms === null ? {} : { durationMs: row.duration_ms }),
+        data: JSON.parse(row.data_json) as unknown,
+        sanitized: true,
+      });
+      output.set(row.message_id, entries);
+    }
+    return output;
+  }
+
   private messages(conversationId: string): ConversationMessage[] {
     const rows = this.database.prepare(`
       SELECT id, sequence, role, content, detail_json, created_at
       FROM playground_messages WHERE conversation_id = ? ORDER BY sequence
     `).all(conversationId) as MessageRow[];
-    return rows.map((row) => ({
-      id: row.id,
-      sequence: row.sequence,
-      role: row.role,
-      content: row.content,
-      createdAt: row.created_at,
-      ...JSON.parse(row.detail_json) as Omit<ConversationMessageInput, 'role' | 'content'>,
-    }));
+    const canonicalEvents = this.eventMap(conversationId);
+    return rows.map((row) => {
+      const detail = JSON.parse(row.detail_json) as Omit<ConversationMessageInput, 'role' | 'content'>;
+      const persisted = canonicalEvents.get(row.id);
+      return {
+        id: row.id,
+        sequence: row.sequence,
+        role: row.role,
+        content: row.content,
+        createdAt: row.created_at,
+        ...detail,
+        ...(persisted === undefined ? {} : { events: persisted }),
+      };
+    });
   }
 
   private summary(row: ConversationRow, messages: ConversationMessage[]): ConversationSummary {

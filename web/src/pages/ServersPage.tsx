@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
-import { Button, Empty, Field, Input, JsonView, Notice, Section, Select, Status, Textarea } from '../components.js';
-import { buildServerPayload, type ServerForm } from '../model.js';
+import { Button, Empty, Field, Input, JsonView, Notice, RichToolResult, Section, Select, Status, Textarea } from '../components.js';
+import { buildServerPayload, buildToolArguments, buildToolFields, initialToolValues, type ServerForm } from '../model.js';
 import type { ServerSummary, Tool } from '../types.js';
 
 type OAuthStatus = { id?: string; state: string; scopes: string[]; timeline: unknown[]; authorizationUrl?: string; expiresAt?: string };
@@ -14,9 +14,11 @@ const initialForm: ServerForm = {
 export function ServersPage({ servers, onRefresh }: { servers: ServerSummary[]; onRefresh(): Promise<void> }) {
   const [form, setForm] = useState(initialForm);
   const [selected, setSelected] = useState(servers[0]?.id ?? '');
-  const [inspection, setInspection] = useState<{ identity: unknown; capabilities: unknown; tools: Tool[] }>();
+  const [inspection, setInspection] = useState<{ id: string; identity: unknown; capabilities: unknown; tools: Tool[] }>();
   const [tool, setTool] = useState('');
   const [argumentsText, setArgumentsText] = useState('{}');
+  const [toolValues, setToolValues] = useState<Record<string, string | boolean>>({});
+  const [rawArguments, setRawArguments] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [result, setResult] = useState<unknown>();
   const [oauth, setOauth] = useState<OAuthStatus>();
@@ -28,6 +30,14 @@ export function ServersPage({ servers, onRefresh }: { servers: ServerSummary[]; 
   selectedRef.current = selected;
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const selectedTool = inspection?.tools.find((entry) => entry.name === tool);
+  const toolFields = useMemo(() => buildToolFields(selectedTool?.inputSchema), [selectedTool]);
+
+  useEffect(() => {
+    setToolValues(initialToolValues(toolFields));
+    setArgumentsText('{}');
+    setRawArguments(false);
+  }, [tool, inspection]);
 
   const change = <K extends keyof ServerForm>(key: K, value: ServerForm[K]) => setForm((current) => ({ ...current, [key]: value }));
   const act = async (operation: () => Promise<void>) => {
@@ -97,7 +107,7 @@ export function ServersPage({ servers, onRefresh }: { servers: ServerSummary[]; 
     <Section title="MCP servers" className="rail-section" action={<span className="count">{servers.length}</span>}>
       <div className="row-list" data-testid="server-list">
         {servers.length === 0 ? <Empty>Register a stdio or Streamable HTTP server to begin.</Empty> : servers.map((server) =>
-          <button key={server.id} className={`row-button ${selected === server.id ? 'selected' : ''}`} onClick={() => setSelected(server.id)}>
+          <button key={server.id} className={`row-button ${selected === server.id ? 'selected' : ''}`} onClick={() => { setSelected(server.id); setInspection(undefined); setTool(''); setResult(undefined); setConfirmed(false); setToolValues({}); setArgumentsText('{}'); }}>
             <span><b>{server.name}</b><small>{server.transport} · {server.id}</small></span><Status value={server.connected ? 'connected' : 'saved'} />
           </button>)}
       </div>
@@ -133,13 +143,23 @@ export function ServersPage({ servers, onRefresh }: { servers: ServerSummary[]; 
       </Section> : null}
 
       <Section title="Tools & direct invocation" action={<span className="count">{inspection?.tools.length ?? 0} tools</span>}>
-        {!inspection ? <Empty>Connect and inspect a server to load its tool schemas.</Empty> : <div className="tool-workspace">
-          <div className="row-list tool-list">{inspection.tools.map((entry) => <button key={entry.name} onClick={() => { setTool(entry.name); setArgumentsText('{}'); }} className={`row-button ${tool === entry.name ? 'selected' : ''}`}><span><b>{entry.name}</b><small>{entry.description ?? 'No description'}</small></span>{entry.annotations?.destructiveHint ? <Status value="dangerous" /> : null}</button>)}</div>
-          <div>
-            <Field label="JSON arguments"><Textarea rows={7} value={argumentsText} onChange={(event) => setArgumentsText(event.target.value)} data-testid="tool-arguments" /></Field>
-            <label className="check"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /> Confirm a dangerous call when required</label>
-            <Button variant="primary" disabled={!tool} data-testid="invoke-tool" onClick={() => void act(async () => { const value = await api.callTool(selected, { tool, arguments: JSON.parse(argumentsText), confirmDangerous: confirmed }); setResult(value); setMessage('Tool call completed.'); })}>Invoke {tool || 'tool'}</Button>
-            {result !== undefined ? <JsonView value={result} label="Sanitized result" /> : null}
+        {!inspection ? <Empty>Connect and inspect a server to load its tool schemas.</Empty> : <div className="tool-workspace inspector-tool-workspace">
+          <div className="row-list tool-list">{inspection.tools.map((entry) => <button key={entry.name} onClick={() => { setTool(entry.name); setResult(undefined); }} className={`row-button ${tool === entry.name ? 'selected' : ''}`}><span><b>{entry.name}</b><small>{entry.description ?? 'No description'}</small></span>{entry.annotations?.destructiveHint ? <Status value="dangerous" /> : null}</button>)}</div>
+          <div className="tool-invocation-panel">
+            {!selectedTool ? <Empty>Select a tool to inspect its input schema.</Empty> : <>
+              <header className="tool-detail-heading"><div><span className="eyebrow">Tool</span><h3>{selectedTool.name}</h3><p>{selectedTool.description ?? 'No description provided by server.'}</p></div>{selectedTool.annotations?.destructiveHint ? <Status value="dangerous" /> : <Status value="ready" />}</header>
+              <div className="argument-mode" role="tablist"><button className={!rawArguments ? 'selected' : ''} onClick={() => setRawArguments(false)}>Form</button><button className={rawArguments ? 'selected' : ''} onClick={() => setRawArguments(true)}>Raw JSON</button></div>
+              {rawArguments ? <Field label="JSON arguments"><Textarea rows={10} value={argumentsText} onChange={(event) => setArgumentsText(event.target.value)} data-testid="tool-arguments" /></Field> : <div className="schema-form">
+                {toolFields.length === 0 ? <div className="no-arguments"><i>✓</i><span><b>No arguments required</b><small>This tool accepts an empty input object.</small></span></div> : toolFields.map((field) => <div className="schema-field" key={field.key}>
+                  <label><span>{field.label}{field.required ? <em>required</em> : <small>optional</small>}</span><code>{field.key} · {field.kind}</code></label>
+                  {field.description ? <p>{field.description}</p> : null}
+                  {field.enumValues ? <Select value={String(toolValues[field.key] ?? '')} onChange={(event) => setToolValues((current) => ({ ...current, [field.key]: event.target.value }))} data-testid={`tool-field-${field.key}`}><option value="">Choose value</option>{field.enumValues.map((value, index) => <option key={index} value={`enum:${index}`}>{value === null ? 'null' : typeof value === 'string' ? value : JSON.stringify(value)}</option>)}</Select> : field.kind === 'boolean' ? <Select value={String(toolValues[field.key] ?? '')} required={field.required} onChange={(event) => setToolValues((current) => ({ ...current, [field.key]: event.target.value }))} data-testid={`tool-field-${field.key}`}><option value="">Use server default</option><option value="true">True</option><option value="false">False</option></Select> : field.kind === 'array' || field.kind === 'object' || field.kind === 'json' ? <Textarea rows={4} value={String(toolValues[field.key] ?? '')} onChange={(event) => setToolValues((current) => ({ ...current, [field.key]: event.target.value }))} placeholder={field.kind === 'array' ? '[]' : '{}'} data-testid={`tool-field-${field.key}`} /> : <Input type={field.kind === 'number' || field.kind === 'integer' ? 'number' : field.format === 'date-time' ? 'datetime-local' : 'text'} required={field.required} min={field.minimum} max={field.maximum} step={field.kind === 'integer' ? 1 : field.kind === 'number' ? 'any' : undefined} value={String(toolValues[field.key] ?? '')} onChange={(event) => setToolValues((current) => ({ ...current, [field.key]: event.target.value }))} data-testid={`tool-field-${field.key}`} />}
+                </div>)}
+              </div>}
+              <details className="schema-source"><summary>Input schema</summary><pre>{JSON.stringify(selectedTool.inputSchema ?? {}, null, 2)}</pre></details>
+              <div className="tool-call-actions"><label className="check"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /> Confirm destructive call</label><Button variant="primary" disabled={!tool || inspection.id !== selected} data-testid="invoke-tool" onClick={() => void act(async () => { if (inspection.id !== selected) throw new Error('Inspect selected server before invoking a tool'); const args = rawArguments ? JSON.parse(argumentsText) as Record<string, unknown> : buildToolArguments(toolFields, toolValues); const value = await api.callTool(selected, { tool, arguments: args, confirmDangerous: confirmed }); setResult(value); setMessage('Tool call completed.'); })}>Run {tool} ↗</Button></div>
+              {result !== undefined ? <div className="tool-result-panel"><header><div><span className="eyebrow">Result</span><b>Tool completed</b></div><Status value="sanitized" /></header><RichToolResult value={result} /><JsonView value={result} label="Raw MCP response" defaultOpen={false} /></div> : null}
+            </>}
           </div>
         </div>}
       </Section>

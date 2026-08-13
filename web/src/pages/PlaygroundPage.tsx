@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
-import { Button, Empty, Field, Input, JsonView, Notice, Select, Status, Textarea } from '../components.js';
+import { Button, Empty, Field, Input, JsonView, MarkdownContent, Notice, Select, Status, Textarea, TraceTimeline } from '../components.js';
 import { buildSuiteFromPlayground } from '../model.js';
 import type { AgentUpdate, ConversationDetail, ConversationSummary, PlaygroundResult, ProviderSummary, ServerSummary } from '../types.js';
 
@@ -28,6 +28,7 @@ export function PlaygroundPage({ servers, providers, onRefresh }: { servers: Ser
   const [pendingPrompt, setPendingPrompt] = useState('');
   const [updates, setUpdates] = useState<AgentUpdate[]>([]);
   const [result, setResult] = useState<PlaygroundResult>();
+  const [view, setView] = useState<'chat' | 'trace' | 'raw'>('chat');
   const [running, setRunning] = useState(false);
   const [suiteName, setSuiteName] = useState('saved-playground');
   const [expected, setExpected] = useState('5');
@@ -109,6 +110,7 @@ export function PlaygroundPage({ servers, providers, onRefresh }: { servers: Ser
   const liveMetrics = running && lastMetrics?.type === 'model_turn' ? lastMetrics : undefined;
   const totals = conversation?.totals ?? { tokens: { input: 0, output: 0, total: 0 }, costUsd: 0, toolCalls: 0, durationMs: 0 };
   const lastUserPrompt = [...(conversation?.messages ?? [])].reverse().find((entry) => entry.role === 'user')?.content ?? pendingPrompt;
+  const traceEvents = (conversation?.messages ?? []).flatMap((entry) => entry.events ?? []);
 
   return <div className="playground-shell">
     <aside className="conversation-rail">
@@ -131,6 +133,10 @@ export function PlaygroundPage({ servers, providers, onRefresh }: { servers: Ser
         <Status value={running ? 'streaming' : result?.stopReason ?? 'ready'} />
       </header>
 
+      <nav className="playground-view-tabs" aria-label="Playground view">
+        {(['chat', 'trace', 'raw'] as const).map((entry) => <button key={entry} className={view === entry ? 'selected' : ''} onClick={() => setView(entry)}>{entry}{entry === 'trace' && traceEvents.length ? <span>{traceEvents.length}</span> : null}</button>)}
+      </nav>
+
       <div className="conversation-stats" aria-label="Conversation statistics">
         <div><span>Total tokens</span><b>{compact(totals.tokens.total + (liveMetrics?.tokens.total ?? 0))}</b><small>{totals.tokens.input} in / {totals.tokens.output} out</small></div>
         <div><span>Estimated cost</span><b>${(totals.costUsd + (liveMetrics?.costUsd ?? 0)).toFixed(5)}</b><small>local pricing</small></div>
@@ -138,20 +144,19 @@ export function PlaygroundPage({ servers, providers, onRefresh }: { servers: Ser
         <div><span>Agent time</span><b>{elapsed(totals.durationMs + (liveMetrics?.durationMs ?? 0))}</b><small>{conversation?.messageCount ?? 0} persisted msgs</small></div>
       </div>
 
-      <div className="chat-transcript" ref={transcriptRef} aria-live="polite">
+      {view === 'chat' ? <div className="chat-transcript" ref={transcriptRef} aria-live="polite">
         {!conversation?.messages.length && !running ? <div className="chat-empty"><span className="chat-glyph">⌁</span><h2>Start a tool-aware conversation</h2><p>Responses stream live. Every message, tool call, token, cost, and trace stays local.</p></div> : null}
         {conversation?.messages.map((entry) => <article key={entry.id} className={`chat-message ${entry.role}`}>
           <div className="message-avatar">{entry.role === 'user' ? 'YOU' : 'AI'}</div>
-          <div className="message-body"><header><b>{entry.role === 'user' ? 'You' : 'Workbench agent'}</b><time>{new Date(entry.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></header><p>{entry.content || 'No text response.'}</p>
+          <div className="message-body"><header><b>{entry.role === 'user' ? 'You' : 'Workbench agent'}</b><time>{new Date(entry.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></header>{entry.role === 'assistant' ? <MarkdownContent>{entry.content || 'No text response.'}</MarkdownContent> : <p>{entry.content}</p>}
             {entry.role === 'assistant' && entry.tokens ? <div className="message-meta"><span>{entry.tokens.total} tokens</span><span>${(entry.costUsd ?? 0).toFixed(6)}</span><span>{elapsed(entry.durationMs ?? 0)}</span><span>{entry.toolCalls?.length ?? 0} tools</span></div> : null}
-            {entry.events?.length ? <JsonView value={entry.events} label="Turn trace" defaultOpen={false} /> : null}
           </div>
         </article>)}
         {running ? <>
           <article className="chat-message user pending"><div className="message-avatar">YOU</div><div className="message-body"><header><b>You</b><Status value="sent" /></header><p>{pendingPrompt}</p></div></article>
           <article className="chat-message assistant streaming"><div className="message-avatar">AI</div><div className="message-body"><header><b>Workbench agent</b><span className="stream-indicator"><i /> streaming</span></header><p>{draft || <span className="typing"><i /><i /><i /></span>}</p>{liveTools.length ? <div className="live-tools">{liveTools.map((entry, index) => <span key={`${entry.call.name}-${index}`}>↳ {entry.call.name} <small>{entry.call.durationMs} ms</small></span>)}</div> : null}</div></article>
         </> : null}
-      </div>
+      </div> : view === 'trace' ? <div className="playground-trace-view"><TraceTimeline events={traceEvents} durationMs={totals.durationMs} /></div> : <div className="playground-raw-view">{conversation ? <JsonView value={conversation} label="Sanitized conversation record" /> : <Empty>No conversation selected.</Empty>}</div>}
 
       <div className="composer-wrap">
         {error ? <Notice error>{error}</Notice> : null}{message ? <Notice>{message}</Notice> : null}

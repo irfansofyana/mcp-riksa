@@ -51,8 +51,24 @@ describe('SQLite run repository', () => {
   test('runs migrations in WAL mode', () => {
     const { database } = createRepository();
     expect(database.pragma('journal_mode', { simple: true })).toBe('wal');
-    expect(database.prepare('select max(version) as version from migrations').get()).toEqual({ version: 3 });
+    expect(database.prepare('select max(version) as version from migrations').get()).toEqual({ version: 4 });
     database.close();
+  });
+
+  test('backfills version-3 conversation trace JSON into canonical events', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'mcp-workbench-v3-'));
+    directories.push(directory);
+    const path = join(directory, 'runs.db');
+    const legacy = openDatabase(path);
+    const now = new Date().toISOString();
+    legacy.prepare('INSERT INTO playground_conversations(id, title, server_id, provider_id, model, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run('conversation', 'Legacy', 'server', 'provider', 'model', now, now);
+    legacy.prepare('INSERT INTO playground_messages(id, conversation_id, sequence, role, content, detail_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run('assistant', 'conversation', 1, 'assistant', 'done', JSON.stringify({ events: [{ id: 'legacy-event', caseId: 'server', type: 'model_turn', timestamp: now, durationMs: 9, data: { turn: 1 }, sanitized: true }] }), now);
+    legacy.exec('DROP TRIGGER playground_events_immutable_update; DROP TRIGGER playground_events_immutable_delete; DROP TABLE playground_events; DELETE FROM migrations WHERE version = 4;');
+    legacy.close();
+
+    const migrated = openDatabase(path);
+    expect(migrated.prepare('SELECT id, message_id, duration_ms FROM playground_events').all()).toEqual([{ id: 'legacy-event', message_id: 'assistant', duration_ms: 9 }]);
+    migrated.close();
   });
 
   test('completes runs transactionally, redacts before persistence, and keeps events immutable', () => {

@@ -108,7 +108,11 @@ OAuth tokens, authorization codes, PKCE verifiers, and client secrets remain in 
 
 Playground sends provider output over a local SSE stream. OpenAI-compatible and Anthropic-compatible adapters emit text deltas while model turns and MCP tool calls continue through the same normalized agent loop used by suites. Suite execution stays non-streaming for deterministic assertions.
 
-Conversations and sanitized message traces persist in local SQLite. Conversation history survives browser and workbench restarts and includes input/output tokens, cumulative cost, agent time, tool calls, stop reason, and raw normalized events. Use **Save YAML case** to turn any completed turn into a portable regression case.
+Conversations and sanitized message traces persist in local SQLite. Conversation history survives browser and workbench restarts and includes input/output tokens, cumulative cost, agent time, tool calls, stop reason, and immutable normalized trace events. **Chat**, **Trace**, and **Raw** views provide rendered Markdown, an observability-style latency waterfall with expandable span data, and the complete sanitized record. Use **Save YAML case** to turn any completed turn into a portable regression case.
+
+Assistant Markdown supports headings, emphasis, lists, tables, links, blockquotes, and fenced code without executing raw HTML. MCP tool results render text, inline image, resource-link, embedded-resource, and structured-content blocks while retaining raw JSON inspection.
+
+Direct tool invocation uses each tool's JSON Schema to generate typed fields for required/optional strings, numbers, booleans, enums, nested objects, and arrays. Raw JSON remains available as an advanced fallback.
 
 ## Suite format
 
@@ -125,7 +129,7 @@ Supported assertions cover tool called or not called, count, order, arguments, J
 - Stdio spawns an executable with an argument array and no shell.
 - Tool definitions marked destructive require explicit confirmation for manual calls.
 - The runtime redacts authorization headers, cookies, token fields, URL query secrets, bearer strings, and nested payloads before SQLite writes, API output, logs, or reports.
-- SQLite uses WAL, forward migrations, transactional completion, interrupted-run recovery, immutable run event rows, and sanitized local playground history.
+- SQLite uses WAL, forward migrations, transactional completion, interrupted-run recovery, immutable run/playground event rows, and sanitized local playground history.
 
 ## Verification
 

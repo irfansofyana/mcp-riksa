@@ -159,7 +159,8 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     await waitText('dangerous_reset');
     steps.push('server-inspected');
 
-    await setValue('tool-arguments', '{"a":2,"b":3}');
+    await setValue('tool-field-a', '2');
+    await setValue('tool-field-b', '3');
     await click('invoke-tool');
     await waitText('"sum": 5');
     steps.push('tool-invoked');
@@ -174,10 +175,16 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     await setValue('playground-model', 'default');
     await click('run-playground');
     await waitText('The sum is 5', 20_000);
+    await wait(`document.querySelector('.chat-message.assistant .markdown-body strong')?.textContent === 'sum is 5'`, 'rendered assistant Markdown');
     steps.push('playground-complete');
     const playgroundScreenshot = join(options.outputDirectory, 'playground.png');
     const playgroundCapture = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     writeFileSync(playgroundScreenshot, Buffer.from(String(playgroundCapture.data), 'base64'));
+    await clickText('.playground-view-tabs button', 'trace');
+    await wait(`document.querySelectorAll('.trace-span').length >= 3`, 'persisted observability trace');
+    const playgroundTraceScreenshot = join(options.outputDirectory, 'playground-trace.png');
+    const traceCapture = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    writeFileSync(playgroundTraceScreenshot, Buffer.from(String(traceCapture.data), 'base64'));
     await setValue('playground-suite-name', 'smoke-agent');
     await click('save-playground-suite');
     await waitText('Interaction saved as a versioned YAML suite.');
@@ -216,7 +223,7 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     const mobile = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     writeFileSync(mobileScreenshot, Buffer.from(String(mobile.data), 'base64'));
     steps.push('mobile-checked');
-    return { steps, consoleErrors, serverScreenshot, playgroundScreenshot, desktopScreenshot, mobileScreenshot };
+    return { steps, consoleErrors, serverScreenshot, playgroundScreenshot, playgroundTraceScreenshot, desktopScreenshot, mobileScreenshot };
   } finally {
     cdp.close();
     if (child.exitCode === null) {
