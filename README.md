@@ -33,7 +33,7 @@ The API key stays in the process environment. The config stores `WORKBENCH_PROVI
 
 ### Connect and invoke a simple stdio MCP server
 
-The bundled sample server is a real MCP process started directly over stdio—no shell and no remote service. The workbench discovers its identity, capabilities, and three tools, then invokes `add` with `{"a":2,"b":3}`:
+The bundled sample server is a real MCP process started directly over stdio—no shell and no remote service. The workbench discovers its identity, capabilities, and four tools—including an unannotated read-only fixture used to verify compatibility with real-world servers—then invokes `add` with `{"a":2,"b":3}`:
 
 ![Connected stdio MCP server with a completed add tool call](docs/screenshots/stdio-server.png)
 
@@ -123,7 +123,9 @@ Playground sends provider output over a local SSE stream. OpenAI-compatible and 
 
 New conversations start with an empty composer—no sample request is injected. An optional system prompt is fixed when the conversation is created and shown in the Model Context inspector. Raw view exposes a sanitized model-context preview: system prompt, prior chat messages, pending user turn, MCP tool source, and execution limits. Provider adapters may encode that context differently on wire—for example, Anthropic uses a top-level `system` field.
 
-Playground left rail switches between **Tools** and **Sessions**. Tools tab discovers selected server’s tools, shows descriptions and input schemas, generates typed parameter forms, and supports raw JSON. **Run Tool** performs a direct invocation and writes a truthful `Execute <tool>` user turn plus sanitized result into chat history. Explicitly destructive tools (`annotations.destructiveHint: true`) require confirmation; missing annotations do not block invocation.
+Playground left rail switches between **Tools** and **Sessions**. Tools tab discovers selected server’s tools, shows descriptions and input schemas, generates typed parameter forms, and supports raw JSON. **Run Tool** performs a direct invocation and writes a truthful `Execute <tool>` user turn plus sanitized result into chat history.
+
+Tool confirmation follows explicit server metadata: only tools declaring `annotations.destructiveHint: true` require confirmation. Missing annotations do not imply destructive behavior and therefore do not block manual calls, Playground calls, or agent suite execution. This keeps common unannotated read-only tools usable while retaining a confirmation boundary for tools the server explicitly marks destructive. Because annotations are server-provided hints, users should connect only MCP servers they trust.
 
 Conversations and sanitized message traces persist in local SQLite. Conversation history survives browser and workbench restarts and includes input/output tokens, cumulative cost, agent time, tool calls, stop reason, and immutable normalized trace events. **Chat**, **Trace**, and **Raw** views provide rendered Markdown, an observability-style latency waterfall with expandable span data, and the complete sanitized record. Use **Save YAML case** to turn any completed turn into a portable regression case.
 
@@ -133,9 +135,11 @@ Direct tool invocation uses each tool's JSON Schema to generate typed fields for
 
 ## Official MCP conformance reports
 
-The **Conformance** workspace runs the official `@modelcontextprotocol/conformance` package, pinned exactly at `0.1.10`. Package inspection shows this release publishes a CLI-only executable (`dist/index.js`) without a safe library export, so the workbench launches it with `process.execPath` plus a fixed argument array and never uses a shell. It supports the active server suite or one named server scenario.
+The **Conformance** workspace runs the official `@modelcontextprotocol/conformance` package, pinned exactly at `0.1.10`. Start a report from an eligible HTTP server on **Servers**, or choose the active server suite or one named scenario from **Conformance**. Report history shows status and totals; selecting a report lazily loads check evidence, specification links, diagnostics, and bounded sanitized raw output.
 
-MVP execution is restricted to saved Streamable HTTP endpoints on `localhost`, `127.0.0.1`, or `::1`. Stdio servers are shown as unsupported. This pinned runner cannot receive workbench OAuth or custom header credentials, so those configurations are rejected rather than leaking secrets into a child process. Release `0.1.10` does not provide frozen dated requirements sets; UI states that limitation instead of approximating them.
+Package inspection shows this release publishes a CLI-only executable (`dist/index.js`) without a safe library export, so the workbench launches it with `process.execPath` plus a fixed argument array and never uses a shell.
+
+MVP execution is restricted to saved Streamable HTTP endpoints on `localhost`, `127.0.0.1`, or `::1`. Traffic passes through a temporary loopback proxy that rejects endpoint redirects, preventing the child runner from escaping the configured loopback boundary. Endpoints containing credentials, query parameters, or fragments are rejected. Stdio servers are shown as unsupported. This pinned runner cannot receive workbench OAuth or custom header credentials, so those configurations are rejected rather than leaking secrets into a child process. Release `0.1.10` does not provide frozen dated requirements sets; UI states that limitation instead of approximating them.
 
 Reports persist separately from workbench Suites/Runs. Each report records normalized passed, failed, warning, skipped, and harness-error checks; spec references; runner version; bounded sanitized raw output; timeout/cancellation state; and startup interruption recovery. Server configuration stays locked while its report runs. “Passed” means all tested scenarios passed—it is not universal MCP certification.
 
@@ -152,7 +156,7 @@ Supported assertions cover tool called or not called, count, order, arguments, J
 - Each process creates a random browser session token. Mutations require that token and a loopback `Origin`.
 - MCP and model endpoints accept HTTP or HTTPS. The runtime blocks URL credentials, link-local targets, and common cloud metadata hosts.
 - Stdio and official conformance runners spawn fixed executables with argument arrays and no shell. Conformance children receive a minimal environment, bounded output, timeout, cancellation, and forced-kill fallback.
-- Tool definitions marked destructive require explicit confirmation for manual calls.
+- Only tool definitions explicitly marked `annotations.destructiveHint: true` require confirmation. Missing annotations do not block manual, Playground, or agent-suite calls.
 - The runtime redacts authorization headers, cookies, token fields, URL query secrets, bearer strings, and nested payloads before SQLite writes, API output, logs, or reports.
 - SQLite uses WAL, forward migrations, transactional completion, interrupted run/conformance recovery, immutable run/playground event rows, configuration deletion tombstones, sanitized conformance history, and sanitized local playground history.
 
@@ -180,4 +184,5 @@ The deterministic fake OpenAI-compatible endpoint exercises a standard `/v1/chat
 - Anthropic-compatible endpoints do not expose a standard model-list route, so their connection test sends a short completion request.
 - JSONPath assertions support property access, array indexes, and quoted bracket keys. Filter expressions and scripts are excluded.
 - Cost uses the local prices in provider config. A provider response without usage reports zero tokens and zero estimated cost.
+- Official conformance testing currently supports unauthenticated loopback Streamable HTTP servers only; stdio, OAuth, custom headers, and frozen dated requirement sets are not supported.
 - The app owns and stops stdio children. It does not stop external HTTP servers.
