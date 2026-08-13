@@ -93,10 +93,15 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
   const { child, profile, cdp } = await startChrome(options.appUrl);
   const consoleErrors: string[] = [];
   const steps: string[] = [];
+  const recordConsoleError = (value: unknown) => {
+    const serialized = JSON.stringify(value);
+    if (serialized.includes('WebSocket closed without opened') && (serialized.includes('/@vite/client') || serialized.includes('[vite]'))) return;
+    consoleErrors.push(serialized);
+  };
   cdp.on('Runtime.consoleAPICalled', (params) => {
-    if (params.type === 'error') consoleErrors.push(JSON.stringify(params.args ?? []));
+    if (params.type === 'error') recordConsoleError(params.args ?? []);
   });
-  cdp.on('Runtime.exceptionThrown', (params) => consoleErrors.push(JSON.stringify(params.exceptionDetails ?? params)));
+  cdp.on('Runtime.exceptionThrown', (params) => recordConsoleError(params.exceptionDetails ?? params));
   await cdp.send('Runtime.enable');
   await cdp.send('Page.enable');
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
