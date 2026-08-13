@@ -187,6 +187,8 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     await setValue('playground-server', 'sample');
     await setValue('playground-provider', 'local');
     await setValue('playground-model', 'default');
+    await setValue('playground-system-prompt', 'Use connected MCP tools when needed and explain the result clearly.');
+    await setValue('playground-prompt', 'Add 2 and 3 using the available tool.');
     await click('run-playground');
     await waitText('The sum is 5', 20_000);
     await wait(`document.querySelector('.chat-message.assistant .markdown-body strong')?.textContent === 'sum is 5'`, 'rendered assistant Markdown');
@@ -194,6 +196,9 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     const playgroundScreenshot = join(options.outputDirectory, 'playground.png');
     const playgroundCapture = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     writeFileSync(playgroundScreenshot, Buffer.from(String(playgroundCapture.data), 'base64'));
+    await clickText('.playground-view-tabs button', 'raw');
+    await waitText('Model context preview');
+    await waitText('Use connected MCP tools when needed');
     await clickText('.playground-view-tabs button', 'trace');
     await wait(`document.querySelectorAll('.trace-span').length >= 3`, 'persisted observability trace');
     const playgroundTraceScreenshot = join(options.outputDirectory, 'playground-trace.png');

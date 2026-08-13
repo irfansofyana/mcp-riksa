@@ -22,6 +22,7 @@ export type ProviderPricing = ProviderConfig['pricing'];
 export type ProviderTool = { name: string; description?: string; inputSchema: Record<string, unknown> };
 export type ProviderToolCall = { id: string; name: string; arguments: Record<string, unknown> };
 export type ProviderMessage =
+  | { role: 'system'; content: string }
   | { role: 'user'; content: string }
   | { role: 'assistant'; content: string; toolCalls: ProviderToolCall[] }
   | { role: 'tool'; content: string; toolCallId: string; name: string };

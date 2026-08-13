@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { redact } from '../core/redaction.js';
 import type { NormalizedEvent, ToolCallObservation } from '../core/types.js';
+import type { ProviderMessage } from '../agent/types.js';
 import type { WorkbenchDatabase } from './database.js';
 
 export type ConversationMessageInput = {
@@ -12,6 +13,7 @@ export type ConversationMessageInput = {
   toolCalls?: ToolCallObservation[];
   events?: NormalizedEvent[];
   stopReason?: string;
+  providerTranscript?: ProviderMessage[];
 };
 
 export type ConversationMessage = ConversationMessageInput & {
@@ -26,6 +28,7 @@ export type ConversationSummary = {
   serverId: string;
   providerId: string;
   model: string;
+  systemPrompt: string;
   createdAt: string;
   updatedAt: string;
   messageCount: number;
@@ -40,7 +43,7 @@ export type ConversationSummary = {
 export type ConversationDetail = ConversationSummary & { messages: ConversationMessage[] };
 
 type ConversationRow = {
-  id: string; title: string; server_id: string; provider_id: string; model: string;
+  id: string; title: string; server_id: string; provider_id: string; model: string; system_prompt: string;
   created_at: string; updated_at: string; message_count: number;
 };
 
@@ -56,13 +59,13 @@ const emptyTotals = () => ({
 export class ConversationRepository {
   constructor(private readonly database: WorkbenchDatabase) {}
 
-  create(input: { serverId: string; providerId: string; model: string }): ConversationDetail {
+  create(input: { serverId: string; providerId: string; model: string; systemPrompt?: string }): ConversationDetail {
     const id = randomUUID();
     const now = new Date().toISOString();
     this.database.prepare(`
-      INSERT INTO playground_conversations(id, title, server_id, provider_id, model, created_at, updated_at)
-      VALUES (?, 'New conversation', ?, ?, ?, ?, ?)
-    `).run(id, input.serverId, input.providerId, input.model, now, now);
+      INSERT INTO playground_conversations(id, title, server_id, provider_id, model, system_prompt, created_at, updated_at)
+      VALUES (?, 'New conversation', ?, ?, ?, ?, ?, ?)
+    `).run(id, input.serverId, input.providerId, input.model, redact(input.systemPrompt?.trim() ?? ''), now, now);
     return this.get(id)!;
   }
 
@@ -214,6 +217,7 @@ export class ConversationRepository {
       serverId: row.server_id,
       providerId: row.provider_id,
       model: row.model,
+      systemPrompt: row.system_prompt,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       messageCount: row.message_count,

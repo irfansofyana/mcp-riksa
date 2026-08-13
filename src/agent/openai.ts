@@ -21,6 +21,7 @@ const responseSchema = z.object({
 
 function messages(input: ProviderMessage[]): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
   return input.map((message) => {
+    if (message.role === 'system') return { role: 'system', content: message.content };
     if (message.role === 'user') return { role: 'user', content: message.content };
     if (message.role === 'tool') return { role: 'tool', content: message.content, tool_call_id: message.toolCallId };
     return {

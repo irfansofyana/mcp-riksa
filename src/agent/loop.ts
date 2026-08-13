@@ -10,6 +10,7 @@ type McpForAgent = {
 
 export type AgentInput = {
   prompt: string;
+  systemPrompt?: string;
   model: string;
   serverId: string;
   limits: Limits;
@@ -24,6 +25,7 @@ export type AgentUpdate =
 
 export type AgentResult = Observation & {
   output: string;
+  transcript: ProviderMessage[];
   stopReason: 'complete' | 'cancelled' | 'max_turns' | 'max_tool_calls' | 'max_time' | 'max_cost';
 };
 
@@ -48,12 +50,17 @@ export async function runAgent(
   }, input.limits.timeoutMs);
 
   const emit = (update: AgentUpdate) => options.onUpdate?.(redact(update));
-  const messages: ProviderMessage[] = [...(input.history ?? []), { role: 'user', content: input.prompt }];
+  const messages: ProviderMessage[] = [
+    ...(input.systemPrompt?.trim() ? [{ role: 'system' as const, content: input.systemPrompt.trim() }] : []),
+    ...(input.history ?? []),
+    { role: 'user', content: input.prompt },
+  ];
   const calls: ToolCallObservation[] = [];
   const events: NormalizedEvent[] = [];
   const tokens = { input: 0, output: 0, total: 0 };
   let costUsd = 0;
   let output = '';
+  const transcript: ProviderMessage[] = [];
   let stopReason: AgentResult['stopReason'] = 'max_turns';
 
   try {
@@ -103,6 +110,7 @@ export async function runAgent(
         break;
       }
       if (response.toolCalls.length === 0) {
+        transcript.push({ role: 'assistant', content: response.text, toolCalls: [] });
         stopReason = 'complete';
         break;
       }
@@ -115,7 +123,9 @@ export async function runAgent(
         break;
       }
 
-      messages.push({ role: 'assistant', content: response.text, toolCalls: response.toolCalls });
+      const assistantMessage: ProviderMessage = { role: 'assistant', content: response.text, toolCalls: response.toolCalls };
+      messages.push(assistantMessage);
+      transcript.push(assistantMessage);
       for (const toolCall of response.toolCalls) {
         const toolStarted = Date.now();
         const result = await dependencies.mcp.call(
@@ -133,7 +143,9 @@ export async function runAgent(
         calls.push(observed);
         events.push(event(input.serverId, 'tool_call', observed, observed.durationMs));
         emit({ type: 'tool_call', turn: turn + 1, call: observed });
-        messages.push({ role: 'tool', toolCallId: toolCall.id, name: toolCall.name, content: JSON.stringify(result) });
+        const toolMessage: ProviderMessage = { role: 'tool', toolCallId: toolCall.id, name: toolCall.name, content: JSON.stringify(result) };
+        messages.push(toolMessage);
+        transcript.push(toolMessage);
       }
     }
   } finally {
@@ -146,6 +158,7 @@ export async function runAgent(
   emit({ type: 'stop', reason: stopReason, durationMs: Date.now() - started });
   return redact({
     output,
+    transcript,
     toolCalls: calls,
     durationMs: Date.now() - started,
     tokens,

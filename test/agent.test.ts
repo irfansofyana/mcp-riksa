@@ -159,7 +159,7 @@ describe.each([
   test('runs a complete provider → MCP tool → provider loop with normalized usage and sanitized trace', async () => {
     receivedPrivateHeader = false;
     const result = await runAgent(
-      { prompt: 'Add 2 and 3', model: 'default', serverId: 'sample', limits: { maxTurns: 4, maxToolCalls: 3, timeoutMs: 5000 } },
+      { prompt: 'Add 2 and 3', systemPrompt: 'Use tools accurately.', model: 'default', serverId: 'sample', limits: { maxTurns: 4, maxToolCalls: 3, timeoutMs: 5000 } },
       { provider: createProviderAdapter(config(type)), mcp: manager },
     );
 

@@ -23,7 +23,8 @@ export function PlaygroundPage({ servers, providers, onRefresh }: { servers: Ser
   const selectedModel = aliases.includes(model) ? model : aliases[0] ?? '';
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [conversation, setConversation] = useState<ConversationDetail>();
-  const [prompt, setPrompt] = useState('Add 2 and 3 using the available tool.');
+  const [systemPrompt, setSystemPrompt] = useState('');
+  const [prompt, setPrompt] = useState('');
   const [draft, setDraft] = useState('');
   const [pendingPrompt, setPendingPrompt] = useState('');
   const [updates, setUpdates] = useState<AgentUpdate[]>([]);
@@ -50,6 +51,7 @@ export function PlaygroundPage({ servers, providers, onRefresh }: { servers: Ser
     setServer(value.serverId);
     setProvider(value.providerId);
     setModel(value.model);
+    setSystemPrompt(value.systemPrompt);
     setResult(undefined);
     setUpdates([]);
     setDraft('');
@@ -61,9 +63,14 @@ export function PlaygroundPage({ servers, providers, onRefresh }: { servers: Ser
   }, []);
   useEffect(() => { transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight, behavior: 'smooth' }); }, [conversation?.messages.length, draft, running]);
 
+  const newConversation = () => {
+    abortRef.current?.abort();
+    setConversation(undefined); setSystemPrompt(''); setPrompt(''); setResult(undefined); setUpdates([]); setDraft(''); setPendingPrompt(''); setMessage('New conversation draft. Set instructions, then send first message.'); setError('');
+  };
+
   const createConversation = async () => {
     if (!server || !provider || !selectedModel) throw new Error('Choose server, provider, and model first');
-    const value = await api.createConversation({ serverId: server, providerId: provider, model: selectedModel });
+    const value = await api.createConversation({ serverId: server, providerId: provider, model: selectedModel, ...(systemPrompt.trim() ? { systemPrompt: systemPrompt.trim() } : {}) });
     setConversation(value);
     setResult(undefined);
     setUpdates([]);
@@ -111,10 +118,21 @@ export function PlaygroundPage({ servers, providers, onRefresh }: { servers: Ser
   const totals = conversation?.totals ?? { tokens: { input: 0, output: 0, total: 0 }, costUsd: 0, toolCalls: 0, durationMs: 0 };
   const lastUserPrompt = [...(conversation?.messages ?? [])].reverse().find((entry) => entry.role === 'user')?.content ?? pendingPrompt;
   const traceEvents = (conversation?.messages ?? []).flatMap((entry) => entry.events ?? []);
+  const effectiveSystemPrompt = conversation?.systemPrompt ?? systemPrompt.trim();
+  const modelRequest = {
+    model: selectedModel,
+    systemPrompt: effectiveSystemPrompt || null,
+    messages: [
+      ...(conversation?.messages ?? []).map(({ role, content, toolCalls }) => ({ role, content, ...(toolCalls?.length ? { toolCalls } : {}) })),
+      ...(pendingPrompt ? [{ role: 'user' as const, content: pendingPrompt }] : []),
+    ],
+    tools: { source: server || null, note: 'Live MCP tools are discovered from connected server before each model turn.' },
+    limits,
+  };
 
   return <div className="playground-shell">
     <aside className="conversation-rail">
-      <div className="conversation-rail-head"><div><span className="eyebrow">Sessions</span><b>Conversations</b></div><Button aria-label="New conversation" disabled={running || !server || !provider || !selectedModel} onClick={() => void createConversation().catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)))}>＋</Button></div>
+      <div className="conversation-rail-head"><div><span className="eyebrow">Sessions</span><b>Conversations</b></div><Button aria-label="New conversation" disabled={running} onClick={newConversation}>＋</Button></div>
       <div className="conversation-list">
         {conversations.length === 0 ? <Empty>No conversations yet.</Empty> : conversations.map((entry) => <button key={entry.id} disabled={running} className={`conversation-item ${conversation?.id === entry.id ? 'selected' : ''}`} onClick={() => void openConversation(entry.id)}>
           <span>{entry.title}</span><small>{entry.messageCount} msgs · {compact(entry.totals.tokens.total)} tok</small>
@@ -156,7 +174,7 @@ export function PlaygroundPage({ servers, providers, onRefresh }: { servers: Ser
           <article className="chat-message user pending"><div className="message-avatar">YOU</div><div className="message-body"><header><b>You</b><Status value="sent" /></header><p>{pendingPrompt}</p></div></article>
           <article className="chat-message assistant streaming"><div className="message-avatar">AI</div><div className="message-body"><header><b>Workbench agent</b><span className="stream-indicator"><i /> streaming</span></header><p>{draft || <span className="typing"><i /><i /><i /></span>}</p>{liveTools.length ? <div className="live-tools">{liveTools.map((entry, index) => <span key={`${entry.call.name}-${index}`}>↳ {entry.call.name} <small>{entry.call.durationMs} ms</small></span>)}</div> : null}</div></article>
         </> : null}
-      </div> : view === 'trace' ? <div className="playground-trace-view"><TraceTimeline events={traceEvents} durationMs={totals.durationMs} /></div> : <div className="playground-raw-view">{conversation ? <JsonView value={conversation} label="Sanitized conversation record" /> : <Empty>No conversation selected.</Empty>}</div>}
+      </div> : view === 'trace' ? <div className="playground-trace-view"><TraceTimeline events={traceEvents} durationMs={totals.durationMs} /></div> : <div className="playground-raw-view"><div className="raw-context-stack"><JsonView value={modelRequest} label="Model context preview" /><JsonView value={conversation ?? { messages: [] }} label="Sanitized conversation record" defaultOpen={false} /></div></div>}
 
       <div className="composer-wrap">
         {error ? <Notice error>{error}</Notice> : null}{message ? <Notice>{message}</Notice> : null}
@@ -168,6 +186,7 @@ export function PlaygroundPage({ servers, providers, onRefresh }: { servers: Ser
     </main>
 
     <aside className="playground-inspector">
+      <div className="inspector-block context-inspector"><span className="eyebrow">Model context</span><h3>Instructions</h3><Field label="System prompt" hint={conversation ? 'Locked for this conversation. Start a new session to change it.' : 'Sent before chat history. Blank means no system prompt.'}><Textarea rows={6} value={effectiveSystemPrompt} disabled={Boolean(conversation) || running} onChange={(event) => setSystemPrompt(event.target.value)} placeholder="No system prompt" data-testid="playground-system-prompt" /></Field><div className="context-facts"><span><b>{conversation?.messages.length ?? 0}</b> history messages</span><span><b>{effectiveSystemPrompt ? '1' : '0'}</b> system message</span><span><b>{server || 'none'}</b> tool source</span></div><button className="context-raw-link" onClick={() => setView('raw')}>Inspect context preview →</button></div>
       <div className="inspector-block"><span className="eyebrow">Live activity</span><h3>Agent trace</h3>{updates.length === 0 ? <p>Model turns and tool calls appear here while response streams.</p> : <div className="activity-list">{updates.filter((entry) => entry.type !== 'text_delta').map((entry, index) => <div key={index}><i /><span><b>{entry.type.replaceAll('_', ' ')}</b><small>{entry.type === 'tool_call' ? entry.call.name : entry.type === 'model_turn' ? `${entry.usage.total} tok · ${elapsed(entry.durationMs)}` : entry.reason}</small></span></div>)}</div>}</div>
       <div className="inspector-block save-case"><span className="eyebrow">Regression seed</span><h3>Save last turn</h3><Field label="Suite name"><Input value={suiteName} onChange={(event) => setSuiteName(event.target.value)} data-testid="playground-suite-name" /></Field><Field label="Expected text"><Input value={expected} onChange={(event) => setExpected(event.target.value)} /></Field><Button disabled={!result || !lastUserPrompt} onClick={() => void (async () => { try { await api.saveSuite(buildSuiteFromPlayground({ name: suiteName, server, provider, model: selectedModel, prompt: lastUserPrompt, expectedText: expected })); await onRefresh(); setMessage('Interaction saved as a versioned YAML suite.'); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); } })()} data-testid="save-playground-suite">Save YAML case</Button></div>
       {result ? <JsonView value={result} label="Latest sanitized result" defaultOpen={false} /> : null}

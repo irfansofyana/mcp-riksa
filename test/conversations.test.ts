@@ -16,7 +16,7 @@ test('persists sanitized multi-turn playground conversations and cumulative stat
   directories.push(directory);
   const database = openDatabase(join(directory, 'workbench.db'));
   const conversations = new ConversationRepository(database);
-  const created = conversations.create({ serverId: 'sample', providerId: 'local', model: 'fast' });
+  const created = conversations.create({ serverId: 'sample', providerId: 'local', model: 'fast', systemPrompt: 'Use MCP tools when useful.' });
 
   conversations.appendTurn(created.id, { role: 'user', content: 'Add 2 and 3' }, {
     role: 'assistant', content: '5', durationMs: 42,
@@ -30,11 +30,15 @@ test('persists sanitized multi-turn playground conversations and cumulative stat
   expect(detail).toMatchObject({
     id: created.id,
     title: 'Add 2 and 3',
+    systemPrompt: 'Use MCP tools when useful.',
     messageCount: 3,
     totals: { tokens: { input: 10, output: 2, total: 12 }, costUsd: 0.001, toolCalls: 1, durationMs: 42 },
   });
   expect(detail?.messages.map((message) => message.role)).toEqual(['user', 'assistant', 'user']);
   expect(conversations.list()[0]).toMatchObject({ id: created.id, messageCount: 3 });
+  const redactedConversation = conversations.create({ serverId: 'sample', providerId: 'local', model: 'fast', systemPrompt: 'Authorization: Bearer raw-system-secret' });
+  expect(conversations.get(redactedConversation.id)?.systemPrompt).toContain('[REDACTED]');
+  expect(JSON.stringify(conversations.get(redactedConversation.id))).not.toContain('raw-system-secret');
   expect(conversations.events(created.id)).toHaveLength(0);
   database.close();
 });

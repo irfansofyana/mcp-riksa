@@ -33,7 +33,7 @@ async function* readSse(response: Response): AsyncGenerator<Record<string, unkno
 }
 
 function messages(input: ProviderMessage[]) {
-  return input.map((message) => {
+  return input.filter((message) => message.role !== 'system').map((message) => {
     if (message.role === 'user') return { role: 'user', content: message.content };
     if (message.role === 'assistant') {
       return {
@@ -75,6 +75,7 @@ export function createAnthropicAdapter(input: unknown): ProviderAdapter {
           body: JSON.stringify({
             model: resolveModel(config, request.model),
             max_tokens: 4096,
+            ...(request.messages.find((message) => message.role === 'system')?.content ? { system: request.messages.find((message) => message.role === 'system')!.content } : {}),
             messages: messages(request.messages),
             tools: request.tools.map((tool) => ({
               name: tool.name,
@@ -146,6 +147,7 @@ export function createAnthropicAdapter(input: unknown): ProviderAdapter {
         body: JSON.stringify({
           model: resolveModel(config, request.model),
           max_tokens: 4096,
+          ...(request.messages.find((message) => message.role === 'system')?.content ? { system: request.messages.find((message) => message.role === 'system')!.content } : {}),
           messages: messages(request.messages),
           tools: request.tools.map((tool) => ({
             name: tool.name,

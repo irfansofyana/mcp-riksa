@@ -191,6 +191,16 @@ export function openDatabase(path: string): WorkbenchDatabase {
       database.exec(configurationTombstoneMigration);
       database.prepare('INSERT INTO migrations(version, applied_at) VALUES (?, ?)').run(5, new Date().toISOString());
     })();
+    version = 5;
+  }
+  if (version < 6) {
+    database.transaction(() => {
+      const columns = database.pragma('table_info(playground_conversations)') as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'system_prompt')) {
+        database.exec("ALTER TABLE playground_conversations ADD COLUMN system_prompt TEXT NOT NULL DEFAULT ''");
+      }
+      database.prepare('INSERT INTO migrations(version, applied_at) VALUES (?, ?)').run(6, new Date().toISOString());
+    })();
   }
   return database;
 }
