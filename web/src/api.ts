@@ -24,6 +24,14 @@ export async function post<T>(path: string, body: unknown): Promise<T> {
   }));
 }
 
+export async function put<T>(path: string, body: unknown): Promise<T> {
+  return parse<T>(await fetch(path, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json', 'x-workbench-session': sessionToken },
+    body: JSON.stringify(body),
+  }));
+}
+
 export async function remove<T>(path: string): Promise<T> {
   return parse<T>(await fetch(path, {
     method: 'DELETE',
@@ -87,8 +95,12 @@ export const api = {
   refresh: () => get<Bootstrap>('/api/bootstrap'),
   settings: () => get<{ providers: Bootstrap['providers']; callbackUrl: string; loopbackOnly: boolean }>('/api/settings'),
   addProvider: (value: unknown) => post('/api/providers', value),
+  updateProvider: (id: string, value: unknown) => put(`/api/providers/${encodeURIComponent(id)}`, value),
+  deleteProvider: (id: string, force = false) => remove(`/api/providers/${encodeURIComponent(id)}?force=${force}`),
   testProvider: (id: string) => post<{ ok: boolean; models: string[] }>(`/api/providers/${encodeURIComponent(id)}/test`, {}),
   addServer: (value: unknown) => post('/api/servers', value),
+  updateServer: (id: string, value: unknown) => put(`/api/servers/${encodeURIComponent(id)}`, value),
+  deleteServer: (id: string, force = false) => remove(`/api/servers/${encodeURIComponent(id)}?force=${force}`),
   connectServer: (id: string) => post(`/api/servers/${encodeURIComponent(id)}/connect`, {}),
   inspectServer: (id: string) => get<{ id: string; identity: unknown; capabilities: unknown; tools: import('./types.js').Tool[] }>(`/api/servers/${encodeURIComponent(id)}`),
   callTool: (id: string, body: unknown) => post(`/api/servers/${encodeURIComponent(id)}/call`, body),

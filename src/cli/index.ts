@@ -40,9 +40,13 @@ function sampleConfiguration(): ServerConfig {
   };
 }
 
-async function applyConfiguration(runtime: WorkbenchRuntime, config: WorkbenchConfiguration): Promise<void> {
-  for (const provider of config.providers) await runtime.addProvider(provider);
-  for (const server of config.servers) await runtime.addServer(server);
+async function applyConfiguration(runtime: WorkbenchRuntime, config: WorkbenchConfiguration, overwrite = true): Promise<void> {
+  for (const provider of config.providers) {
+    if (overwrite) await runtime.addProvider(provider); else await runtime.seedProvider(provider);
+  }
+  for (const server of config.servers) {
+    if (overwrite) await runtime.addServer(server); else await runtime.seedServer(server);
+  }
 }
 
 async function waitForRun(runtime: WorkbenchRuntime, id: string): Promise<RunResult> {
@@ -131,7 +135,7 @@ program.command('serve')
       suiteDirectory: join(dataDirectory, 'suites'),
       callbackUrl: `http://127.0.0.1:${options.port}/api/oauth/callback`,
     });
-    await applyConfiguration(runtime, loadConfiguration(options.config));
+    await applyConfiguration(runtime, loadConfiguration(options.config), false);
     const staticDirectory = options.dev ? undefined : resolve('dist/web');
     const app = createApp(runtime, { ...(staticDirectory === undefined ? {} : { staticDirectory }) });
     let vite: { middlewares: RequestHandler; close(): Promise<void> } | undefined;

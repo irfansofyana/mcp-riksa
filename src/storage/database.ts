@@ -112,6 +112,15 @@ BEGIN
 END;
 `;
 
+const configurationTombstoneMigration = `
+CREATE TABLE IF NOT EXISTS configuration_tombstones (
+  kind TEXT NOT NULL CHECK(kind IN ('provider', 'server')),
+  id TEXT NOT NULL,
+  deleted_at TEXT NOT NULL,
+  PRIMARY KEY (kind, id)
+);
+`;
+
 export type WorkbenchDatabase = Database.Database;
 
 function backfillPlaygroundEvents(database: WorkbenchDatabase): void {
@@ -174,6 +183,13 @@ export function openDatabase(path: string): WorkbenchDatabase {
       database.exec(playgroundTraceMigration);
       backfillPlaygroundEvents(database);
       database.prepare('INSERT INTO migrations(version, applied_at) VALUES (?, ?)').run(4, new Date().toISOString());
+    })();
+    version = 4;
+  }
+  if (version < 5) {
+    database.transaction(() => {
+      database.exec(configurationTombstoneMigration);
+      database.prepare('INSERT INTO migrations(version, applied_at) VALUES (?, ?)').run(5, new Date().toISOString());
     })();
   }
   return database;

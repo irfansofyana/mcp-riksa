@@ -70,7 +70,7 @@ export function resolveApiKey(config: ProviderConfig): string | undefined {
 }
 
 export function resolveModel(config: ProviderConfig, alias: string): string {
-  const model = config.models[alias];
+  const model = Object.hasOwn(config.models, alias) ? config.models[alias] : undefined;
   if (!model) throw new Error(`Unknown model alias ${alias} for provider ${config.id}`);
   return model;
 }

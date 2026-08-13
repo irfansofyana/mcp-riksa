@@ -142,8 +142,19 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     await setValue('provider-name', 'Local fake');
     await setValue('provider-url', options.providerUrl);
     await setValue('provider-model', 'test-model');
+    await clickText('button', 'Add model');
+    await setValue('provider-model-alias-1', 'quality');
+    await setValue('provider-model-1', 'test-model');
     await click('save-provider');
-    await waitText('Model provider saved.');
+    await waitText('Model provider created.');
+    await clickText('.provider-card button', 'Edit');
+    await setValue('provider-name', 'Local fake updated');
+    await click('save-provider');
+    await waitText('Model provider updated.');
+    mkdirSync(options.outputDirectory, { recursive: true });
+    const providersScreenshot = join(options.outputDirectory, 'model-providers.png');
+    const providersCapture = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    writeFileSync(providersScreenshot, Buffer.from(String(providersCapture.data), 'base64'));
     steps.push('provider-added');
 
     await navigate('servers');
@@ -152,7 +163,11 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     await setValue('server-command', process.execPath);
     await setValue('server-args', `${resolve('node_modules/tsx/dist/cli.mjs')} ${resolve('examples/sample-mcp-server.ts')}`);
     await click('save-server');
-    await waitText('Server saved.');
+    await waitText('Server created.');
+    await clickText('.config-list-item button', 'Edit');
+    await setValue('server-name', 'Sample MCP updated');
+    await click('save-server');
+    await waitText('Server updated. Reconnect to apply changes.');
     steps.push('server-added');
     await click('connect-server');
     await waitText('Connected and inspected.', 20_000);
@@ -164,7 +179,6 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     await click('invoke-tool');
     await waitText('"sum": 5');
     steps.push('tool-invoked');
-    mkdirSync(options.outputDirectory, { recursive: true });
     const serverScreenshot = join(options.outputDirectory, 'stdio-server.png');
     const serverCapture = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     writeFileSync(serverScreenshot, Buffer.from(String(serverCapture.data), 'base64'));
@@ -223,7 +237,7 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     const mobile = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     writeFileSync(mobileScreenshot, Buffer.from(String(mobile.data), 'base64'));
     steps.push('mobile-checked');
-    return { steps, consoleErrors, serverScreenshot, playgroundScreenshot, playgroundTraceScreenshot, desktopScreenshot, mobileScreenshot };
+    return { steps, consoleErrors, providersScreenshot, serverScreenshot, playgroundScreenshot, playgroundTraceScreenshot, desktopScreenshot, mobileScreenshot };
   } finally {
     cdp.close();
     if (child.exitCode === null) {

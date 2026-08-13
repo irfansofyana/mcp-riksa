@@ -51,7 +51,7 @@ describe('SQLite run repository', () => {
   test('runs migrations in WAL mode', () => {
     const { database } = createRepository();
     expect(database.pragma('journal_mode', { simple: true })).toBe('wal');
-    expect(database.prepare('select max(version) as version from migrations').get()).toEqual({ version: 4 });
+    expect(database.prepare('select max(version) as version from migrations').get()).toEqual({ version: 5 });
     database.close();
   });
 
@@ -63,7 +63,7 @@ describe('SQLite run repository', () => {
     const now = new Date().toISOString();
     legacy.prepare('INSERT INTO playground_conversations(id, title, server_id, provider_id, model, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run('conversation', 'Legacy', 'server', 'provider', 'model', now, now);
     legacy.prepare('INSERT INTO playground_messages(id, conversation_id, sequence, role, content, detail_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run('assistant', 'conversation', 1, 'assistant', 'done', JSON.stringify({ events: [{ id: 'legacy-event', caseId: 'server', type: 'model_turn', timestamp: now, durationMs: 9, data: { turn: 1 }, sanitized: true }] }), now);
-    legacy.exec('DROP TRIGGER playground_events_immutable_update; DROP TRIGGER playground_events_immutable_delete; DROP TABLE playground_events; DELETE FROM migrations WHERE version = 4;');
+    legacy.exec('DROP TRIGGER playground_events_immutable_update; DROP TRIGGER playground_events_immutable_delete; DROP TABLE playground_events; DROP TABLE configuration_tombstones; DELETE FROM migrations WHERE version >= 4;');
     legacy.close();
 
     const migrated = openDatabase(path);

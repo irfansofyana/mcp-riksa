@@ -1,4 +1,5 @@
 import { stringify } from 'yaml';
+import type { ProviderSummary, ServerSummary } from './types.js';
 
 export const pages = ['Servers', 'Playground', 'Suites', 'Runs', 'Compare', 'Settings'] as const;
 export type Page = typeof pages[number];
@@ -18,45 +19,98 @@ function envMap(input: string): Record<string, string> {
   );
 }
 
+function envText(input: Record<string, string> | undefined): string {
+  return Object.entries(input ?? {}).map(([key, value]) => `${key}=${value}`).join('\n');
+}
+
 export type ServerForm = {
   id: string; name: string; transport: 'stdio' | 'http'; command: string; args: string; url: string; headerEnv: string;
-  oauthScopes?: string; oauthClientId?: string; oauthClientSecretEnv?: string;
+  cwd?: string; envRefs?: string; allowUnsafeEndpoint?: boolean;
+  oauthEnabled?: boolean; oauthScopes?: string; oauthClientId?: string; oauthClientSecretEnv?: string; oauthTimeoutMs?: string;
 };
 
 export function buildServerPayload(form: ServerForm) {
   if (form.transport === 'stdio') {
+    let args: string[] = [];
+    if (form.args.trim()) {
+      if (form.args.trim().startsWith('[')) {
+        const parsed: unknown = JSON.parse(form.args);
+        if (!Array.isArray(parsed) || !parsed.every((entry) => typeof entry === 'string')) throw new Error('Arguments must be a JSON array of strings');
+        args = parsed;
+      } else args = form.args.trim().split(/\s+/);
+    }
     return {
       id: form.id.trim(), name: form.name.trim(), transport: 'stdio' as const,
-      command: form.command.trim(), args: form.args.trim() ? form.args.trim().split(/\s+/) : [], envRefs: {},
+      command: form.command.trim(), args,
+      ...(form.cwd?.trim() ? { cwd: form.cwd.trim() } : {}), envRefs: envMap(form.envRefs ?? ''),
     };
   }
+  const oauthEnabled = form.oauthEnabled ?? Boolean((form.oauthScopes ?? '').trim() || (form.oauthClientId ?? '').trim() || (form.oauthClientSecretEnv ?? '').trim());
   return {
     id: form.id.trim(), name: form.name.trim(), transport: 'http' as const,
-    url: form.url.trim(), headerEnv: envMap(form.headerEnv), allowUnsafeEndpoint: false,
-    oauth: {
-      scopes: (form.oauthScopes ?? '').split(/[\s,]+/).map((scope) => scope.trim()).filter(Boolean),
-      timeoutMs: 120_000,
+    url: form.url.trim(), headerEnv: envMap(form.headerEnv), allowUnsafeEndpoint: form.allowUnsafeEndpoint ?? false,
+    ...(oauthEnabled ? { oauth: {
+      scopes: (form.oauthScopes ?? '').split(/\s+/).map((scope) => scope.trim()).filter(Boolean),
+      timeoutMs: Number(form.oauthTimeoutMs || 120_000),
       ...((form.oauthClientId ?? '').trim() ? { clientId: form.oauthClientId!.trim() } : {}),
       ...((form.oauthClientSecretEnv ?? '').trim() ? { clientSecretEnv: form.oauthClientSecretEnv!.trim() } : {}),
-    },
+    } } : {}),
   };
 }
 
 export type ProviderForm = {
   id: string; name: string; type: 'openai-compatible' | 'anthropic-compatible'; baseUrl: string;
-  alias: string; model: string; apiKeyEnv: string; headerEnv: string; inputPrice: string; outputPrice: string;
+  models: Array<{ alias: string; model: string }>;
+  apiKeyEnv: string; headerEnv: string; inputPrice: string; outputPrice: string;
 };
 
 export function buildProviderPayload(form: ProviderForm) {
+  if (form.models.length === 0) throw new Error('At least one model is required');
+  const models: Record<string, string> = Object.create(null) as Record<string, string>;
+  for (const entry of form.models) {
+    const alias = entry.alias.trim();
+    const model = entry.model.trim();
+    if (!alias || !model) throw new Error('Every model needs an alias and provider model ID');
+    if (Object.hasOwn(models, alias)) throw new Error(`Duplicate model alias: ${alias}`);
+    models[alias] = model;
+  }
   return {
     id: form.id.trim(), name: form.name.trim(), type: form.type, baseUrl: form.baseUrl.trim(),
-    models: { [form.alias.trim()]: form.model.trim() },
+    models,
     ...(form.apiKeyEnv.trim() ? { apiKeyEnv: form.apiKeyEnv.trim() } : {}),
     headerEnv: envMap(form.headerEnv),
     pricing: {
       inputPerMillion: Number(form.inputPrice || 0),
       outputPerMillion: Number(form.outputPrice || 0),
     },
+  };
+}
+
+export function providerToForm(provider: ProviderSummary): ProviderForm {
+  return {
+    id: provider.id,
+    name: provider.name,
+    type: provider.type,
+    baseUrl: provider.baseUrl,
+    models: Object.entries(provider.models).map(([alias, model]) => ({ alias, model })),
+    apiKeyEnv: provider.apiKeyEnv ?? '',
+    headerEnv: envText(provider.headerEnv),
+    inputPrice: String(provider.pricing?.inputPerMillion ?? 0),
+    outputPrice: String(provider.pricing?.outputPerMillion ?? 0),
+  };
+}
+
+export function serverToForm(server: ServerSummary): ServerForm {
+  if (server.transport === 'stdio') return {
+    id: server.id, name: server.name, transport: 'stdio', command: server.command, args: JSON.stringify(server.args),
+    url: 'http://127.0.0.1:3000/mcp', headerEnv: '', cwd: server.cwd ?? '', envRefs: envText(server.envRefs), allowUnsafeEndpoint: false,
+    oauthEnabled: false, oauthScopes: '', oauthClientId: '', oauthClientSecretEnv: '', oauthTimeoutMs: '120000',
+  };
+  return {
+    id: server.id, name: server.name, transport: 'http', command: 'node', args: '', url: server.url,
+    headerEnv: envText(server.headerEnv), cwd: '', envRefs: '', allowUnsafeEndpoint: server.allowUnsafeEndpoint,
+    oauthEnabled: server.oauth !== undefined, oauthScopes: server.oauth?.scopes.join(' ') ?? '', oauthClientId: server.oauth?.clientId ?? '',
+    oauthClientSecretEnv: server.oauth?.clientSecretEnv ?? '', oauthTimeoutMs: String(server.oauth?.timeoutMs ?? 120000),
   };
 }
 

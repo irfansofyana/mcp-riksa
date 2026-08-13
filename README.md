@@ -82,10 +82,15 @@ The CLI writes `run.json`, `run.html`, and `junit.xml`. It prints JSON to stdout
 `examples/workbench.config.yaml` shows the complete file shape. Provider configs support:
 
 - `openai-compatible` and `anthropic-compatible` protocols
-- model aliases used by suites
+- multiple model aliases per provider, each mapped to its upstream model ID
 - API key and custom header environment references
 - local input and output prices per million tokens
 - OpenAI-compatible model discovery and connection testing
+- create, edit, duplicate, and reference-safe delete workflows for providers and MCP servers
+
+Each provider owns a model catalog, so one endpoint and credential set can expose aliases such as `fast`, `quality`, and `reasoning`. Editing keeps the provider ID stable; duplicating creates a new ID. Removing model aliases is blocked while saved suites or conversations still reference them.
+
+Browser edits persist in SQLite. Configuration passed to `serve --config` seeds missing entries without overwriting browser edits; deleting a seeded entry creates a local tombstone so it stays deleted across restarts. Headless `run --config` remains authoritative and applies its configuration for that run.
 
 Streamable HTTP servers may add interactive OAuth settings. Authorization Code + PKCE, metadata discovery, DCR when advertised, and pre-registered clients are included in the MVP:
 
@@ -129,7 +134,7 @@ Supported assertions cover tool called or not called, count, order, arguments, J
 - Stdio spawns an executable with an argument array and no shell.
 - Tool definitions marked destructive require explicit confirmation for manual calls.
 - The runtime redacts authorization headers, cookies, token fields, URL query secrets, bearer strings, and nested payloads before SQLite writes, API output, logs, or reports.
-- SQLite uses WAL, forward migrations, transactional completion, interrupted-run recovery, immutable run/playground event rows, and sanitized local playground history.
+- SQLite uses WAL, forward migrations, transactional completion, interrupted-run recovery, immutable run/playground event rows, configuration deletion tombstones, and sanitized local playground history.
 
 ## Verification
 

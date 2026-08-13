@@ -133,6 +133,47 @@ describe('concrete workbench runtime', () => {
     }
   });
 
+  test('creates, edits, and safely deletes multi-model providers and servers', async () => {
+    const { runtime, databasePath, directory } = createRuntime();
+    await runtime.createProvider({
+      id: 'gateway', name: 'Gateway', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1',
+      models: { fast: 'small-model', quality: 'large-model' }, headerEnv: {}, pricing: { inputPerMillion: 1, outputPerMillion: 2 },
+    });
+    await expect(runtime.createProvider({
+      id: 'gateway', name: 'Duplicate', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1',
+      models: { default: 'x' }, headerEnv: {}, pricing: { inputPerMillion: 0, outputPerMillion: 0 },
+    })).rejects.toMatchObject({ status: 409 });
+    await runtime.createServer({ id: 'sample', name: 'Sample', transport: 'stdio', command: process.execPath, args: [tsxCli, sampleServer], envRefs: {} });
+    await runtime.connectServer('sample');
+    await runtime.forgetOAuth('sample');
+    expect((await runtime.bootstrap() as { servers: Array<{ connected: boolean }> }).servers[0]?.connected).toBe(false);
+    await runtime.connectServer('sample');
+    const conversation = await runtime.createConversation({ serverId: 'sample', providerId: 'gateway', model: 'quality' });
+
+    await expect(runtime.updateProvider('gateway', {
+      id: 'gateway', name: 'Gateway', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1',
+      models: { fast: 'small-model' }, headerEnv: {}, pricing: { inputPerMillion: 1, outputPerMillion: 2 },
+    })).rejects.toMatchObject({ status: 409 });
+    await runtime.updateProvider('gateway', {
+      id: 'gateway', name: 'Updated Gateway', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1',
+      models: { fast: 'small-v2', quality: 'large-v2', reasoning: 'reasoner' }, headerEnv: {}, pricing: { inputPerMillion: 3, outputPerMillion: 4 },
+    });
+    await runtime.updateServer('sample', { id: 'sample', name: 'Updated Sample', transport: 'stdio', command: process.execPath, args: [tsxCli, sampleServer], envRefs: {} });
+    expect((await runtime.bootstrap() as { servers: Array<{ id: string; connected: boolean }> }).servers[0]).toMatchObject({ id: 'sample', connected: false });
+    await expect(runtime.deleteProvider('gateway')).rejects.toMatchObject({ status: 409 });
+    await expect(runtime.deleteServer('sample')).rejects.toMatchObject({ status: 409 });
+    expect(await runtime.deleteProvider('gateway', true)).toMatchObject({ deleted: true, forced: true });
+    expect(await runtime.deleteServer('sample', true)).toMatchObject({ deleted: true, forced: true });
+    expect(await runtime.getConversation(conversation.id)).toMatchObject({ providerId: 'gateway', serverId: 'sample', model: 'quality' });
+    await runtime.close();
+
+    const restored = new WorkbenchRuntime({ databasePath, suiteDirectory: join(directory, 'suites'), callbackUrl: 'http://127.0.0.1:4317/api/oauth/callback' });
+    expect(await restored.seedProvider({ id: 'gateway', name: 'Seed', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1', models: { default: 'seed' }, headerEnv: {}, pricing: { inputPerMillion: 0, outputPerMillion: 0 } })).toBe(false);
+    expect(await restored.seedServer({ id: 'sample', name: 'Seed', transport: 'stdio', command: process.execPath, args: [], envRefs: {} })).toBe(false);
+    expect((await restored.bootstrap() as { providers: unknown[]; servers: unknown[] })).toMatchObject({ providers: [], servers: [] });
+    await restored.close();
+  });
+
   test('persists only environment references and restores provider/server configuration', async () => {
     process.env.RUNTIME_PROVIDER_SECRET = 'must-never-reach-disk';
     const { runtime, databasePath, directory } = createRuntime();

@@ -6,12 +6,18 @@ export type Tool = {
 };
 
 export type ServerSummary = {
-  id: string; name: string; transport: 'stdio' | 'http'; connected?: boolean; url?: string; oauth?: unknown;
-};
+  id: string;
+  name: string;
+  connected?: boolean;
+} & (
+  | { transport: 'stdio'; command: string; args: string[]; cwd?: string; envRefs: Record<string, string> }
+  | { transport: 'http'; url: string; headerEnv: Record<string, string>; allowUnsafeEndpoint: boolean; oauth?: { scopes: string[]; clientId?: string; clientSecretEnv?: string; timeoutMs: number } }
+);
 
 export type ProviderSummary = {
-  id: string; name: string; type: string; baseUrl: string; models: Record<string, string>;
-  apiKeyEnv?: string; apiKeyConfigured?: boolean; pricing?: { inputPerMillion: number; outputPerMillion: number };
+  id: string; name: string; type: 'openai-compatible' | 'anthropic-compatible'; baseUrl: string; models: Record<string, string>;
+  apiKeyEnv?: string; apiKeyConfigured?: boolean; headerEnv?: Record<string, string>;
+  pricing?: { inputPerMillion: number; outputPerMillion: number };
 };
 
 export type EventRecord = {

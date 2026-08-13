@@ -4,13 +4,18 @@ import { z, ZodError } from 'zod';
 import { providerConfigSchema } from '../agent/types.js';
 import { redact } from '../core/redaction.js';
 import { serverConfigSchema } from '../mcp/manager.js';
+import { WorkbenchError } from './errors.js';
 
 export type ApiRuntime = {
   bootstrap(): Promise<unknown> | unknown;
   settings(): Promise<unknown> | unknown;
-  addProvider(value: z.infer<typeof providerConfigSchema>): Promise<unknown> | unknown;
+  createProvider(value: z.infer<typeof providerConfigSchema>): Promise<unknown> | unknown;
+  updateProvider(id: string, value: z.infer<typeof providerConfigSchema>): Promise<unknown> | unknown;
+  deleteProvider(id: string, force: boolean): Promise<unknown> | unknown;
   testProvider(id: string): Promise<unknown> | unknown;
-  addServer(value: z.infer<typeof serverConfigSchema>): Promise<unknown> | unknown;
+  createServer(value: z.infer<typeof serverConfigSchema>): Promise<unknown> | unknown;
+  updateServer(id: string, value: z.infer<typeof serverConfigSchema>): Promise<unknown> | unknown;
+  deleteServer(id: string, force: boolean): Promise<unknown> | unknown;
   connectServer(id: string): Promise<unknown> | unknown;
   inspectServer(id: string): Promise<unknown> | unknown;
   callTool(id: string, tool: string, args: Record<string, unknown>, options: { confirmDangerous: boolean }): Promise<unknown> | unknown;
@@ -113,13 +118,23 @@ export function createApp(runtime: ApiRuntime, options: { sessionToken?: string;
 
   app.post('/api/providers', async (request, response) => {
     const config = providerConfigSchema.parse(request.body);
-    send(response, await runtime.addProvider(config), 201);
+    send(response, await runtime.createProvider(config), 201);
+  });
+  app.put('/api/providers/:id', async (request, response) => send(response, await runtime.updateProvider(request.params.id!, providerConfigSchema.parse(request.body))));
+  app.delete('/api/providers/:id', async (request, response) => {
+    const { force } = z.object({ force: z.enum(['true', 'false']).default('false') }).parse(request.query);
+    send(response, await runtime.deleteProvider(request.params.id!, force === 'true'));
   });
   app.post('/api/providers/:id/test', async (request, response) => send(response, await runtime.testProvider(request.params.id!)));
 
   app.post('/api/servers', async (request, response) => {
     const config = serverConfigSchema.parse(request.body);
-    send(response, await runtime.addServer(config), 201);
+    send(response, await runtime.createServer(config), 201);
+  });
+  app.put('/api/servers/:id', async (request, response) => send(response, await runtime.updateServer(request.params.id!, serverConfigSchema.parse(request.body))));
+  app.delete('/api/servers/:id', async (request, response) => {
+    const { force } = z.object({ force: z.enum(['true', 'false']).default('false') }).parse(request.query);
+    send(response, await runtime.deleteServer(request.params.id!, force === 'true'));
   });
   app.post('/api/servers/:id/connect', async (request, response) => send(response, await runtime.connectServer(request.params.id!)));
   app.get('/api/servers/:id', async (request, response) => send(response, await runtime.inspectServer(request.params.id!)));
@@ -212,9 +227,13 @@ export function createApp(runtime: ApiRuntime, options: { sessionToken?: string;
   }
 
   app.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {
-    const status = error instanceof ZodError ? 400 : 500;
+    const status = error instanceof ZodError ? 400 : error instanceof WorkbenchError ? error.status : 500;
     const message = error instanceof ZodError ? 'Request validation failed' : error instanceof Error ? error.message : 'Internal error';
-    send(response, { error: message, ...(error instanceof ZodError ? { issues: error.issues } : {}) }, status);
+    send(response, {
+      error: message,
+      ...(error instanceof ZodError ? { issues: error.issues } : {}),
+      ...(error instanceof WorkbenchError && error.details !== undefined ? { details: error.details } : {}),
+    }, status);
   });
 
   return app;

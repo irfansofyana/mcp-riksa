@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { createApp, type ApiRuntime } from '../src/server/app.js';
+import { WorkbenchError } from '../src/server/errors.js';
 
 let origin: string;
 let server: ReturnType<typeof createServer>;
@@ -16,9 +17,13 @@ function runtime(): ApiRuntime {
   return {
     bootstrap: async () => ({ servers: [], providers: [], suites: ['sample'], runs: [run] }),
     settings: async () => ({ providers: [{ id: 'local', apiKey: 'api-response-secret', apiKeyEnv: 'SAFE_ENV_NAME' }] }),
-    addProvider: async (value) => { calls.push({ method: 'addProvider', value }); return { id: 'local' }; },
+    createProvider: async (value) => { calls.push({ method: 'createProvider', value }); return { id: 'local' }; },
+    updateProvider: async (id, value) => { calls.push({ method: 'updateProvider', value: { id, value } }); return { id }; },
+    deleteProvider: async (id, force) => { calls.push({ method: 'deleteProvider', value: { id, force } }); return { id, deleted: true }; },
     testProvider: async (id) => ({ id, ok: true, models: ['test-model'] }),
-    addServer: async (value) => { calls.push({ method: 'addServer', value }); return { id: 'sample' }; },
+    createServer: async (value) => { calls.push({ method: 'createServer', value }); return { id: 'sample' }; },
+    updateServer: async (id, value) => { calls.push({ method: 'updateServer', value: { id, value } }); return { id }; },
+    deleteServer: async (id, force) => { calls.push({ method: 'deleteServer', value: { id, force } }); return { id, deleted: true }; },
     connectServer: async (id) => ({ id, identity: { name: 'sample' }, tools: [{ name: 'add' }] }),
     inspectServer: async (id) => ({ id, identity: { name: 'sample' }, tools: [{ name: 'add' }] }),
     callTool: async (id, tool, args, options) => ({ id, tool, args, options, structuredContent: { sum: 5 } }),
@@ -97,16 +102,35 @@ describe('API security boundary', () => {
 });
 
 describe('API workbench flow', () => {
+  test('maps typed configuration conflicts and missing resources to actionable status codes', async () => {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    const base = runtime();
+    const app = createApp({
+      ...base,
+      createProvider: async () => { throw new WorkbenchError('already exists', 409); },
+      updateServer: async () => { throw new WorkbenchError('not found', 404); },
+    }, { sessionToken: 'test-session' });
+    server = createServer(app);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('API failed to bind');
+    origin = `http://127.0.0.1:${address.port}`;
+    expect((await request('/api/providers', mutation({ id: 'x', name: 'X', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1', models: { default: 'x' }, headerEnv: {}, pricing: { inputPerMillion: 0, outputPerMillion: 0 } }))).status).toBe(409);
+    expect((await request('/api/servers/missing', { ...mutation({ id: 'missing', name: 'Missing', transport: 'stdio', command: 'node', args: [], envRefs: {} }), method: 'PUT' })).status).toBe(404);
+  });
+
   test('routes server registration, inspection, direct calls, playground, suites, runs, trace and compare', async () => {
     expect((await request('/api/providers', mutation({
       id: 'local', name: 'Local', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1',
       models: { default: 'test-model' }, apiKeyEnv: 'SAFE_ENV_NAME', headerEnv: {},
       pricing: { inputPerMillion: 0, outputPerMillion: 0 },
     }))).status).toBe(201);
+    expect((await request('/api/providers/local', { ...mutation({ id: 'local', name: 'Updated', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1', models: { fast: 'small', quality: 'large' }, headerEnv: {}, pricing: { inputPerMillion: 0, outputPerMillion: 0 } }), method: 'PUT' })).status).toBe(200);
     expect((await request('/api/providers/local/test', mutation({}))).status).toBe(200);
     expect((await request('/api/servers', mutation({
       id: 'sample', name: 'Sample', transport: 'stdio', command: process.execPath, args: [], envRefs: {},
     }))).status).toBe(201);
+    expect((await request('/api/servers/sample', { ...mutation({ id: 'sample', name: 'Updated', transport: 'stdio', command: process.execPath, args: [], envRefs: {} }), method: 'PUT' })).status).toBe(200);
     expect((await request('/api/servers/sample/connect', mutation({}))).status).toBe(200);
     expect((await request('/api/servers/sample')).status).toBe(200);
 
@@ -128,6 +152,10 @@ describe('API workbench flow', () => {
     expect(await (await request('/api/compare?runA=run-1&runB=run-2')).json()).toMatchObject({ runA: 'run-1', runB: 'run-2' });
     expect((await request('/api/runs/run-1/cancel', mutation({}))).status).toBe(202);
     expect(calls).toContainEqual({ method: 'cancelRun', value: 'run-1' });
+    expect((await request('/api/providers/local?force=true', { ...mutation(undefined), method: 'DELETE', body: undefined })).status).toBe(200);
+    expect((await request('/api/servers/sample?force=true', { ...mutation(undefined), method: 'DELETE', body: undefined })).status).toBe(200);
+    expect(calls).toContainEqual({ method: 'deleteProvider', value: { id: 'local', force: true } });
+    expect(calls).toContainEqual({ method: 'deleteServer', value: { id: 'sample', force: true } });
   });
 
   test('routes OAuth begin/status/callback/forget with state handled by the coordinator', async () => {

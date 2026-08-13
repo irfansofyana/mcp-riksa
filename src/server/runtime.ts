@@ -15,6 +15,7 @@ import { ConfigurationRepository } from '../storage/configurations.js';
 import { ConversationRepository } from '../storage/conversations.js';
 import { openDatabase, type WorkbenchDatabase } from '../storage/database.js';
 import { RunRepository } from '../storage/runs.js';
+import { WorkbenchError } from './errors.js';
 
 type RuntimeOptions = {
   databasePath: string;
@@ -43,6 +44,8 @@ export class WorkbenchRuntime {
   private readonly suites = new Map<string, { source: string; suite: Suite }>();
   private readonly activeRuns = new Map<string, AbortController>();
   private readonly activeRunTasks = new Map<string, Promise<void>>();
+  private readonly activeConfigUses = new Map<string, number>();
+  private readonly mutatingConfigs = new Set<string>();
 
   constructor(private readonly options: RuntimeOptions) {
     mkdirSync(options.suiteDirectory, { recursive: true });
@@ -95,17 +98,64 @@ export class WorkbenchRuntime {
     return { id: config.id, name: config.name, type: config.type };
   }
 
+  async seedProvider(input: ProviderConfig) {
+    const config = providerConfigSchema.parse(input);
+    if (!this.configurations.seed('provider', config.id, config)) return false;
+    this.providers.set(config.id, config);
+    return true;
+  }
+
+  async createProvider(input: ProviderConfig) {
+    const config = providerConfigSchema.parse(input);
+    await validateHttpEndpoint(config.baseUrl);
+    if (this.providers.has(config.id)) throw new WorkbenchError(`Model provider ${config.id} already exists`, 409);
+    this.configurations.insert('provider', config.id, config);
+    this.providers.set(config.id, config);
+    return { id: config.id, name: config.name, type: config.type, models: config.models };
+  }
+
+  async updateProvider(id: string, input: ProviderConfig) {
+    const config = providerConfigSchema.parse(input);
+    if (config.id !== id) throw new WorkbenchError('Provider ID cannot be changed while editing', 400);
+    this.requireProvider(id);
+    return this.withConfigMutation(`provider:${id}`, async () => {
+      await validateHttpEndpoint(config.baseUrl);
+      const references = this.providerReferences(id);
+      const removed = [...new Set(references.conversations.map((entry) => entry.model).concat(references.suiteModels))]
+        .filter((alias) => !Object.hasOwn(config.models, alias));
+      if (removed.length > 0) throw new WorkbenchError(`Cannot remove referenced model aliases: ${removed.join(', ')}`, 409, { references, removedModels: removed });
+      if (!this.configurations.update('provider', id, config)) throw new WorkbenchError(`Model provider ${id} not found`, 404);
+      this.providers.set(id, config);
+      return { id, name: config.name, type: config.type, models: config.models };
+    });
+  }
+
+  async deleteProvider(id: string, force = false) {
+    this.requireProvider(id);
+    return this.withConfigMutation(`provider:${id}`, async () => {
+      const references = this.providerReferences(id);
+      if (!force && (references.suites.length > 0 || references.conversations.length > 0)) {
+        throw new WorkbenchError(`Model provider ${id} is still referenced`, 409, references);
+      }
+      this.configurations.delete('provider', id);
+      this.providers.delete(id);
+      return { id, deleted: true, references, forced: force };
+    });
+  }
+
   async testProvider(id: string) {
     const config = this.requireProvider(id);
-    const adapter = createProviderAdapter(config);
-    try {
-      if (adapter.listModels) return { id, ok: true, models: await adapter.listModels() };
-      const model = Object.keys(config.models)[0]!;
-      await adapter.complete({ model, messages: [{ role: 'user', content: 'Reply with OK.' }], tools: [] });
-      return { id, ok: true, models: Object.keys(config.models), discovery: 'not-supported' };
-    } finally {
-      await adapter.close?.();
-    }
+    return this.withConfigUse([`provider:${id}`], async () => {
+      const adapter = createProviderAdapter(config);
+      try {
+        if (adapter.listModels) return { id, ok: true, models: await adapter.listModels() };
+        const model = Object.keys(config.models)[0]!;
+        await adapter.complete({ model, messages: [{ role: 'user', content: 'Reply with OK.' }], tools: [] });
+        return { id, ok: true, models: Object.keys(config.models), discovery: 'not-supported' };
+      } finally {
+        await adapter.close?.();
+      }
+    });
   }
 
   async addServer(input: ServerConfig) {
@@ -115,35 +165,84 @@ export class WorkbenchRuntime {
     return { id: config.id, name: config.name, transport: config.transport };
   }
 
+  async seedServer(input: ServerConfig) {
+    const config = serverConfigSchema.parse(input);
+    if (!this.configurations.seed('server', config.id, config)) return false;
+    this.servers.set(config.id, config);
+    return true;
+  }
+
+  async createServer(input: ServerConfig) {
+    const config = serverConfigSchema.parse(input);
+    if (this.servers.has(config.id)) throw new WorkbenchError(`MCP server ${config.id} already exists`, 409);
+    this.configurations.insert('server', config.id, config);
+    this.servers.set(config.id, config);
+    return { id: config.id, name: config.name, transport: config.transport };
+  }
+
+  async updateServer(id: string, input: ServerConfig) {
+    const config = serverConfigSchema.parse(input);
+    if (config.id !== id) throw new WorkbenchError('Server ID cannot be changed while editing', 400);
+    this.requireServer(id);
+    return this.withConfigMutation(`server:${id}`, async () => {
+      await this.mcp.disconnect(id);
+      this.oauth.forget(id);
+      if (!this.configurations.update('server', id, config)) throw new WorkbenchError(`MCP server ${id} not found`, 404);
+      this.servers.set(id, config);
+      return { id, name: config.name, transport: config.transport, reconnectRequired: true };
+    });
+  }
+
+  async deleteServer(id: string, force = false) {
+    this.requireServer(id);
+    return this.withConfigMutation(`server:${id}`, async () => {
+      const references = this.serverReferences(id);
+      if (!force && (references.suites.length > 0 || references.conversations.length > 0)) {
+        throw new WorkbenchError(`MCP server ${id} is still referenced`, 409, references);
+      }
+      await this.mcp.disconnect(id);
+      this.oauth.forget(id);
+      this.configurations.delete('server', id);
+      this.servers.delete(id);
+      return { id, deleted: true, references, forced: force };
+    });
+  }
+
   async connectServer(id: string) {
     const config = this.requireServer(id);
-    let provider;
-    try { provider = this.oauth.getProvider(id); } catch { provider = undefined; }
-    return this.mcp.connect(config, provider);
+    return this.withConfigUse([`server:${id}`], async () => {
+      let provider;
+      try { provider = this.oauth.getProvider(id); } catch { provider = undefined; }
+      return this.mcp.connect(config, provider);
+    });
   }
 
   async inspectServer(id: string) {
-    return this.mcp.inspect(id);
+    this.requireServer(id);
+    if (!this.mcp.isConnected(id)) throw new WorkbenchError(`MCP server ${id} is not connected`, 409);
+    return this.withConfigUse([`server:${id}`], () => this.mcp.inspect(id));
   }
 
   async callTool(id: string, tool: string, args: Record<string, unknown>, options: { confirmDangerous: boolean }) {
-    return this.mcp.call(id, tool, args, options);
+    this.requireServer(id);
+    if (!this.mcp.isConnected(id)) throw new WorkbenchError(`MCP server ${id} is not connected`, 409);
+    return this.withConfigUse([`server:${id}`], () => this.mcp.call(id, tool, args, options));
   }
 
   async playground(input: PlaygroundInput) {
     const { serverId, providerId, model, config } = this.resolvePlayground(input);
-    return runAgent({
+    return this.withConfigUse([`server:${serverId}`, `provider:${providerId}`], () => runAgent({
       prompt: input.prompt,
       model,
       serverId,
       limits: input.limits ?? { maxTurns: 8, maxToolCalls: 16, timeoutMs: 60_000 },
-    }, { provider: createProviderAdapter(config), mcp: this.mcp });
+    }, { provider: createProviderAdapter(config), mcp: this.mcp }));
   }
 
   async createConversation(input: { serverId: string; providerId: string; model: string }) {
     this.requireServer(input.serverId);
     const provider = this.requireProvider(input.providerId);
-    if (!provider.models[input.model]) throw new Error(`Unknown model alias ${input.model} for provider ${input.providerId}`);
+    if (!Object.hasOwn(provider.models, input.model)) throw new WorkbenchError(`Unknown model alias ${input.model} for provider ${input.providerId}`, 400);
     return this.conversations.create(input);
   }
 
@@ -175,13 +274,13 @@ export class WorkbenchRuntime {
         })),
       ];
     });
-    const result = await runAgent({
+    const result = await this.withConfigUse([`server:${resolved.serverId}`, `provider:${resolved.providerId}`], () => runAgent({
       prompt: input.prompt,
       model: resolved.model,
       serverId: resolved.serverId,
       limits: input.limits ?? { maxTurns: 8, maxToolCalls: 16, timeoutMs: 60_000 },
       history: providerHistory,
-    }, { provider: createProviderAdapter(resolved.config), mcp: this.mcp }, { signal, onUpdate });
+    }, { provider: createProviderAdapter(resolved.config), mcp: this.mcp }, { signal, onUpdate }));
     this.conversations.appendTurn(
       conversation.id,
       { role: 'user', content: input.prompt },
@@ -215,7 +314,16 @@ export class WorkbenchRuntime {
     const startedAt = new Date().toISOString();
     const controller = new AbortController();
     this.activeRuns.set(id, controller);
-    this.runs.start(id, name, startedAt);
+    const configKeys = [...new Set(stored.suite.cases.flatMap((entry) => [
+      `server:${entry.server}`,
+      ...(entry.kind === 'agent' ? [`provider:${entry.provider}`] : []),
+    ]))];
+    this.beginConfigUse(configKeys);
+    try { this.runs.start(id, name, startedAt); } catch (error) {
+      this.endConfigUse(configKeys);
+      this.activeRuns.delete(id);
+      throw error;
+    }
     const task = runSuite(stored.suite, {
       direct: (entry, signal) => this.directObservation(entry.server, entry.call.tool, entry.call.arguments, entry.call.dangerous ?? false, signal),
       agent: (entry) => runAgent({ prompt: entry.prompt, model: entry.model, serverId: entry.server, limits: entry.limits }, {
@@ -227,6 +335,7 @@ export class WorkbenchRuntime {
       .finally(() => {
         this.activeRuns.delete(id);
         this.activeRunTasks.delete(id);
+        this.endConfigUse(configKeys);
       });
     this.activeRunTasks.set(id, task);
     return { id, suite: name, status: 'running' as const, startedAt };
@@ -245,8 +354,8 @@ export class WorkbenchRuntime {
 
   async beginOAuth(id: string) {
     const config = this.requireServer(id);
-    if (config.transport !== 'http') throw new Error('OAuth is available only for Streamable HTTP servers');
-    return this.oauth.begin({
+    if (config.transport !== 'http') throw new WorkbenchError('OAuth is available only for Streamable HTTP servers', 400);
+    return this.withConfigUse([`server:${id}`], () => this.oauth.begin({
       id,
       serverUrl: config.url,
       callbackUrl: this.options.callbackUrl,
@@ -254,12 +363,20 @@ export class WorkbenchRuntime {
       timeoutMs: config.oauth?.timeoutMs ?? 120_000,
       ...(config.oauth?.clientId === undefined ? {} : { clientId: config.oauth.clientId }),
       ...(config.oauth?.clientSecretEnv === undefined ? {} : { clientSecretEnv: config.oauth.clientSecretEnv }),
-    });
+    }));
   }
 
   async oauthCallback(parameters: Record<string, string>) { return this.oauth.callbackByState(parameters); }
-  async oauthStatus(id: string) { return this.oauth.status(id); }
-  async forgetOAuth(id: string) { this.oauth.forget(id); }
+  async oauthStatus(id: string) {
+    this.requireServer(id);
+    try { return this.oauth.status(id); } catch { throw new WorkbenchError(`OAuth session for ${id} not found`, 404); }
+  }
+  async forgetOAuth(id: string) {
+    this.requireServer(id);
+    return this.withConfigMutation(`server:${id}`, async () => {
+      try { await this.mcp.disconnect(id); } finally { this.oauth.forget(id); }
+    });
+  }
 
   async close(): Promise<void> {
     for (const controller of this.activeRuns.values()) controller.abort(new Error('Runtime closing'));
@@ -291,18 +408,59 @@ export class WorkbenchRuntime {
     if (!serverId || !providerId) throw new Error('Playground requires a connected server and model provider');
     const config = this.requireProvider(providerId);
     const model = input.model ?? Object.keys(config.models)[0]!;
+    if (!Object.hasOwn(config.models, model)) throw new WorkbenchError(`Unknown model alias ${model} for provider ${providerId}`, 400);
     return { serverId, providerId, model, config };
+  }
+
+  private serverReferences(id: string) {
+    return {
+      suites: [...this.suites.values()].filter(({ suite }) => suite.cases.some((entry) => entry.server === id)).map(({ suite }) => suite.name),
+      conversations: this.conversations.referencesServer(id),
+    };
+  }
+
+  private providerReferences(id: string) {
+    const suites = [...this.suites.values()].filter(({ suite }) => suite.cases.some((entry) => entry.kind === 'agent' && entry.provider === id));
+    return {
+      suites: suites.map(({ suite }) => suite.name),
+      suiteModels: suites.flatMap(({ suite }) => suite.cases.flatMap((entry) => entry.kind === 'agent' && entry.provider === id ? [entry.model] : [])),
+      conversations: this.conversations.referencesProvider(id),
+    };
+  }
+
+  private beginConfigUse(keys: string[]): void {
+    const blocked = keys.find((key) => this.mutatingConfigs.has(key));
+    if (blocked) throw new WorkbenchError(`Configuration ${blocked.replace(':', ' ')} is being changed`, 409);
+    for (const key of keys) this.activeConfigUses.set(key, (this.activeConfigUses.get(key) ?? 0) + 1);
+  }
+
+  private endConfigUse(keys: string[]): void {
+    for (const key of keys) {
+      const next = (this.activeConfigUses.get(key) ?? 1) - 1;
+      if (next <= 0) this.activeConfigUses.delete(key); else this.activeConfigUses.set(key, next);
+    }
+  }
+
+  private async withConfigUse<T>(keys: string[], operation: () => Promise<T>): Promise<T> {
+    this.beginConfigUse(keys);
+    try { return await operation(); } finally { this.endConfigUse(keys); }
+  }
+
+  private async withConfigMutation<T>(key: string, operation: () => Promise<T>): Promise<T> {
+    if (this.mutatingConfigs.has(key) || (this.activeConfigUses.get(key) ?? 0) > 0) throw new WorkbenchError('Configuration is currently in use', 409);
+    this.mutatingConfigs.add(key);
+    try { return await operation(); } finally { this.mutatingConfigs.delete(key); }
   }
 
   private requireProvider(id: string): ProviderConfig {
     const config = this.providers.get(id);
-    if (!config) throw new Error(`Model provider ${id} not found`);
+    if (!config) throw new WorkbenchError(`Model provider ${id} not found`, 404);
     return config;
   }
 
   private requireServer(id: string): ServerConfig {
     const config = this.servers.get(id);
-    if (!config) throw new Error(`MCP server ${id} not found`);
+    if (!config) throw new WorkbenchError(`MCP server ${id} not found`, 404);
     return config;
   }
 }

@@ -130,6 +130,14 @@ export class ConversationRepository {
     return this.database.prepare('DELETE FROM playground_conversations WHERE id = ?').run(id).changes > 0;
   }
 
+  referencesServer(serverId: string): Array<{ id: string; title: string }> {
+    return this.database.prepare('SELECT id, title FROM playground_conversations WHERE server_id = ? ORDER BY updated_at DESC').all(serverId) as Array<{ id: string; title: string }>;
+  }
+
+  referencesProvider(providerId: string): Array<{ id: string; title: string; model: string }> {
+    return this.database.prepare('SELECT id, title, model FROM playground_conversations WHERE provider_id = ? ORDER BY updated_at DESC').all(providerId) as Array<{ id: string; title: string; model: string }>;
+  }
+
   events(conversationId: string): NormalizedEvent[] {
     return [...this.eventMap(conversationId).values()].flat();
   }

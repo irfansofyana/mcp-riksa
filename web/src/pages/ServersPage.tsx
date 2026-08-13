@@ -1,18 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { Button, Empty, Field, Input, JsonView, Notice, RichToolResult, Section, Select, Status, Textarea } from '../components.js';
-import { buildServerPayload, buildToolArguments, buildToolFields, initialToolValues, type ServerForm } from '../model.js';
+import { buildServerPayload, buildToolArguments, buildToolFields, initialToolValues, serverToForm, type ServerForm } from '../model.js';
 import type { ServerSummary, Tool } from '../types.js';
 
 type OAuthStatus = { id?: string; state: string; scopes: string[]; timeline: unknown[]; authorizationUrl?: string; expiresAt?: string };
 
-const initialForm: ServerForm = {
-  id: '', name: '', transport: 'stdio', command: 'node', args: '', url: 'http://127.0.0.1:3000/mcp', headerEnv: '',
-  oauthScopes: '', oauthClientId: '', oauthClientSecretEnv: '',
-};
+const initialForm = (): ServerForm => ({
+  id: '', name: '', transport: 'stdio', command: 'node', args: '', cwd: '', envRefs: '',
+  url: 'http://127.0.0.1:3000/mcp', headerEnv: '', allowUnsafeEndpoint: false,
+  oauthEnabled: false, oauthScopes: '', oauthClientId: '', oauthClientSecretEnv: '', oauthTimeoutMs: '120000',
+});
 
 export function ServersPage({ servers, onRefresh }: { servers: ServerSummary[]; onRefresh(): Promise<void> }) {
   const [form, setForm] = useState(initialForm);
+  const [editingId, setEditingId] = useState('');
   const [selected, setSelected] = useState(servers[0]?.id ?? '');
   const [inspection, setInspection] = useState<{ id: string; identity: unknown; capabilities: unknown; tools: Tool[] }>();
   const [tool, setTool] = useState('');
@@ -40,6 +42,10 @@ export function ServersPage({ servers, onRefresh }: { servers: ServerSummary[]; 
   }, [tool, inspection]);
 
   const change = <K extends keyof ServerForm>(key: K, value: ServerForm[K]) => setForm((current) => ({ ...current, [key]: value }));
+  const resetForm = () => { setForm(initialForm()); setEditingId(''); };
+  const clearInspection = () => { setInspection(undefined); setTool(''); setResult(undefined); setConfirmed(false); setToolValues({}); setArgumentsText('{}'); };
+  const editServer = (server: ServerSummary) => { setForm(serverToForm(server)); setEditingId(server.id); setSelected(server.id); setMessage(''); setError(''); };
+  const duplicateServer = (server: ServerSummary) => { const next = serverToForm(server); setForm({ ...next, id: `${server.id}-copy`, name: `${server.name} copy` }); setEditingId(''); setMessage('Duplicate loaded. Choose a unique server ID.'); };
   const act = async (operation: () => Promise<void>) => {
     setError(''); setMessage('');
     try { await operation(); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
@@ -105,11 +111,20 @@ export function ServersPage({ servers, onRefresh }: { servers: ServerSummary[]; 
 
   return <div className="page-grid servers-page">
     <Section title="MCP servers" className="rail-section" action={<span className="count">{servers.length}</span>}>
-      <div className="row-list" data-testid="server-list">
-        {servers.length === 0 ? <Empty>Register a stdio or Streamable HTTP server to begin.</Empty> : servers.map((server) =>
-          <button key={server.id} className={`row-button ${selected === server.id ? 'selected' : ''}`} onClick={() => { setSelected(server.id); setInspection(undefined); setTool(''); setResult(undefined); setConfirmed(false); setToolValues({}); setArgumentsText('{}'); }}>
-            <span><b>{server.name}</b><small>{server.transport} · {server.id}</small></span><Status value={server.connected ? 'connected' : 'saved'} />
-          </button>)}
+      <div className="row-list server-config-list" data-testid="server-list">
+        {servers.length === 0 ? <Empty>Register a stdio or Streamable HTTP server to begin.</Empty> : servers.map((server) => <div key={server.id} className={`config-list-item ${selected === server.id ? 'selected' : ''}`}>
+          <button className="config-select" onClick={() => { setSelected(server.id); clearInspection(); }}><span><b>{server.name}</b><small>{server.transport} · {server.id}</small></span><Status value={server.connected ? 'connected' : 'saved'} /></button>
+          <div className="config-actions compact"><Button onClick={() => editServer(server)}>Edit</Button><Button onClick={() => duplicateServer(server)}>Duplicate</Button><Button variant="danger" onClick={() => void act(async () => {
+            try { await api.deleteServer(server.id); }
+            catch (reason) {
+              if (!(reason instanceof Error) || !reason.message.includes('referenced') || !window.confirm(`${reason.message}. Delete anyway? Saved suites and conversations will remain unresolved until this ID is restored.`)) throw reason;
+              await api.deleteServer(server.id, true);
+            }
+            if (selected === server.id) { setSelected(''); clearInspection(); }
+            if (editingId === server.id) resetForm();
+            await onRefresh(); setMessage('MCP server deleted.');
+          })}>Delete</Button></div>
+        </div>)}
       </div>
       <div className="button-row">
         <Button variant="primary" disabled={!selected} data-testid="connect-server" onClick={() => void act(async () => { await api.connectServer(selected); await inspect(selected); await onRefresh(); setMessage('Connected and inspected.'); })}>Connect & inspect</Button>
@@ -118,22 +133,29 @@ export function ServersPage({ servers, onRefresh }: { servers: ServerSummary[]; 
     </Section>
 
     <div className="workspace-stack">
-      <Section title="Register server">
-        <form className="form-grid" onSubmit={(event) => { event.preventDefault(); void act(async () => { await api.addServer(buildServerPayload(form)); setSelected(form.id); setForm(initialForm); await onRefresh(); setMessage('Server saved.'); }); }}>
-          <Field label="Alias"><Input required value={form.id} onChange={(event) => change('id', event.target.value)} placeholder="sample" data-testid="server-id" /></Field>
+      <Section title={editingId ? `Edit server · ${editingId}` : 'Register server'} action={editingId ? <Status value="editing" /> : undefined}>
+        <form className="form-grid" onSubmit={(event) => { event.preventDefault(); void act(async () => { const payload = buildServerPayload(form); if (editingId) await api.updateServer(editingId, payload); else await api.addServer(payload); setSelected(form.id); clearInspection(); await onRefresh(); setMessage(editingId ? 'Server updated. Reconnect to apply changes.' : 'Server created.'); resetForm(); }); }}>
+          <Field label="Server ID" hint={editingId ? 'ID is immutable. Duplicate to create a new ID.' : 'Stable alias used by suites and conversations.'}><Input required disabled={Boolean(editingId)} value={form.id} onChange={(event) => change('id', event.target.value)} placeholder="sample" data-testid="server-id" /></Field>
           <Field label="Display name"><Input required value={form.name} onChange={(event) => change('name', event.target.value)} placeholder="Sample tools" data-testid="server-name" /></Field>
           <Field label="Transport"><Select value={form.transport} onChange={(event) => change('transport', event.target.value as ServerForm['transport'])}><option value="stdio">stdio</option><option value="http">Streamable HTTP</option></Select></Field>
           {form.transport === 'stdio' ? <>
             <Field label="Executable" hint="Spawned directly; no shell is used."><Input required value={form.command} onChange={(event) => change('command', event.target.value)} data-testid="server-command" /></Field>
-            <Field label="Arguments" hint="Space-separated argument vector."><Input value={form.args} onChange={(event) => change('args', event.target.value)} data-testid="server-args" /></Field>
+            <Field label="Arguments" hint={'JSON string array preserves spaces, e.g. ["--prompt","hello world"].'}><Input value={form.args} onChange={(event) => change('args', event.target.value)} data-testid="server-args" placeholder={'["--flag","value"]'} /></Field>
+            <Field label="Working directory"><Input value={form.cwd ?? ''} onChange={(event) => change('cwd', event.target.value)} /></Field>
+            <Field label="Environment refs" hint="NAME=ENV_NAME, never resolved values."><Input value={form.envRefs ?? ''} onChange={(event) => change('envRefs', event.target.value)} /></Field>
           </> : <>
             <Field label="Endpoint"><Input type="url" required value={form.url} onChange={(event) => change('url', event.target.value)} /></Field>
             <Field label="Header env references" hint="Header=ENV_NAME, never a value."><Input value={form.headerEnv} onChange={(event) => change('headerEnv', event.target.value)} /></Field>
-            <Field label="OAuth scopes" hint="Space-separated scopes for interactive OAuth."><Input value={form.oauthScopes} onChange={(event) => change('oauthScopes', event.target.value)} placeholder="mcp:read mcp:write" /></Field>
-            <Field label="OAuth client ID" hint="Optional. Leave blank to use DCR when advertised."><Input value={form.oauthClientId} onChange={(event) => change('oauthClientId', event.target.value)} /></Field>
-            <Field label="OAuth client-secret env" hint="Environment variable name only."><Input value={form.oauthClientSecretEnv} onChange={(event) => change('oauthClientSecretEnv', event.target.value)} placeholder="MCP_OAUTH_CLIENT_SECRET" /></Field>
+            <label className="check"><input type="checkbox" checked={form.oauthEnabled ?? false} onChange={(event) => change('oauthEnabled', event.target.checked)} /> Enable interactive OAuth</label>
+            {form.oauthEnabled ? <>
+              <Field label="OAuth scopes" hint="Space-separated scopes for interactive OAuth."><Input value={form.oauthScopes} onChange={(event) => change('oauthScopes', event.target.value)} placeholder="mcp:read mcp:write" /></Field>
+              <Field label="OAuth client ID" hint="Optional. Leave blank to use DCR when advertised."><Input value={form.oauthClientId} onChange={(event) => change('oauthClientId', event.target.value)} /></Field>
+              <Field label="OAuth client-secret env" hint="Environment variable name only."><Input value={form.oauthClientSecretEnv} onChange={(event) => change('oauthClientSecretEnv', event.target.value)} placeholder="MCP_OAUTH_CLIENT_SECRET" /></Field>
+              <Field label="OAuth timeout (ms)"><Input type="number" min={1} max={300000} value={form.oauthTimeoutMs ?? '120000'} onChange={(event) => change('oauthTimeoutMs', event.target.value)} /></Field>
+            </> : null}
+            <label className="check"><input type="checkbox" checked={form.allowUnsafeEndpoint ?? false} onChange={(event) => change('allowUnsafeEndpoint', event.target.checked)} /> Allow endpoint addresses blocked by default safety policy</label>
           </>}
-          <div className="form-actions"><Button variant="primary" type="submit" data-testid="save-server">Save server</Button></div>
+          <div className="form-actions"><Button variant="primary" type="submit" data-testid="save-server">{editingId ? 'Save changes' : 'Create server'}</Button>{editingId || form.id ? <Button type="button" onClick={resetForm}>Cancel</Button> : null}</div>
         </form>
         {message ? <Notice>{message}</Notice> : null}{error ? <Notice error>{error}</Notice> : null}
       </Section>
