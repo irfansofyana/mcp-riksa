@@ -12,9 +12,14 @@ export class ConfigurationRepository {
   }
 
   seed(kind: 'provider' | 'server', id: string, config: unknown): boolean {
-    if (this.has(kind, id) || this.database.prepare('SELECT 1 FROM configuration_tombstones WHERE kind = ? AND id = ?').get(kind, id) !== undefined) return false;
+    if (!this.canSeed(kind, id)) return false;
     this.insert(kind, id, config);
     return true;
+  }
+
+  canSeed(kind: 'provider' | 'server', id: string): boolean {
+    return !this.has(kind, id)
+      && this.database.prepare('SELECT 1 FROM configuration_tombstones WHERE kind = ? AND id = ?').get(kind, id) === undefined;
   }
 
   update(kind: 'provider' | 'server', id: string, config: unknown): boolean {

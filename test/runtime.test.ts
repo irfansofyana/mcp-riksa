@@ -95,6 +95,21 @@ describe('concrete workbench runtime', () => {
     await runtime.close();
   });
 
+  test('ignores invalid provider seeds when the ID is already stored or tombstoned', async () => {
+    const invalidSeed = {
+      id: 'stale', name: 'Stale config', type: 'openai-compatible' as const,
+      baseUrl: 'http://user:password@127.0.0.1:4000/v1', models: { default: 'test' },
+      headerEnv: {}, pricing: { inputPerMillion: 0, outputPerMillion: 0 },
+    };
+    const { runtime } = createRuntime();
+    await runtime.addProvider({ ...invalidSeed, name: 'Stored', baseUrl: 'http://127.0.0.1:4000/v1' });
+    await expect(runtime.seedProvider(invalidSeed)).resolves.toBe(false);
+    await runtime.deleteProvider('stale');
+    await expect(runtime.seedProvider(invalidSeed)).resolves.toBe(false);
+    expect((await runtime.bootstrap() as { providers: unknown[] }).providers).toEqual([]);
+    await runtime.close();
+  });
+
   test('resolves a configured model alias before sending a playground request upstream', async () => {
     let receivedModel = '';
     const provider = createServer(async (request, response) => {
