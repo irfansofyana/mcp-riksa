@@ -21,7 +21,7 @@ export function PlaygroundPage({ servers, providers, onRefresh }: { servers: Ser
   const aliases = useMemo(() => Object.keys(selectedProvider?.models ?? {}), [selectedProvider]);
   const [model, setModel] = useState('');
   const selectedModel = aliases.includes(model) ? model : aliases[0] ?? '';
-  const [railTab, setRailTab] = useState<'tools' | 'sessions'>('tools');
+  const [railTab, setRailTab] = useState<'tools' | 'sessions'>('sessions');
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [conversation, setConversation] = useState<ConversationDetail>();
   const [tools, setTools] = useState<Tool[]>([]);
