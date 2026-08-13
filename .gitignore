@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.workbench/
+coverage/
+*.db
+*.db-shm
+*.db-wal
+*.log
+.env
+.env.*
+!.env.example
+test-results/
+tmp/

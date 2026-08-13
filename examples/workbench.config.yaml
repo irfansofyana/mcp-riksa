@@ -1,0 +1,22 @@
+version: 1
+servers:
+  - id: sample
+    name: Deterministic sample
+    transport: stdio
+    command: node
+    args:
+      - node_modules/tsx/dist/cli.mjs
+      - examples/sample-mcp-server.ts
+    envRefs: {}
+providers:
+  - id: local-openai
+    name: Local OpenAI-compatible fake
+    type: openai-compatible
+    baseUrl: http://127.0.0.1:4000/v1
+    models:
+      default: test-model
+    apiKeyEnv: WORKBENCH_PROVIDER_API_KEY
+    headerEnv: {}
+    pricing:
+      inputPerMillion: 1
+      outputPerMillion: 2

@@ -1,0 +1,10 @@
+version: 1
+servers:
+  - id: sample
+    name: Deterministic sample
+    transport: stdio
+    command: node
+    args:
+      - dist/examples/sample-mcp-server.js
+    envRefs: {}
+providers: []

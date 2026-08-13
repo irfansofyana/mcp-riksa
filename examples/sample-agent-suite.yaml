@@ -1,0 +1,27 @@
+version: 1
+name: sample-agent
+description: Deterministic provider-to-MCP tool-loop regression suite.
+cases:
+  - id: agent-adds-two-numbers
+    kind: agent
+    server: sample
+    provider: local-openai
+    model: default
+    prompt: Add 2 and 3 with the available tool.
+    limits:
+      maxTurns: 4
+      maxToolCalls: 2
+      timeoutMs: 10000
+      maxCostUsd: 0.01
+    assertions:
+      - type: tool_called
+        tool: add
+      - type: tool_count
+        tool: add
+        count: 1
+      - type: contains
+        value: "5"
+      - type: tokens
+        max: 500
+      - type: cost
+        maxUsd: 0.01

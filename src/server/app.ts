@@ -1,0 +1,157 @@
+import { randomBytes } from 'node:crypto';
+import express, { type Express, type NextFunction, type Request, type Response } from 'express';
+import { z, ZodError } from 'zod';
+import { providerConfigSchema } from '../agent/types.js';
+import { redact } from '../core/redaction.js';
+import { serverConfigSchema } from '../mcp/manager.js';
+
+export type ApiRuntime = {
+  bootstrap(): Promise<unknown> | unknown;
+  settings(): Promise<unknown> | unknown;
+  addProvider(value: z.infer<typeof providerConfigSchema>): Promise<unknown> | unknown;
+  testProvider(id: string): Promise<unknown> | unknown;
+  addServer(value: z.infer<typeof serverConfigSchema>): Promise<unknown> | unknown;
+  connectServer(id: string): Promise<unknown> | unknown;
+  inspectServer(id: string): Promise<unknown> | unknown;
+  callTool(id: string, tool: string, args: Record<string, unknown>, options: { confirmDangerous: boolean }): Promise<unknown> | unknown;
+  playground(value: unknown): Promise<unknown> | unknown;
+  saveSuite(source: string): Promise<unknown> | unknown;
+  listSuites(): Promise<unknown> | unknown;
+  startSuite(name: string): Promise<unknown> | unknown;
+  listRuns(): Promise<unknown> | unknown;
+  getRun(id: string): Promise<unknown | undefined> | unknown | undefined;
+  cancelRun(id: string): Promise<boolean> | boolean;
+  compareRuns(runA: string, runB: string): Promise<unknown> | unknown;
+  beginOAuth(id: string): Promise<unknown> | unknown;
+  oauthCallback(parameters: Record<string, string>): Promise<unknown> | unknown;
+  oauthStatus(id: string): Promise<unknown> | unknown;
+  forgetOAuth(id: string): Promise<void> | void;
+  close(): Promise<void> | void;
+};
+
+const toolCallSchema = z.strictObject({
+  tool: z.string().min(1),
+  arguments: z.record(z.string(), z.unknown()).default({}),
+  confirmDangerous: z.boolean().default(false),
+});
+const suiteBodySchema = z.strictObject({ source: z.string().min(1) });
+const playgroundSchema = z.strictObject({
+  serverId: z.string().min(1).optional(),
+  providerId: z.string().min(1).optional(),
+  model: z.string().min(1).optional(),
+  prompt: z.string().min(1),
+  limits: z.object({
+    maxTurns: z.number().int().min(1).max(50),
+    maxToolCalls: z.number().int().min(1).max(100),
+    timeoutMs: z.number().int().min(1).max(300_000),
+    maxCostUsd: z.number().nonnegative().optional(),
+  }).optional(),
+});
+
+function isLoopback(value: string | undefined): boolean {
+  if (!value) return false;
+  const normalized = value.replace(/^::ffff:/, '').replace(/^\[|\]$/g, '').toLowerCase();
+  return normalized === '127.0.0.1' || normalized === '::1' || normalized === 'localhost';
+}
+
+function originIsLoopback(value: string | undefined): boolean {
+  if (!value) return false;
+  try {
+    return isLoopback(new URL(value).hostname);
+  } catch {
+    return false;
+  }
+}
+
+function send(response: Response, value: unknown, status = 200): void {
+  response.status(status).json(redact(value));
+}
+
+export function createApp(runtime: ApiRuntime, options: { sessionToken?: string; staticDirectory?: string } = {}): Express {
+  const app = express();
+  const sessionToken = options.sessionToken ?? randomBytes(32).toString('base64url');
+  app.disable('x-powered-by');
+  app.use(express.json({ limit: '1mb', strict: true }));
+
+  app.use('/api', (request, response, next) => {
+    if (!isLoopback(request.socket.remoteAddress)) {
+      return send(response, { error: 'API is available only from loopback' }, 403);
+    }
+    const mutating = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method);
+    if (mutating) {
+      if (!originIsLoopback(request.get('origin'))) return send(response, { error: 'Mutating requests require a loopback Origin' }, 403);
+      if (request.get('x-workbench-session') !== sessionToken) return send(response, { error: 'Invalid workbench session token' }, 403);
+    }
+    next();
+  });
+
+  app.get('/api/session', (_request, response) => send(response, { sessionToken, loopbackOnly: true }));
+  app.get('/api/bootstrap', async (_request, response) => send(response, await runtime.bootstrap()));
+  app.get('/api/settings', async (_request, response) => send(response, await runtime.settings()));
+
+  app.post('/api/providers', async (request, response) => {
+    const config = providerConfigSchema.parse(request.body);
+    send(response, await runtime.addProvider(config), 201);
+  });
+  app.post('/api/providers/:id/test', async (request, response) => send(response, await runtime.testProvider(request.params.id!)));
+
+  app.post('/api/servers', async (request, response) => {
+    const config = serverConfigSchema.parse(request.body);
+    send(response, await runtime.addServer(config), 201);
+  });
+  app.post('/api/servers/:id/connect', async (request, response) => send(response, await runtime.connectServer(request.params.id!)));
+  app.get('/api/servers/:id', async (request, response) => send(response, await runtime.inspectServer(request.params.id!)));
+  app.post('/api/servers/:id/call', async (request, response) => {
+    const input = toolCallSchema.parse(request.body);
+    send(response, await runtime.callTool(request.params.id!, input.tool, input.arguments, { confirmDangerous: input.confirmDangerous }));
+  });
+
+  app.post('/api/playground', async (request, response) => send(response, await runtime.playground(playgroundSchema.parse(request.body))));
+  app.get('/api/suites', async (_request, response) => send(response, await runtime.listSuites()));
+  app.post('/api/suites', async (request, response) => send(response, await runtime.saveSuite(suiteBodySchema.parse(request.body).source), 201));
+  app.post('/api/suites/:name/run', async (request, response) => send(response, await runtime.startSuite(request.params.name!), 202));
+
+  app.get('/api/runs', async (_request, response) => send(response, await runtime.listRuns()));
+  app.get('/api/runs/:id', async (request, response) => {
+    const run = await runtime.getRun(request.params.id!);
+    if (run === undefined) return send(response, { error: 'Run not found' }, 404);
+    send(response, run);
+  });
+  app.post('/api/runs/:id/cancel', async (request, response) => {
+    const cancelled = await runtime.cancelRun(request.params.id!);
+    send(response, { id: request.params.id, cancelled }, cancelled ? 202 : 404);
+  });
+  app.get('/api/compare', async (request, response) => {
+    const query = z.object({ runA: z.string().min(1), runB: z.string().min(1) }).parse(request.query);
+    send(response, await runtime.compareRuns(query.runA, query.runB));
+  });
+
+  app.post('/api/servers/:id/oauth/begin', async (request, response) => send(response, await runtime.beginOAuth(request.params.id!)));
+  app.get('/api/servers/:id/oauth', async (request, response) => send(response, await runtime.oauthStatus(request.params.id!)));
+  app.post('/api/servers/:id/oauth/forget', async (request, response) => {
+    await runtime.forgetOAuth(request.params.id!);
+    response.status(204).end();
+  });
+  app.get('/api/oauth/callback', async (request, response) => {
+    const query = z.object({
+      code: z.string().optional(),
+      state: z.string().optional(),
+      error: z.string().optional(),
+      error_description: z.string().optional(),
+    }).parse(request.query);
+    send(response, await runtime.oauthCallback(Object.fromEntries(Object.entries(query).filter((entry): entry is [string, string] => entry[1] !== undefined))));
+  });
+
+  if (options.staticDirectory) {
+    app.use(express.static(options.staticDirectory, { index: false, dotfiles: 'deny' }));
+    app.get('*path', (_request, response) => response.sendFile('index.html', { root: options.staticDirectory }));
+  }
+
+  app.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {
+    const status = error instanceof ZodError ? 400 : 500;
+    const message = error instanceof ZodError ? 'Request validation failed' : error instanceof Error ? error.message : 'Internal error';
+    send(response, { error: message, ...(error instanceof ZodError ? { issues: error.issues } : {}) }, status);
+  });
+
+  return app;
+}

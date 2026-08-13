@@ -1,42 +1,49 @@
 {
   "name": "mcp-local-workbench",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "version": "0.1.0",
+  "description": "Local-first MCP server and agent evaluation workbench",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "mcp-workbench": "dist/src/cli/index.js"
+  },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "tsx src/cli/index.ts serve --dev",
+    "serve": "tsx src/cli/index.ts serve",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "build:server": "tsc -p tsconfig.build.json",
+    "build:web": "vite build",
+    "build": "npm run build:server && npm run build:web",
+    "start": "node dist/src/cli/index.js serve"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/irfansofyana/mcp-local-workbench.git"
+  "engines": {
+    "node": ">=24"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
-  "bugs": {
-    "url": "https://github.com/irfansofyana/mcp-local-workbench/issues"
-  },
-  "homepage": "https://github.com/irfansofyana/mcp-local-workbench#readme",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "better-sqlite3": "^13.0.3",
+    "commander": "^15.0.0",
+    "express": "^5.2.1",
+    "oauth4webapi": "^3.8.7",
+    "openai": "^7.4.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "undici": "^7.29.0",
+    "yaml": "^2.9.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
     "@types/express": "^5.0.6",
     "@types/node": "^26.2.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^6.0.5",
-    "better-sqlite3": "^13.0.3",
-    "commander": "^15.0.0",
-    "express": "^5.2.1",
-    "openai": "^7.4.0",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8",
     "tsx": "^4.23.12",
     "typescript": "^7.0.2",
     "vite": "^8.2.1",
-    "vitest": "^4.1.10",
-    "yaml": "^2.9.0",
-    "zod": "^4.4.3"
+    "vitest": "^4.1.10"
   }
 }
