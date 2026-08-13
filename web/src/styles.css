@@ -443,6 +443,7 @@ textarea { resize: vertical; font-family: ui-monospace, monospace; font-size: 11
 :root[data-theme="light"] .nav-rail { background: #eee6d8; }
 :root[data-theme="light"] .live-dot { box-shadow: 0 0 0 2px #c9ddc7; }
 :root[data-theme="light"] .theme-toggle { background: #dfd3c0; }
+:root[data-theme="light"] .theme-toggle-label { color: #61574d; }
 :root[data-theme="light"] .theme-toggle button:hover { background: #f7f0e5; }
 :root[data-theme="light"] .theme-toggle button.selected { color: #fff9ed; border-color: #7c3c10; background: #8f4513; }
 :root[data-theme="light"] .nav-rail a:hover,
@@ -476,7 +477,7 @@ textarea { resize: vertical; font-family: ui-monospace, monospace; font-size: 11
 :root[data-theme="light"] .scope-list code,
 :root[data-theme="light"] .live-tools > span { color: #265f38; border-color: #72a17a; background: #e1efdf; }
 :root[data-theme="light"] .status.fail { color: #8b3029; border-color: #bd6b62; background: #f8e3df; }
-:root[data-theme="light"] .live-tools small { color: #4f7b58; }
+:root[data-theme="light"] .live-tools small { color: #365f40; }
 
 :root[data-theme="light"] .row-button,
 :root[data-theme="light"] .config-list-item,
@@ -534,7 +535,7 @@ textarea { resize: vertical; font-family: ui-monospace, monospace; font-size: 11
 :root[data-theme="light"] .yaml-note code,
 :root[data-theme="light"] .expected-actual code,
 :root[data-theme="light"] .provider-row code { color: #713b13; }
-:root[data-theme="light"] .playground-view-tabs button span { background: #ddd0bd; }
+:root[data-theme="light"] .playground-view-tabs button span { color: #594f45; background: #ddd0bd; }
 
 :root[data-theme="light"] .message-avatar { background: #f2dfc6; }
 :root[data-theme="light"] .chat-message.user .message-avatar { border-color: #aa9983; background: #eee6d8; }

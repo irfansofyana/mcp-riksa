@@ -7,6 +7,10 @@ export type ResolvedTheme = Exclude<ThemePreference, 'system'>;
 
 type ThemeStorage = Pick<Storage, 'getItem' | 'setItem'>;
 
+function browserStorage(): ThemeStorage | undefined {
+  try { return window.localStorage; } catch { return undefined; }
+}
+
 export function isThemePreference(value: unknown): value is ThemePreference {
   return typeof value === 'string' && themePreferences.includes(value as ThemePreference);
 }
@@ -38,7 +42,7 @@ export function applyTheme(theme: ResolvedTheme, root: HTMLElement, themeColor?:
 
 export function useThemePreference() {
   const [media] = useState(() => window.matchMedia('(prefers-color-scheme: dark)'));
-  const [preference, setPreferenceState] = useState<ThemePreference>(() => readThemePreference(window.localStorage));
+  const [preference, setPreferenceState] = useState<ThemePreference>(() => readThemePreference(browserStorage()));
   const [systemPrefersDark, setSystemPrefersDark] = useState(media.matches);
   const resolvedTheme = resolveTheme(preference, systemPrefersDark);
 
@@ -53,7 +57,7 @@ export function useThemePreference() {
   }, [resolvedTheme]);
 
   const setPreference = useCallback((next: ThemePreference) => {
-    persistThemePreference(next, window.localStorage);
+    persistThemePreference(next, browserStorage());
     setPreferenceState(next);
   }, []);
 
