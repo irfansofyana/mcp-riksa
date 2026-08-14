@@ -1,4 +1,4 @@
-# MCP Local Workbench MVP Design
+# MCP Riksa MVP Design
 
 ## Product boundary
 

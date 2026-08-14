@@ -40,9 +40,13 @@ function sampleConfiguration(): ServerConfig {
   };
 }
 
-async function applyConfiguration(runtime: WorkbenchRuntime, config: WorkbenchConfiguration): Promise<void> {
-  for (const provider of config.providers) await runtime.addProvider(provider);
-  for (const server of config.servers) await runtime.addServer(server);
+async function applyConfiguration(runtime: WorkbenchRuntime, config: WorkbenchConfiguration, overwrite = true): Promise<void> {
+  for (const provider of config.providers) {
+    if (overwrite) await runtime.addProvider(provider); else await runtime.seedProvider(provider);
+  }
+  for (const server of config.servers) {
+    if (overwrite) await runtime.addServer(server); else await runtime.seedServer(server);
+  }
 }
 
 async function waitForRun(runtime: WorkbenchRuntime, id: string): Promise<RunResult> {
@@ -54,8 +58,8 @@ async function waitForRun(runtime: WorkbenchRuntime, id: string): Promise<RunRes
 }
 
 const program = new Command()
-  .name('mcp-workbench')
-  .description('Local-first MCP evaluation workbench')
+  .name('mcp-riksa')
+  .description('Local-first MCP Riksa evaluation workspace')
   .version('0.1.0');
 
 program.command('inspect')
@@ -82,7 +86,7 @@ program.command('run')
   .argument('<suite>', 'suite YAML path')
   .option('--config <path>', 'workbench YAML configuration')
   .option('--sample', 'register the deterministic sample stdio server')
-  .option('--data-dir <path>', 'runtime data directory', '.workbench/cli')
+  .option('--data-dir <path>', 'runtime data directory', '.mcp-riksa/cli')
   .option('--output <path>', 'report output directory', 'reports')
   .action(async (suitePath: string, options: { config?: string; sample?: boolean; dataDir: string; output: string }) => {
     const dataDirectory = resolve(options.dataDir);
@@ -117,7 +121,7 @@ program.command('serve')
   .description('Start the loopback browser workbench')
   .option('--host <host>', 'bind host', '127.0.0.1')
   .option('--port <port>', 'bind port', (value) => Number.parseInt(value, 10), 4317)
-  .option('--data-dir <path>', 'runtime data directory', '.workbench')
+  .option('--data-dir <path>', 'runtime data directory', '.mcp-riksa')
   .option('--config <path>', 'workbench YAML configuration')
   .option('--allow-external', 'explicitly permit a non-loopback bind')
   .option('--dev', 'serve the Vite development UI')
@@ -131,7 +135,7 @@ program.command('serve')
       suiteDirectory: join(dataDirectory, 'suites'),
       callbackUrl: `http://127.0.0.1:${options.port}/api/oauth/callback`,
     });
-    await applyConfiguration(runtime, loadConfiguration(options.config));
+    await applyConfiguration(runtime, loadConfiguration(options.config), false);
     const staticDirectory = options.dev ? undefined : resolve('dist/web');
     const app = createApp(runtime, { ...(staticDirectory === undefined ? {} : { staticDirectory }) });
     let vite: { middlewares: RequestHandler; close(): Promise<void> } | undefined;
@@ -147,7 +151,7 @@ program.command('serve')
     });
     const address = server.address();
     const port = address && typeof address !== 'string' ? address.port : options.port;
-    process.stdout.write(`MCP Local Workbench listening at http://${options.host}:${port}\n`);
+    process.stdout.write(`MCP Riksa listening at http://${options.host}:${port}\n`);
     const shutdown = async () => {
       const serverClose = new Promise<void>((resolveClose, rejectClose) => server.close((error) => error ? rejectClose(error) : resolveClose()));
       const results = await Promise.allSettled([serverClose, vite?.close(), runtime.close()]);

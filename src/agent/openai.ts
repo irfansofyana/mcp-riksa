@@ -21,6 +21,7 @@ const responseSchema = z.object({
 
 function messages(input: ProviderMessage[]): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
   return input.map((message) => {
+    if (message.role === 'system') return { role: 'system', content: message.content };
     if (message.role === 'user') return { role: 'user', content: message.content };
     if (message.role === 'tool') return { role: 'tool', content: message.content, tool_call_id: message.toolCallId };
     return {
@@ -62,6 +63,64 @@ export function createOpenAIAdapter(input: unknown): ProviderAdapter {
     id: config.id,
     pricing: config.pricing,
     async complete(request) {
+      if (request.onTextDelta) {
+        const stream = await client.chat.completions.create(
+          {
+            model: resolveModel(config, request.model),
+            messages: messages(request.messages),
+            tools: tools(request.tools),
+            ...(request.tools.length === 0 ? {} : { tool_choice: 'auto' as const }),
+            stream: true,
+            stream_options: { include_usage: true },
+          },
+          request.signal === undefined ? undefined : { signal: request.signal },
+        );
+        let text = '';
+        let finishReason = 'complete';
+        let usage = { input: 0, output: 0, total: 0 };
+        const pendingCalls = new Map<number, { id: string; name: string; argumentsText: string }>();
+        for await (const chunk of stream) {
+          if (chunk.usage) {
+            usage = {
+              input: chunk.usage.prompt_tokens,
+              output: chunk.usage.completion_tokens,
+              total: chunk.usage.total_tokens,
+            };
+          }
+          const choice = chunk.choices[0];
+          if (!choice) continue;
+          if (choice.finish_reason) finishReason = choice.finish_reason;
+          const delta = choice.delta.content ?? '';
+          if (delta) {
+            text += delta;
+            request.onTextDelta(delta);
+          }
+          for (const call of choice.delta.tool_calls ?? []) {
+            const index = call.index;
+            const current = pendingCalls.get(index) ?? { id: '', name: '', argumentsText: '' };
+            if (call.id) current.id = call.id;
+            if (call.function?.name) current.name += call.function.name;
+            if (call.function?.arguments) current.argumentsText += call.function.arguments;
+            pendingCalls.set(index, current);
+          }
+        }
+        const toolCalls = [...pendingCalls.values()].map((call) => {
+          let argumentsValue: unknown;
+          try { argumentsValue = JSON.parse(call.argumentsText || '{}'); }
+          catch { throw new Error(`Malformed OpenAI-compatible tool arguments for ${call.name}`); }
+          if (argumentsValue === null || typeof argumentsValue !== 'object' || Array.isArray(argumentsValue)) {
+            throw new Error(`Malformed OpenAI-compatible tool arguments for ${call.name}`);
+          }
+          return { id: call.id, name: call.name, arguments: argumentsValue as Record<string, unknown> };
+        });
+        return {
+          text,
+          toolCalls,
+          usage,
+          stopReason: toolCalls.length > 0 ? 'tool_calls' : finishReason,
+          raw: { streamed: true, text, toolCalls, usage, finishReason },
+        };
+      }
       const raw = await client.chat.completions.create(
         {
           model: resolveModel(config, request.model),

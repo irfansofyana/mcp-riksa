@@ -5,7 +5,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { z } from 'zod';
 
 const mcp = new McpServer(
-  { name: 'mcp-local-workbench-http-sample', version: '1.0.0' },
+  { name: 'mcp-riksa-http-sample', version: '1.0.0' },
   { instructions: 'Deterministic Streamable HTTP test server.' },
 );
 

@@ -1,6 +1,6 @@
 version: 1
 name: sample-direct
-description: Deterministic direct-tool regression suite for MCP Local Workbench.
+description: Deterministic direct-tool regression suite for MCP Riksa.
 cases:
   - id: adds-two-numbers
     kind: direct

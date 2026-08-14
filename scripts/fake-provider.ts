@@ -20,10 +20,23 @@ const server = createServer(async (request, response) => {
   if (request.method === 'POST' && url.pathname === '/v1/chat/completions') {
     const messages = Array.isArray(body.messages) ? body.messages as Array<{ role?: string }> : [];
     const hasToolResult = messages.some((message) => message.role === 'tool');
+    if (body.stream === true) {
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      const send = (value: unknown) => response.write(`data: ${JSON.stringify(value)}\n\n`);
+      if (hasToolResult) {
+        send({ id: 'fake-final', object: 'chat.completion.chunk', created: 1, model: 'test-model', choices: [{ index: 0, delta: { content: '## Result\n\nThe **sum ' }, finish_reason: null }] });
+        send({ id: 'fake-final', object: 'chat.completion.chunk', created: 1, model: 'test-model', choices: [{ index: 0, delta: { content: 'is 5**.\n\n- Tool: `add`\n- Status: complete' }, finish_reason: 'stop' }] });
+      } else {
+        send({ id: 'fake-tool', object: 'chat.completion.chunk', created: 1, model: 'test-model', choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'fake-call-1', function: { name: 'add', arguments: '{"a":2,"b":3}' } }] }, finish_reason: 'tool_calls' }] });
+      }
+      send({ id: 'fake-usage', object: 'chat.completion.chunk', created: 1, model: 'test-model', choices: [], usage: { prompt_tokens: 40, completion_tokens: 10, total_tokens: 50 } });
+      response.end('data: [DONE]\n\n');
+      return;
+    }
     return json({
       id: hasToolResult ? 'fake-final' : 'fake-tool', object: 'chat.completion', created: 1, model: 'test-model',
       choices: [{ index: 0, message: hasToolResult
-        ? { role: 'assistant', content: 'The sum is 5' }
+        ? { role: 'assistant', content: '## Result\n\nThe **sum is 5**.\n\n- Tool: `add`\n- Status: complete' }
         : { role: 'assistant', content: null, tool_calls: [{ id: 'fake-call-1', type: 'function', function: { name: 'add', arguments: '{"a":2,"b":3}' } }] },
       finish_reason: hasToolResult ? 'stop' : 'tool_calls' }],
       usage: { prompt_tokens: 40, completion_tokens: 10, total_tokens: 50 },

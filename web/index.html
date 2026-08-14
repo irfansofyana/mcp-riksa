@@ -3,9 +3,26 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="light dark" />
     <meta name="theme-color" content="#11110f" />
-    <title>MCP Local Workbench</title>
+    <meta name="description" content="MCP Riksa is a local-first workspace for inspecting and testing MCP servers." />
+    <link rel="icon" href="/mcp-riksa-mark.svg" type="image/svg+xml" />
+    <script>
+      (() => {
+        let preference = 'system';
+        try {
+          const stored = localStorage.getItem('mcp-riksa-theme');
+          if (stored === 'light' || stored === 'dark' || stored === 'system') preference = stored;
+        } catch { /* Storage can be unavailable in hardened browser modes. */ }
+        const theme = preference === 'system'
+          ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+          : preference;
+        document.documentElement.dataset.theme = theme;
+        document.documentElement.style.colorScheme = theme;
+        document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#11110f' : '#f3ede0');
+      })();
+    </script>
+    <title>MCP Riksa</title>
   </head>
   <body>
     <div id="root"></div>

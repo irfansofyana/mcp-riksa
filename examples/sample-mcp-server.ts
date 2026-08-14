@@ -4,8 +4,8 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 
 const server = new McpServer(
-  { name: 'mcp-local-workbench-sample', version: '1.0.0' },
-  { capabilities: { logging: {} }, instructions: 'Deterministic tools for MCP Local Workbench tests.' },
+  { name: 'mcp-riksa-sample', version: '1.0.0' },
+  { capabilities: { logging: {} }, instructions: 'Deterministic tools for MCP Riksa tests.' },
 );
 
 server.registerTool(
@@ -19,6 +19,19 @@ server.registerTool(
   async ({ a, b }) => ({
     content: [{ type: 'text', text: String(a + b) }],
     structuredContent: { sum: a + b },
+  }),
+);
+
+server.registerTool(
+  'unannotated_read',
+  {
+    description: 'Read deterministic data without optional tool annotations.',
+    inputSchema: {},
+    outputSchema: { value: z.string() },
+  },
+  async () => ({
+    content: [{ type: 'text', text: 'read-only' }],
+    structuredContent: { value: 'read-only' },
   }),
 );
 
@@ -52,7 +65,7 @@ server.registerTool(
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
-console.error('MCP Local Workbench sample server ready on stdio');
+console.error('MCP Riksa sample server ready on stdio');
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, () => {

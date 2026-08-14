@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { providerConfigSchema, type ProviderAdapter, type ProviderConfig } from '../src/agent/types.js';
 import { createProviderAdapter } from '../src/agent/providers.js';
 import { runAgent } from '../src/agent/loop.js';
+import { REDACTED, registerSecretValue } from '../src/core/redaction.js';
 import { McpManager } from '../src/mcp/manager.js';
 
 const tsxCli = resolve('node_modules/tsx/dist/cli.mjs');
@@ -60,6 +61,19 @@ beforeAll(async () => {
     if (url.endsWith('/chat/completions')) {
       const hasToolResult = Array.isArray(payload.messages)
         && payload.messages.some((entry) => (entry as { role?: string }).role === 'tool');
+      if (payload.stream === true) {
+        response.writeHead(200, { 'content-type': 'text/event-stream' });
+        const chunks = hasToolResult
+          ? [
+              { choices: [{ index: 0, delta: { content: 'The sum ' }, finish_reason: null }] },
+              { choices: [{ index: 0, delta: { content: 'is 5' }, finish_reason: 'stop' }] },
+            ]
+          : [{ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'call-1', function: { name: 'add', arguments: '{"a":2,"b":3}' } }] }, finish_reason: 'tool_calls' }] }];
+        for (const chunk of chunks) response.write(`data: ${JSON.stringify({ id: `openai-${count}`, object: 'chat.completion.chunk', created: 1, model: 'test-model', ...chunk })}\n\n`);
+        response.write(`data: ${JSON.stringify({ id: `openai-${count}`, object: 'chat.completion.chunk', created: 1, model: 'test-model', choices: [], usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 } })}\n\n`);
+        response.end('data: [DONE]\n\n');
+        return;
+      }
       return json(response, {
         id: `openai-${count}`,
         object: 'chat.completion',
@@ -78,6 +92,23 @@ beforeAll(async () => {
     if (url.endsWith('/messages')) {
       const content = payload.messages as Array<{ content?: unknown }>;
       const hasToolResult = JSON.stringify(content).includes('tool_result');
+      if (payload.stream === true) {
+        response.writeHead(200, { 'content-type': 'text/event-stream' });
+        const send = (value: unknown) => response.write(`data: ${JSON.stringify(value)}\n\n`);
+        send({ type: 'message_start', message: { usage: { input_tokens: 80 } } });
+        if (hasToolResult) {
+          send({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } });
+          send({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'The sum ' } });
+          send({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'is 5' } });
+          send({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 10 } });
+        } else {
+          send({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'call-1', name: 'add', input: {} } });
+          send({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"a":2,"b":3}' } });
+          send({ type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 10 } });
+        }
+        response.end();
+        return;
+      }
       return json(response, {
         id: `anthropic-${count}`,
         type: 'message',
@@ -129,7 +160,7 @@ describe.each([
   test('runs a complete provider → MCP tool → provider loop with normalized usage and sanitized trace', async () => {
     receivedPrivateHeader = false;
     const result = await runAgent(
-      { prompt: 'Add 2 and 3', model: 'default', serverId: 'sample', limits: { maxTurns: 4, maxToolCalls: 3, timeoutMs: 5000 } },
+      { prompt: 'Add 2 and 3', systemPrompt: 'Use tools accurately.', model: 'default', serverId: 'sample', limits: { maxTurns: 4, maxToolCalls: 3, timeoutMs: 5000 } },
       { provider: createProviderAdapter(config(type)), mcp: manager },
     );
 
@@ -142,6 +173,176 @@ describe.each([
     expect(receivedPrivateHeader).toBe(true);
     expect(JSON.stringify(result)).not.toContain('provider-secret-value');
   });
+
+  test('streams provider text deltas through the agent loop', async () => {
+    const updates: Array<{ type: string; [key: string]: unknown }> = [];
+    const result = await runAgent(
+      { prompt: 'Add 2 and 3', model: 'default', serverId: 'sample', limits: { maxTurns: 4, maxToolCalls: 3, timeoutMs: 5000 } },
+      { provider: createProviderAdapter(config(type)), mcp: manager },
+      { onUpdate: (update) => updates.push(update) },
+    );
+    expect(result.output).toBe('The sum is 5');
+    expect(updates.filter((update) => update.type === 'text_delta').map((update) => update.delta)).toEqual(['The sum is 5']);
+    expect(updates).toContainEqual(expect.objectContaining({ type: 'tool_call' }));
+    expect(result.tokens.total).toBeGreaterThan(0);
+  });
+});
+
+test('streams text deltas and progress while retaining normalized final result', async () => {
+  const updates: Array<{ type: string; [key: string]: unknown }> = [];
+  const provider = scriptedAdapter(async (request) => {
+    request.onTextDelta?.('Hello');
+    request.onTextDelta?.(' world');
+    return {
+      text: 'Hello world', toolCalls: [], usage: { input: 3, output: 2, total: 5 },
+      stopReason: 'complete', raw: { streamed: true },
+    };
+  });
+  const result = await runAgent(
+    { prompt: 'hello', model: 'x', serverId: 'sample', limits: { maxTurns: 2, maxToolCalls: 1, timeoutMs: 5000 } },
+    { provider, mcp: manager },
+    { onUpdate: (update) => updates.push(update) },
+  );
+
+  expect(result.output).toBe('Hello world');
+  expect(updates.filter((update) => update.type === 'text_delta').map((update) => update.delta)).toEqual(['Hello world']);
+  expect(updates).toContainEqual(expect.objectContaining({ type: 'model_turn', turn: 1 }));
+  expect(updates).toContainEqual(expect.objectContaining({ type: 'stop', reason: 'complete' }));
+});
+
+test('never exposes secrets split across provider text deltas', async () => {
+  const secret = 'split-stream-secret-value';
+  registerSecretValue(secret);
+  const updates: Array<{ type: string; delta?: string }> = [];
+  const provider = scriptedAdapter(async (request) => {
+    request.onTextDelta?.('Known secret: split-stream-');
+    request.onTextDelta?.('secret-value; Authorization: Bear');
+    request.onTextDelta?.('er another-secret-value');
+    return {
+      text: `Known secret: ${secret}; Authorization: Bearer another-secret-value`,
+      toolCalls: [], usage: { input: 1, output: 1, total: 2 }, stopReason: 'complete', raw: {},
+    };
+  });
+  await runAgent(
+    { prompt: 'show secret', model: 'x', serverId: 'sample', limits: { maxTurns: 1, maxToolCalls: 1, timeoutMs: 5000 } },
+    { provider, mcp: manager },
+    { onUpdate: (update) => updates.push(update) },
+  );
+
+  const streamed = updates.filter((update) => update.type === 'text_delta').map((update) => update.delta ?? '').join('');
+  expect(streamed).toBe(`Known secret: ${REDACTED}; Authorization: Bearer ${REDACTED}`);
+  expect(streamed).not.toContain(secret);
+  expect(streamed).not.toContain('another-secret-value');
+});
+
+test('never exposes secrets split across tool-separated model turns', async () => {
+  const secret = 'cross-turn-secret-value';
+  registerSecretValue(secret);
+  const updates: Array<{ type: string; delta?: string }> = [];
+  let turn = 0;
+  const provider = scriptedAdapter(async (request) => {
+    turn += 1;
+    if (turn === 1) {
+      request.onTextDelta?.('harmless-');
+      return {
+        text: 'cross-turn-',
+        toolCalls: [{ id: 'call-1', name: 'add', arguments: { a: 1, b: 2 } }],
+        usage: { input: 1, output: 1, total: 2 }, stopReason: 'tool_calls', raw: {},
+      };
+    }
+    request.onTextDelta?.('text');
+    return {
+      text: 'secret-value', toolCalls: [], usage: { input: 1, output: 1, total: 2 }, stopReason: 'complete', raw: {},
+    };
+  });
+  const result = await runAgent(
+    { prompt: 'use tool', model: 'x', serverId: 'sample', limits: { maxTurns: 2, maxToolCalls: 1, timeoutMs: 5000 } },
+    { provider, mcp: manager },
+    { onUpdate: (update) => updates.push(update) },
+  );
+
+  const streamed = updates.filter((update) => update.type === 'text_delta').map((update) => update.delta ?? '').join('');
+  expect(streamed).toBe(REDACTED);
+  expect(streamed).not.toContain(secret);
+  expect(updates.find((update) => update.type === 'text_delta')).not.toHaveProperty('turn');
+  expect(result.output).toBe(REDACTED);
+  expect(JSON.stringify(result)).not.toContain('cross-turn-');
+  expect(JSON.stringify(result)).not.toContain('secret-value');
+});
+
+test('sanitizes cross-turn secrets without a streaming callback', async () => {
+  const secret = 'nonstream-cross-turn-secret';
+  registerSecretValue(secret);
+  let turn = 0;
+  const provider = scriptedAdapter(async () => {
+    turn += 1;
+    return turn === 1
+      ? {
+        text: 'nonstream-cross-',
+        toolCalls: [{ id: 'call-1', name: 'add', arguments: { a: 1, b: 2 } }],
+        usage: { input: 1, output: 1, total: 2 }, stopReason: 'tool_calls', raw: { text: 'nonstream-cross-' },
+      }
+      : {
+        text: 'turn-secret', toolCalls: [], usage: { input: 1, output: 1, total: 2 },
+        stopReason: 'complete', raw: { text: 'turn-secret' },
+      };
+  });
+  const result = await runAgent(
+    { prompt: 'use tool', model: 'x', serverId: 'sample', limits: { maxTurns: 2, maxToolCalls: 1, timeoutMs: 5000 } },
+    { provider, mcp: manager },
+  );
+
+  expect(result.output).toBe(REDACTED);
+  expect(JSON.stringify(result)).not.toContain('nonstream-cross-');
+  expect(JSON.stringify(result)).not.toContain('turn-secret');
+});
+
+test('preserves a safe final answer when only an earlier turn is redacted', async () => {
+  const secret = 'earlier-turn-secret';
+  registerSecretValue(secret);
+  let turn = 0;
+  const provider = scriptedAdapter(async () => {
+    turn += 1;
+    return turn === 1
+      ? {
+        text: secret,
+        toolCalls: [{ id: 'call-1', name: 'add', arguments: { a: 1, b: 2 } }],
+        usage: { input: 1, output: 1, total: 2 }, stopReason: 'tool_calls', raw: { text: secret },
+      }
+      : {
+        text: 'SAFE FINAL', toolCalls: [], usage: { input: 1, output: 1, total: 2 },
+        stopReason: 'complete', raw: { text: 'SAFE FINAL' },
+      };
+  });
+  const result = await runAgent(
+    { prompt: 'use tool', model: 'x', serverId: 'sample', limits: { maxTurns: 2, maxToolCalls: 1, timeoutMs: 5000 } },
+    { provider, mcp: manager },
+  );
+
+  expect(result.output).toBe('SAFE FINAL');
+  expect(result.transcript.filter((message) => message.role === 'assistant').map((message) => message.content)).toEqual([REDACTED, 'SAFE FINAL']);
+  expect(JSON.stringify(result)).not.toContain(secret);
+});
+
+test('discards buffered text when a provider resolves after cancellation', async () => {
+  const controller = new AbortController();
+  const updates: Array<{ type: string; delta?: string }> = [];
+  const provider = scriptedAdapter(async (request) => {
+    request.onTextDelta?.('cancelled-secret-fragment');
+    controller.abort();
+    return {
+      text: 'cancelled-secret-fragment', toolCalls: [], usage: { input: 1, output: 1, total: 2 }, stopReason: 'complete', raw: {},
+    };
+  });
+  const result = await runAgent(
+    { prompt: 'cancel', model: 'x', serverId: 'sample', limits: { maxTurns: 1, maxToolCalls: 1, timeoutMs: 5000 } },
+    { provider, mcp: manager },
+    { signal: controller.signal, onUpdate: (update) => updates.push(update) },
+  );
+
+  expect(result.stopReason).toBe('cancelled');
+  expect(updates.filter((update) => update.type === 'text_delta')).toEqual([]);
+  expect(updates).toContainEqual(expect.objectContaining({ type: 'stop', reason: 'cancelled' }));
 });
 
 test('normalizes missing usage to zero', async () => {
@@ -190,15 +391,28 @@ describe('agent stop boundaries', () => {
     expect(result.toolCalls).toHaveLength(0);
   });
 
-  test('stops when estimated cost exceeds the budget', async () => {
-    const provider = scriptedAdapter(async () => ({
-      text: 'expensive', toolCalls: [], usage: { input: 1, output: 1, total: 2 }, stopReason: 'complete', raw: {},
-    }));
+  test('records a completed final answer when cumulative cost exceeds the budget', async () => {
+    let turn = 0;
+    const provider = scriptedAdapter(async () => {
+      turn += 1;
+      if (turn === 1) return {
+        text: '', toolCalls: [{ id: 'cost-tool', name: 'add', arguments: { a: 1, b: 2 } }],
+        usage: { input: 0, output: 0, total: 0 }, stopReason: 'tool_use', raw: {},
+      };
+      return {
+        text: 'expensive', toolCalls: [], usage: { input: 1, output: 1, total: 2 }, stopReason: 'complete', raw: {},
+      };
+    });
     const result = await runAgent(
       { prompt: 'cost', model: 'x', serverId: 'sample', limits: { maxTurns: 2, maxToolCalls: 1, timeoutMs: 5000, maxCostUsd: 0.5 } },
       { provider, mcp: manager },
     );
     expect(result.stopReason).toBe('max_cost');
+    expect(result.transcript).toEqual([
+      { role: 'assistant', content: '', toolCalls: [{ id: 'cost-tool', name: 'add', arguments: { a: 1, b: 2 } }] },
+      { role: 'tool', toolCallId: 'cost-tool', name: 'add', content: '{"content":[{"type":"text","text":"3"}],"structuredContent":{"sum":3}}' },
+      { role: 'assistant', content: 'expensive', toolCalls: [] },
+    ]);
   });
 
   test.each([
@@ -221,5 +435,140 @@ describe('agent stop boundaries', () => {
     );
     if (timer) clearTimeout(timer);
     expect(result.stopReason).toBe(expected);
+  });
+
+  test.each([
+    ['cancelled', 5000, 10],
+    ['max_time', 20, 100],
+  ] as const)('returns a terminal %s result when a pending tool call aborts', async (expected, timeoutMs, cancelAfterMs) => {
+    const provider = scriptedAdapter(async () => ({
+      text: '', toolCalls: [{ id: '1', name: 'add', arguments: { a: 1, b: 1 } }],
+      usage: { input: 0, output: 0, total: 0 }, stopReason: 'tool_calls', raw: {},
+    }));
+    const blockingMcp = {
+      inspect: async () => ({ tools: [{ name: 'add', inputSchema: {} }] }),
+      call: async (_id: string, _tool: string, _args: Record<string, unknown>, options?: { signal?: AbortSignal }) => new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener('abort', () => reject(options.signal?.reason), { once: true });
+      }),
+    };
+    const controller = new AbortController();
+    const updates: Array<{ type: string; reason?: string }> = [];
+    const timer = expected === 'cancelled' ? setTimeout(() => controller.abort(new Error('user cancelled')), cancelAfterMs) : undefined;
+    const result = await runAgent(
+      { prompt: 'wait for tool', model: 'x', serverId: 'sample', limits: { maxTurns: 2, maxToolCalls: 1, timeoutMs } },
+      { provider, mcp: blockingMcp },
+      { signal: controller.signal, onUpdate: (update) => updates.push(update) },
+    );
+    if (timer) clearTimeout(timer);
+
+    expect(result.stopReason).toBe(expected);
+    expect(result.toolCalls).toEqual([]);
+    expect(result.transcript).toEqual([]);
+    expect(updates).toContainEqual(expect.objectContaining({ type: 'stop', reason: expected }));
+  });
+
+  test('propagates a concurrent tool failure that is unrelated to cancellation', async () => {
+    const controller = new AbortController();
+    const provider = scriptedAdapter(async () => ({
+      text: '', toolCalls: [{ id: '1', name: 'add', arguments: { a: 1, b: 1 } }],
+      usage: { input: 0, output: 0, total: 0 }, stopReason: 'tool_calls', raw: {},
+    }));
+    const failingMcp = {
+      inspect: async () => ({ tools: [{ name: 'add', inputSchema: {} }] }),
+      call: async () => {
+        controller.abort(new Error('user cancelled'));
+        throw new Error('backend failed');
+      },
+    };
+
+    await expect(runAgent(
+      { prompt: 'fail tool', model: 'x', serverId: 'sample', limits: { maxTurns: 2, maxToolCalls: 1, timeoutMs: 5000 } },
+      { provider, mcp: failingMcp },
+      { signal: controller.signal },
+    )).rejects.toThrow('backend failed');
+  });
+
+  test('discards a tool result that resolves after cancellation', async () => {
+    const controller = new AbortController();
+    const provider = scriptedAdapter(async () => ({
+      text: '', toolCalls: [{ id: '1', name: 'add', arguments: { a: 1, b: 1 } }],
+      usage: { input: 0, output: 0, total: 0 }, stopReason: 'tool_calls', raw: {},
+    }));
+    const resolvingMcp = {
+      inspect: async () => ({ tools: [{ name: 'add', inputSchema: {} }] }),
+      call: async (_id: string, _tool: string, _args: Record<string, unknown>, options?: { signal?: AbortSignal }) => new Promise((resolveValue) => {
+        options?.signal?.addEventListener('abort', () => resolveValue({ sum: 2 }), { once: true });
+      }),
+    };
+    const updates: Array<{ type: string }> = [];
+    const timer = setTimeout(() => controller.abort(new Error('user cancelled')), 10);
+    const result = await runAgent(
+      { prompt: 'cancel tool', model: 'x', serverId: 'sample', limits: { maxTurns: 2, maxToolCalls: 1, timeoutMs: 5000 } },
+      { provider, mcp: resolvingMcp },
+      { signal: controller.signal, onUpdate: (update) => updates.push(update) },
+    );
+    clearTimeout(timer);
+
+    expect(result.stopReason).toBe('cancelled');
+    expect(result.toolCalls).toEqual([]);
+    expect(result.transcript.some((message) => message.role === 'tool')).toBe(false);
+    expect(updates.some((update) => update.type === 'tool_call')).toBe(false);
+  });
+
+  test('preserves caller cancellation when timeout fires before an abort rejection settles', async () => {
+    const controller = new AbortController();
+    const provider = scriptedAdapter(async ({ signal }) => new Promise((_resolve, reject) => {
+      signal?.addEventListener('abort', () => setTimeout(() => reject(signal.reason), 20), { once: true });
+    }));
+    const timer = setTimeout(() => controller.abort(new Error('user cancelled')), 5);
+    const result = await runAgent(
+      { prompt: 'cancel first', model: 'x', serverId: 'sample', limits: { maxTurns: 1, maxToolCalls: 1, timeoutMs: 15 } },
+      { provider, mcp: manager },
+      { signal: controller.signal },
+    );
+    clearTimeout(timer);
+
+    expect(result.stopReason).toBe('cancelled');
+  });
+
+  test('returns max_time when MCP inspection does not settle', async () => {
+    const provider = scriptedAdapter(async () => ({
+      text: 'unused', toolCalls: [], usage: { input: 0, output: 0, total: 0 }, stopReason: 'complete', raw: {},
+    }));
+    const hangingMcp = {
+      inspect: async () => new Promise<never>(() => undefined),
+      call: async () => undefined,
+    };
+    const updates: Array<{ type: string; reason?: string }> = [];
+    const outcome = await Promise.race([
+      runAgent(
+        { prompt: 'inspect', model: 'x', serverId: 'sample', limits: { maxTurns: 1, maxToolCalls: 1, timeoutMs: 10 } },
+        { provider, mcp: hangingMcp },
+        { onUpdate: (update) => updates.push(update) },
+      ),
+      new Promise<'still-pending'>((resolvePending) => setTimeout(() => resolvePending('still-pending'), 50)),
+    ]);
+
+    expect(outcome).not.toBe('still-pending');
+    expect(outcome).toEqual(expect.objectContaining({ stopReason: 'max_time' }));
+    expect(updates).toContainEqual(expect.objectContaining({ type: 'stop', reason: 'max_time' }));
+  });
+
+  test('propagates an inspection failure when cancellation has already fired', async () => {
+    const controller = new AbortController();
+    controller.abort(new Error('user cancelled'));
+    const provider = scriptedAdapter(async () => ({
+      text: 'unused', toolCalls: [], usage: { input: 0, output: 0, total: 0 }, stopReason: 'complete', raw: {},
+    }));
+    const failingMcp = {
+      inspect: async () => { throw new Error('inspection backend failed'); },
+      call: async () => undefined,
+    };
+
+    await expect(runAgent(
+      { prompt: 'inspect', model: 'x', serverId: 'sample', limits: { maxTurns: 1, maxToolCalls: 1, timeoutMs: 5000 } },
+      { provider, mcp: failingMcp },
+      { signal: controller.signal },
+    )).rejects.toThrow('inspection backend failed');
   });
 });

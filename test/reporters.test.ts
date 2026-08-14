@@ -40,7 +40,8 @@ describe('reporters', () => {
   test('emits standalone sanitized HTML with run and assertion detail', () => {
     const output = reportHtml(run);
     expect(output).toMatch(/^<!doctype html>/i);
-    expect(output).toContain('MCP Local Workbench');
+    expect(output).toContain('MCP Riksa');
+    expect(output).not.toContain('MCP Local Workbench');
     expect(output).toContain('case &lt;one&gt;');
     expect(output).toContain('Contains text');
     expect(output).not.toContain('export-secret');

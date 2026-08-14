@@ -15,7 +15,9 @@ providers:
     baseUrl: http://127.0.0.1:4000/v1
     models:
       default: test-model
-    apiKeyEnv: WORKBENCH_PROVIDER_API_KEY
+      fast: test-model
+      quality: test-model
+    apiKeyEnv: MCP_RIKSA_PROVIDER_API_KEY
     headerEnv: {}
     pricing:
       inputPerMillion: 1

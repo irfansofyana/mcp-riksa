@@ -1,11 +1,11 @@
 {
-  "name": "mcp-local-workbench",
+  "name": "mcp-riksa",
   "version": "0.1.0",
   "description": "Local-first MCP server and agent evaluation workbench",
   "type": "module",
   "private": true,
   "bin": {
-    "mcp-workbench": "dist/src/cli/index.js"
+    "mcp-riksa": "dist/src/cli/index.js"
   },
   "scripts": {
     "dev": "tsx src/cli/index.ts serve --dev",
@@ -22,6 +22,7 @@
     "node": ">=24"
   },
   "dependencies": {
+    "@modelcontextprotocol/conformance": "0.1.10",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "better-sqlite3": "^13.0.3",
     "commander": "^15.0.0",
@@ -30,6 +31,8 @@
     "openai": "^7.4.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "undici": "^7.29.0",
     "yaml": "^2.9.0",
     "zod": "^4.4.3"

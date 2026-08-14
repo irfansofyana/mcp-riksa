@@ -47,8 +47,13 @@ export function RunsPage({ runs, initialId, onRefresh }: { runs: Run[]; initialI
 
   const refresh = async () => {
     if (!selected) return;
-    await onRefresh();
-    setDetail(await api.run(selected));
+    try {
+      await onRefresh();
+      setDetail(await api.run(selected));
+      setError('');
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
   };
 
   return <div className="runs-layout">

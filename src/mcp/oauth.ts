@@ -74,7 +74,7 @@ class MemoryOAuthProvider implements OAuthClientProvider {
 
   get clientMetadata(): OAuthClientMetadata {
     return {
-      client_name: 'MCP Local Workbench',
+      client_name: 'MCP Riksa',
       redirect_uris: [this.session.options.callbackUrl],
       grant_types: ['authorization_code', 'refresh_token'],
       response_types: ['code'],

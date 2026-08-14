@@ -22,6 +22,7 @@ export type ProviderPricing = ProviderConfig['pricing'];
 export type ProviderTool = { name: string; description?: string; inputSchema: Record<string, unknown> };
 export type ProviderToolCall = { id: string; name: string; arguments: Record<string, unknown> };
 export type ProviderMessage =
+  | { role: 'system'; content: string }
   | { role: 'user'; content: string }
   | { role: 'assistant'; content: string; toolCalls: ProviderToolCall[] }
   | { role: 'tool'; content: string; toolCallId: string; name: string };
@@ -31,6 +32,7 @@ export type ProviderRequest = {
   messages: ProviderMessage[];
   tools: ProviderTool[];
   signal?: AbortSignal;
+  onTextDelta?(delta: string): void;
 };
 
 export type ProviderResponse = {
@@ -69,7 +71,7 @@ export function resolveApiKey(config: ProviderConfig): string | undefined {
 }
 
 export function resolveModel(config: ProviderConfig, alias: string): string {
-  const model = config.models[alias];
+  const model = Object.hasOwn(config.models, alias) ? config.models[alias] : undefined;
   if (!model) throw new Error(`Unknown model alias ${alias} for provider ${config.id}`);
   return model;
 }

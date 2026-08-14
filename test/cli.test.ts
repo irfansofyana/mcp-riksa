@@ -25,11 +25,22 @@ function execute(args: string[]) {
 }
 
 describe('headless CLI', () => {
+  test('exposes MCP Riksa package and CLI identifiers', async () => {
+    const packageMetadata = JSON.parse(readFileSync(resolve('package.json'), 'utf8')) as { name?: string; bin?: Record<string, string> };
+    expect(packageMetadata).toMatchObject({
+      name: 'mcp-riksa',
+      bin: { 'mcp-riksa': 'dist/src/cli/index.js' },
+    });
+    const result = await execute(['--help']);
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('Usage: mcp-riksa');
+  });
+
   test('inspects the real deterministic sample server as JSON', async () => {
     const result = await execute(['inspect', '--sample', '--json']);
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({
-      identity: { name: 'mcp-local-workbench-sample' },
+      identity: { name: 'mcp-riksa-sample' },
       tools: expect.arrayContaining([expect.objectContaining({ name: 'add' })]),
     });
   });

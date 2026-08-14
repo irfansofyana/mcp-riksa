@@ -60,10 +60,14 @@ export class McpManager {
     return this.connections.size;
   }
 
+  isConnected(id: string): boolean {
+    return this.connections.has(id);
+  }
+
   async connect(input: unknown, oauthProvider?: OAuthClientProvider): Promise<ReturnType<McpManager['inspect']>> {
     const config = serverConfigSchema.parse(input);
     if (this.connections.has(config.id)) await this.disconnect(config.id);
-    const client = new Client({ name: 'mcp-local-workbench', version: '0.1.0' }, { capabilities: {} });
+    const client = new Client({ name: 'mcp-riksa', version: '0.1.0' }, { capabilities: {} });
     let transport: Transport;
     let dispatcher: Agent | undefined;
     if (config.transport === 'stdio') {
@@ -131,7 +135,8 @@ export class McpManager {
     const connection = this.require(id);
     const definition = connection.tools.find((entry) => entry.name === tool);
     if (!definition) throw new Error(`Tool ${tool} was not discovered on server ${id}`);
-    if (definition.annotations?.destructiveHint === true && options.confirmDangerous !== true) {
+    const explicitlyDestructive = definition.annotations?.destructiveHint === true;
+    if (explicitlyDestructive && options.confirmDangerous !== true) {
       throw new Error(`Tool ${tool} requires explicit dangerous-call confirmation`);
     }
     const response = await connection.client.callTool(

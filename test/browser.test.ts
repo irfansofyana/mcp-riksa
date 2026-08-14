@@ -43,8 +43,8 @@ describe('browser success path', () => {
     const app = await start(
       process.execPath,
       [tsx, resolve('src/cli/index.ts'), 'serve', '--dev', '--port', '0', '--data-dir', join(directory, 'data')],
-      /MCP Local Workbench listening at (http:\/\/127\.0\.0\.1:\d+)/,
-      { ...process.env, WORKBENCH_PROVIDER_API_KEY: 'browser-only-secret' },
+      /MCP Riksa listening at (http:\/\/127\.0\.0\.1:\d+)/,
+      { ...process.env, MCP_RIKSA_PROVIDER_API_KEY: 'browser-only-secret' },
     );
     const appUrl = app.match[1]!;
 
@@ -55,10 +55,11 @@ describe('browser success path', () => {
       throw new Error(`${error instanceof Error ? error.message : String(error)}\nAPP PROCESS:\n${app.output()}\nFAKE PROVIDER:\n${fake.output()}`);
     }
     expect(result.steps).toEqual([
-      'provider-added', 'server-added', 'server-inspected', 'tool-invoked', 'playground-complete',
-      'suite-saved', 'first-run-inspected', 'second-run-inspected', 'runs-compared', 'mobile-checked',
+      'theme-checked', 'provider-added', 'server-added', 'server-inspected', 'tool-invoked', 'playground-complete',
+      'suite-saved', 'first-run-inspected', 'second-run-inspected', 'conformance-page-checked', 'runs-compared', 'mobile-checked',
     ]);
     expect(result.consoleErrors).toEqual([]);
+    expect(result.lightScreenshot).toMatch(/light-mode\.png$/);
     expect(result.serverScreenshot).toMatch(/stdio-server\.png$/);
     expect(result.desktopScreenshot).toMatch(/desktop\.png$/);
     expect(result.mobileScreenshot).toMatch(/mobile\.png$/);

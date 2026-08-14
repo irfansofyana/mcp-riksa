@@ -5,12 +5,13 @@ import { afterEach, describe, expect, test } from 'vitest';
 import { event } from '../src/core/events.js';
 import type { RunResult } from '../src/core/types.js';
 import { openDatabase } from '../src/storage/database.js';
+import { ConformanceRepository } from '../src/storage/conformance.js';
 import { RunRepository } from '../src/storage/runs.js';
 
 const directories: string[] = [];
 
 function createRepository() {
-  const directory = mkdtempSync(join(tmpdir(), 'mcp-workbench-'));
+  const directory = mkdtempSync(join(tmpdir(), 'mcp-riksa-'));
   directories.push(directory);
   const database = openDatabase(join(directory, 'runs.db'));
   return { database, repository: new RunRepository(database) };
@@ -51,8 +52,42 @@ describe('SQLite run repository', () => {
   test('runs migrations in WAL mode', () => {
     const { database } = createRepository();
     expect(database.pragma('journal_mode', { simple: true })).toBe('wal');
-    expect(database.prepare('select max(version) as version from migrations').get()).toEqual({ version: 2 });
+    expect(database.prepare('select max(version) as version from migrations').get()).toEqual({ version: 7 });
     database.close();
+  });
+
+  test('stores sanitized historical conformance reports and recovers interrupted executions', () => {
+    const { database } = createRepository();
+    const repository = new ConformanceRepository(database);
+    repository.start({ id: 'report', serverId: 'http-server', endpoint: 'http://127.0.0.1:3000/mcp', selection: { kind: 'suite', suite: 'active' }, startedAt: '2026-08-13T00:00:00.000Z', runnerVersion: '0.1.10' });
+    repository.complete('report', {
+      status: 'failed', completedAt: '2026-08-13T00:00:01.000Z',
+      checks: [{ sequence: 0, scenario: 'tools-list', id: 'tools', name: 'Tools', description: 'Lists tools', status: 'failed', specReferences: [], error: 'Bearer stored-secret' }],
+      rawReport: { authorization: 'Bearer raw-secret' },
+    });
+    expect(repository.get('report')).toMatchObject({ status: 'failed', summary: { total: 1, failed: 1 }, checks: [{ scenario: 'tools-list' }] });
+    expect(JSON.stringify(repository.get('report'))).not.toContain('stored-secret');
+    expect(JSON.stringify(repository.get('report'))).not.toContain('raw-secret');
+    repository.start({ id: 'stale-report', serverId: 'http-server', endpoint: 'http://127.0.0.1:3000/mcp', selection: { kind: 'scenario', scenario: 'server-initialize' }, startedAt: '2026-08-13T00:00:02.000Z', runnerVersion: '0.1.10' });
+    expect(repository.recoverInterrupted()).toBe(1);
+    expect(repository.get('stale-report')?.status).toBe('interrupted');
+    database.close();
+  });
+
+  test('backfills version-3 conversation trace JSON into canonical events', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'mcp-riksa-v3-'));
+    directories.push(directory);
+    const path = join(directory, 'runs.db');
+    const legacy = openDatabase(path);
+    const now = new Date().toISOString();
+    legacy.prepare('INSERT INTO playground_conversations(id, title, server_id, provider_id, model, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run('conversation', 'Legacy', 'server', 'provider', 'model', now, now);
+    legacy.prepare('INSERT INTO playground_messages(id, conversation_id, sequence, role, content, detail_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run('assistant', 'conversation', 1, 'assistant', 'done', JSON.stringify({ events: [{ id: 'legacy-event', caseId: 'server', type: 'model_turn', timestamp: now, durationMs: 9, data: { turn: 1 }, sanitized: true }] }), now);
+    legacy.exec('DROP TRIGGER playground_events_immutable_update; DROP TRIGGER playground_events_immutable_delete; DROP TABLE playground_events; DROP TABLE configuration_tombstones; DELETE FROM migrations WHERE version >= 4;');
+    legacy.close();
+
+    const migrated = openDatabase(path);
+    expect(migrated.prepare('SELECT id, message_id, duration_ms FROM playground_events').all()).toEqual([{ id: 'legacy-event', message_id: 'assistant', duration_ms: 9 }]);
+    migrated.close();
   });
 
   test('completes runs transactionally, redacts before persistence, and keeps events immutable', () => {

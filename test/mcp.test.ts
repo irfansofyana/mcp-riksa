@@ -64,13 +64,15 @@ describe('real sample MCP server over stdio', () => {
       });
 
       const inspection = await manager.inspect('sample');
-      expect(inspection.identity).toMatchObject({ name: 'mcp-local-workbench-sample', version: '1.0.0' });
+      expect(inspection.identity).toMatchObject({ name: 'mcp-riksa-sample', version: '1.0.0' });
       expect(inspection.capabilities).toHaveProperty('tools');
-      expect(inspection.tools.map((tool) => tool.name)).toEqual(['add', 'echo', 'dangerous_reset']);
+      expect(inspection.tools.map((tool) => tool.name)).toEqual(['add', 'unannotated_read', 'echo', 'dangerous_reset']);
       expect(inspection.tools[0]?.inputSchema).toHaveProperty('properties');
 
       const sum = await manager.call('sample', 'add', { a: 2, b: 3 });
       expect(sum.structuredContent).toEqual({ sum: 5 });
+      const unannotated = await manager.call('sample', 'unannotated_read', {});
+      expect(unannotated.structuredContent).toEqual({ value: 'read-only' });
 
       await expect(manager.call('sample', 'dangerous_reset', {})).rejects.toThrow(/confirmation/i);
       const confirmed = await manager.call('sample', 'dangerous_reset', {}, { confirmDangerous: true });
