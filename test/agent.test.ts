@@ -235,6 +235,116 @@ test('never exposes secrets split across provider text deltas', async () => {
   expect(streamed).not.toContain('another-secret-value');
 });
 
+test('never exposes secrets split across tool-separated model turns', async () => {
+  const secret = 'cross-turn-secret-value';
+  registerSecretValue(secret);
+  const updates: Array<{ type: string; delta?: string }> = [];
+  let turn = 0;
+  const provider = scriptedAdapter(async (request) => {
+    turn += 1;
+    if (turn === 1) {
+      request.onTextDelta?.('harmless-');
+      return {
+        text: 'cross-turn-',
+        toolCalls: [{ id: 'call-1', name: 'add', arguments: { a: 1, b: 2 } }],
+        usage: { input: 1, output: 1, total: 2 }, stopReason: 'tool_calls', raw: {},
+      };
+    }
+    request.onTextDelta?.('text');
+    return {
+      text: 'secret-value', toolCalls: [], usage: { input: 1, output: 1, total: 2 }, stopReason: 'complete', raw: {},
+    };
+  });
+  const result = await runAgent(
+    { prompt: 'use tool', model: 'x', serverId: 'sample', limits: { maxTurns: 2, maxToolCalls: 1, timeoutMs: 5000 } },
+    { provider, mcp: manager },
+    { onUpdate: (update) => updates.push(update) },
+  );
+
+  const streamed = updates.filter((update) => update.type === 'text_delta').map((update) => update.delta ?? '').join('');
+  expect(streamed).toBe(REDACTED);
+  expect(streamed).not.toContain(secret);
+  expect(updates.find((update) => update.type === 'text_delta')).not.toHaveProperty('turn');
+  expect(result.output).toBe(REDACTED);
+  expect(JSON.stringify(result)).not.toContain('cross-turn-');
+  expect(JSON.stringify(result)).not.toContain('secret-value');
+});
+
+test('sanitizes cross-turn secrets without a streaming callback', async () => {
+  const secret = 'nonstream-cross-turn-secret';
+  registerSecretValue(secret);
+  let turn = 0;
+  const provider = scriptedAdapter(async () => {
+    turn += 1;
+    return turn === 1
+      ? {
+        text: 'nonstream-cross-',
+        toolCalls: [{ id: 'call-1', name: 'add', arguments: { a: 1, b: 2 } }],
+        usage: { input: 1, output: 1, total: 2 }, stopReason: 'tool_calls', raw: { text: 'nonstream-cross-' },
+      }
+      : {
+        text: 'turn-secret', toolCalls: [], usage: { input: 1, output: 1, total: 2 },
+        stopReason: 'complete', raw: { text: 'turn-secret' },
+      };
+  });
+  const result = await runAgent(
+    { prompt: 'use tool', model: 'x', serverId: 'sample', limits: { maxTurns: 2, maxToolCalls: 1, timeoutMs: 5000 } },
+    { provider, mcp: manager },
+  );
+
+  expect(result.output).toBe(REDACTED);
+  expect(JSON.stringify(result)).not.toContain('nonstream-cross-');
+  expect(JSON.stringify(result)).not.toContain('turn-secret');
+});
+
+test('preserves a safe final answer when only an earlier turn is redacted', async () => {
+  const secret = 'earlier-turn-secret';
+  registerSecretValue(secret);
+  let turn = 0;
+  const provider = scriptedAdapter(async () => {
+    turn += 1;
+    return turn === 1
+      ? {
+        text: secret,
+        toolCalls: [{ id: 'call-1', name: 'add', arguments: { a: 1, b: 2 } }],
+        usage: { input: 1, output: 1, total: 2 }, stopReason: 'tool_calls', raw: { text: secret },
+      }
+      : {
+        text: 'SAFE FINAL', toolCalls: [], usage: { input: 1, output: 1, total: 2 },
+        stopReason: 'complete', raw: { text: 'SAFE FINAL' },
+      };
+  });
+  const result = await runAgent(
+    { prompt: 'use tool', model: 'x', serverId: 'sample', limits: { maxTurns: 2, maxToolCalls: 1, timeoutMs: 5000 } },
+    { provider, mcp: manager },
+  );
+
+  expect(result.output).toBe('SAFE FINAL');
+  expect(result.transcript.filter((message) => message.role === 'assistant').map((message) => message.content)).toEqual([REDACTED, 'SAFE FINAL']);
+  expect(JSON.stringify(result)).not.toContain(secret);
+});
+
+test('discards buffered text when a provider resolves after cancellation', async () => {
+  const controller = new AbortController();
+  const updates: Array<{ type: string; delta?: string }> = [];
+  const provider = scriptedAdapter(async (request) => {
+    request.onTextDelta?.('cancelled-secret-fragment');
+    controller.abort();
+    return {
+      text: 'cancelled-secret-fragment', toolCalls: [], usage: { input: 1, output: 1, total: 2 }, stopReason: 'complete', raw: {},
+    };
+  });
+  const result = await runAgent(
+    { prompt: 'cancel', model: 'x', serverId: 'sample', limits: { maxTurns: 1, maxToolCalls: 1, timeoutMs: 5000 } },
+    { provider, mcp: manager },
+    { signal: controller.signal, onUpdate: (update) => updates.push(update) },
+  );
+
+  expect(result.stopReason).toBe('cancelled');
+  expect(updates.filter((update) => update.type === 'text_delta')).toEqual([]);
+  expect(updates).toContainEqual(expect.objectContaining({ type: 'stop', reason: 'cancelled' }));
+});
+
 test('normalizes missing usage to zero', async () => {
   const adapter = createProviderAdapter(config('openai-compatible', 'missing-usage'));
   const response = await adapter.complete({ model: 'default', messages: [{ role: 'user', content: 'hello' }], tools: [] });

@@ -1,5 +1,5 @@
 import { event } from '../core/events.js';
-import { redact } from '../core/redaction.js';
+import { REDACTED, redact } from '../core/redaction.js';
 import type { Limits, NormalizedEvent, Observation, ToolCallObservation } from '../core/types.js';
 import type { ProviderAdapter, ProviderMessage, ProviderTool } from './types.js';
 
@@ -18,7 +18,7 @@ export type AgentInput = {
 };
 
 export type AgentUpdate =
-  | { type: 'text_delta'; turn: number; delta: string }
+  | { type: 'text_delta'; delta: string }
   | { type: 'model_turn'; turn: number; usage: { input: number; output: number; total: number }; tokens: { input: number; output: number; total: number }; costUsd: number; durationMs: number }
   | { type: 'tool_call'; turn: number; call: ToolCallObservation }
   | { type: 'stop'; reason: AgentResult['stopReason']; durationMs: number };
@@ -60,6 +60,8 @@ export async function runAgent(
   const tokens = { input: 0, output: 0, total: 0 };
   let costUsd = 0;
   let output = '';
+  let streamedText = '';
+  let individuallyRedactedText = '';
   const transcript: ProviderMessage[] = [];
   let stopReason: AgentResult['stopReason'] = 'max_turns';
 
@@ -77,7 +79,6 @@ export async function runAgent(
         break;
       }
       let response;
-      let streamedText = '';
       const turnStarted = Date.now();
       try {
         response = await dependencies.provider.complete({
@@ -86,15 +87,20 @@ export async function runAgent(
           tools,
           signal: controller.signal,
           ...(options.onUpdate === undefined ? {} : {
-            onTextDelta: (delta: string) => { streamedText += delta; },
+            onTextDelta: () => undefined,
           }),
         });
+        if (controller.signal.aborted) {
+          stopReason = timedOut ? 'max_time' : 'cancelled';
+          break;
+        }
+        streamedText += response.text;
+        individuallyRedactedText += redact(response.text);
       } catch (error) {
         if (!controller.signal.aborted) throw error;
         stopReason = timedOut ? 'max_time' : 'cancelled';
         break;
       }
-      if (streamedText) emit({ type: 'text_delta', turn: turn + 1, delta: redact(streamedText) });
       tokens.input += response.usage.input;
       tokens.output += response.usage.output;
       tokens.total += response.usage.total;
@@ -156,16 +162,40 @@ export async function runAgent(
     await dependencies.provider.close?.();
   }
 
-  events.push(event(input.serverId, 'stop', { reason: stopReason }));
+  const redactedStream = redact(streamedText);
+  const streamWasRedactedAcrossTurns = redactedStream !== individuallyRedactedText;
+  let safeOutput = output;
+  let safeTranscript = transcript;
+  let safeEvents = events;
+  if (streamWasRedactedAcrossTurns) {
+    safeOutput = redactedStream;
+    const lastAssistantIndex = transcript.findLastIndex((message) => message.role === 'assistant');
+    safeTranscript = transcript.map((message, index) => message.role === 'assistant'
+      ? { ...message, content: index === lastAssistantIndex ? redactedStream : '' }
+      : message);
+    safeEvents = events.map((entry) => entry.type === 'model_turn'
+      ? {
+        ...entry,
+        data: {
+          ...(entry.data !== null && typeof entry.data === 'object' ? entry.data : {}),
+          response: REDACTED,
+        },
+      }
+      : entry);
+  }
+  if (streamedText && stopReason !== 'cancelled' && stopReason !== 'max_time') {
+    emit({ type: 'text_delta', delta: redactedStream });
+  }
+  safeEvents.push(event(input.serverId, 'stop', { reason: stopReason }));
   emit({ type: 'stop', reason: stopReason, durationMs: Date.now() - started });
   return redact({
-    output,
-    transcript,
+    output: safeOutput,
+    transcript: safeTranscript,
     toolCalls: calls,
     durationMs: Date.now() - started,
     tokens,
     costUsd,
-    events,
+    events: safeEvents,
     stopReason,
   });
 }

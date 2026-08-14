@@ -141,10 +141,10 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     await wait(`document.documentElement.dataset.theme === 'dark' && localStorage.getItem('mcp-workbench-theme') === 'dark'`, 'explicit dark theme');
     await click('theme-light');
     await wait(`document.documentElement.dataset.theme === 'light' && localStorage.getItem('mcp-workbench-theme') === 'light'`, 'explicit light theme');
+    await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] });
     await cdp.send('Page.reload', { ignoreCache: true });
     await new Promise((resolveWait) => setTimeout(resolveWait, 300));
     await wait(`document.querySelector('.app-shell') && document.documentElement.dataset.theme === 'light'`, 'persisted light theme after reload');
-    await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] });
     await click('theme-system');
     await wait(`document.documentElement.dataset.theme === 'dark' && localStorage.getItem('mcp-workbench-theme') === 'system'`, 'system dark theme', 30_000);
     await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] });

@@ -128,7 +128,7 @@ export type ConversationSummary = {
 export type ConversationDetail = ConversationSummary & { messages: ConversationMessage[] };
 
 export type AgentUpdate =
-  | { type: 'text_delta'; turn: number; delta: string }
+  | { type: 'text_delta'; delta: string }
   | { type: 'model_turn'; turn: number; usage: { input: number; output: number; total: number }; tokens: { input: number; output: number; total: number }; costUsd: number; durationMs: number }
   | { type: 'tool_call'; turn: number; call: PlaygroundResult['toolCalls'][number] }
   | { type: 'stop'; reason: string; durationMs: number };

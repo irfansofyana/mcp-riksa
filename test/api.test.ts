@@ -39,7 +39,7 @@ function runtime(): ApiRuntime {
     getConversation: async (id) => id === 'conversation-1' ? { id, title: 'Add numbers', messages: [] } : undefined,
     deleteConversation: async () => true,
     streamPlayground: async (_value, onUpdate) => {
-      onUpdate({ type: 'text_delta', turn: 1, delta: '5' });
+      onUpdate({ type: 'text_delta', delta: '5' });
       return { conversationId: 'conversation-1', result: { output: '5', tokens: { total: 2 } } };
     },
     invokePlaygroundTool: async (id, tool, args, confirmDangerous) => ({ conversationId: id, prompt: `Execute ${tool}\n\nArguments:\n${JSON.stringify(args, null, 2)}`, result: { output: { sum: 5 }, toolCalls: [{ name: tool, arguments: args }] }, confirmDangerous }),
