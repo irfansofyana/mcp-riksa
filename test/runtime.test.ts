@@ -199,7 +199,6 @@ describe('concrete workbench runtime', () => {
       await runtime.streamPlayground({ conversationId: cancelledConversation.id, prompt: 'After cancellation' }, () => undefined);
       expect(receivedMessages[2]).toEqual([
         { role: 'system', content: 'Use tools accurately.' },
-        { role: 'user', content: 'Cancelled turn' },
         { role: 'user', content: 'After cancellation' },
       ]);
       await expect(runtime.streamPlayground({ conversationId: conversation.id, prompt: 'Fail' }, () => undefined)).rejects.toThrow();

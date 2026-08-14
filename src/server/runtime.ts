@@ -303,8 +303,12 @@ export class WorkbenchRuntime {
       providerId: conversation.providerId,
       model: conversation.model,
     });
-    const providerHistory: ProviderMessage[] = conversation.messages.flatMap((message): ProviderMessage[] => {
-      if (message.role === 'user') return [{ role: 'user', content: message.content }];
+    const providerHistory: ProviderMessage[] = conversation.messages.flatMap((message, index): ProviderMessage[] => {
+      if (message.role === 'user') {
+        const assistant = conversation.messages[index + 1];
+        if (assistant?.role === 'assistant' && assistant.providerTranscript !== undefined && assistant.providerTranscript.length === 0) return [];
+        return [{ role: 'user', content: message.content }];
+      }
       if (message.providerTranscript !== undefined) return message.providerTranscript;
       return [{ role: 'assistant', content: message.content, toolCalls: [] }];
     });
