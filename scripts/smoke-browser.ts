@@ -137,6 +137,7 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
 
   try {
     await wait(`document.querySelector('.app-shell')`, 'application shell');
+    await wait(`document.title === 'MCP Riksa' && document.querySelector('.brand img[src$="/mcp-riksa-mark.svg"]') && document.querySelector('.brand')?.textContent?.trim() === 'MCP Riksa' && !document.body.textContent?.includes('MCP Local Workbench')`, 'MCP Riksa product identity');
     await click('theme-dark');
     await wait(`document.documentElement.dataset.theme === 'dark' && localStorage.getItem('mcp-workbench-theme') === 'dark'`, 'explicit dark theme');
     await click('theme-light');
@@ -282,6 +283,7 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     await cdp.send('Page.reload', { ignoreCache: true });
     await wait(`document.querySelector('.conformance-runner') !== null`, 'direct mobile conformance page');
     await wait(`(() => { const rail=document.querySelector('.nav-rail'); const active=rail?.querySelector('a.active'); if(!rail||!active)return false; const outer=rail.getBoundingClientRect(); const inner=active.getBoundingClientRect(); return inner.left >= outer.left && inner.right <= outer.right; })()`, 'active mobile conformance navigation');
+    await wait(`(() => { const brand=document.querySelector('.brand'); const mark=brand?.querySelector('.brand-mark'); const label=brand?.querySelector('span'); if(!brand||!mark||!label)return false; const outer=brand.getBoundingClientRect(); const icon=mark.getBoundingClientRect(); return getComputedStyle(label).display === 'none' && icon.width >= 24 && icon.height >= 24 && icon.left >= outer.left && icon.right <= outer.right; })()`, 'visible mobile MCP Riksa mark');
     await wait(`document.documentElement.scrollWidth <= window.innerWidth + 1`, 'mobile conformance layout without horizontal overflow');
     await navigate('runs');
     await wait(`document.documentElement.scrollWidth <= window.innerWidth + 1`, 'mobile layout without horizontal overflow');

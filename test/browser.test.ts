@@ -43,7 +43,7 @@ describe('browser success path', () => {
     const app = await start(
       process.execPath,
       [tsx, resolve('src/cli/index.ts'), 'serve', '--dev', '--port', '0', '--data-dir', join(directory, 'data')],
-      /MCP Local Workbench listening at (http:\/\/127\.0\.0\.1:\d+)/,
+      /MCP Riksa listening at (http:\/\/127\.0\.0\.1:\d+)/,
       { ...process.env, WORKBENCH_PROVIDER_API_KEY: 'browser-only-secret' },
     );
     const appUrl = app.match[1]!;

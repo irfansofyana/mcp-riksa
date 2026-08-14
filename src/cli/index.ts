@@ -151,7 +151,7 @@ program.command('serve')
     });
     const address = server.address();
     const port = address && typeof address !== 'string' ? address.port : options.port;
-    process.stdout.write(`MCP Local Workbench listening at http://${options.host}:${port}\n`);
+    process.stdout.write(`MCP Riksa listening at http://${options.host}:${port}\n`);
     const shutdown = async () => {
       const serverClose = new Promise<void>((resolveClose, rejectClose) => server.close((error) => error ? rejectClose(error) : resolveClose()));
       const results = await Promise.allSettled([serverClose, vite?.close(), runtime.close()]);

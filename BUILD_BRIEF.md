@@ -1,4 +1,4 @@
-# MCP Local Workbench — MVP Build Brief
+# MCP Riksa — MVP Build Brief
 
 Build a local-first, login-free MCP evaluation workbench that uses configurable OpenAI-compatible, Anthropic-compatible, or equivalent private model gateways and can later run the exact same suites in CI.
 

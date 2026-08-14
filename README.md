@@ -1,6 +1,6 @@
-# MCP Local Workbench
+# MCP Riksa
 
-MCP Local Workbench runs MCP server and agent evaluations on your machine. It connects to stdio or Streamable HTTP servers, drives OpenAI-compatible and Anthropic-compatible model endpoints, stores sanitized run history in SQLite, and executes the same YAML suites from the browser or CLI.
+MCP Riksa runs MCP server and agent evaluations on your machine. It connects to stdio or Streamable HTTP servers, drives OpenAI-compatible and Anthropic-compatible model endpoints, stores sanitized run history in SQLite, and executes the same YAML suites from the browser or CLI.
 
 The service binds to `127.0.0.1` on port `4317`. It has no login, cloud sync, telemetry, external fonts, or CDN assets.
 
