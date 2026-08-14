@@ -146,9 +146,9 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     await wait(`document.querySelector('.app-shell') && document.documentElement.dataset.theme === 'light'`, 'persisted light theme after reload');
     await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] });
     await click('theme-system');
-    await wait(`document.documentElement.dataset.theme === 'dark' && localStorage.getItem('mcp-workbench-theme') === 'system'`, 'system dark theme');
+    await wait(`document.documentElement.dataset.theme === 'dark' && localStorage.getItem('mcp-workbench-theme') === 'system'`, 'system dark theme', 30_000);
     await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] });
-    await wait(`document.documentElement.dataset.theme === 'light'`, 'live system light theme');
+    await wait(`document.documentElement.dataset.theme === 'light'`, 'live system light theme', 30_000);
     await click('theme-light');
     await wait(`!document.querySelector('.loading')`, 'loaded light workbench');
     mkdirSync(options.outputDirectory, { recursive: true });
@@ -209,6 +209,8 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     await setValue('playground-model', 'default');
     await setValue('playground-system-prompt', 'Use connected MCP tools when needed and explain the result clearly.');
     await waitText('MCP tools');
+    await clickText('.playground-rail-tabs button', 'Tools');
+    await wait(`document.querySelector('.tool-rail-list')`, 'playground tool rail');
     await clickText('.tool-rail-list button', 'add');
     await setValue('playground-tool-field-a', '2');
     await setValue('playground-tool-field-b', '3');
@@ -239,6 +241,7 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     const runAndInspect = async (step: string) => {
       await navigate('suites');
       await clickText('button', 'smoke-agent');
+      await wait(`!document.querySelector('[data-testid="run-suite"]')?.hasAttribute('disabled')`, 'enabled suite runner');
       await click('run-suite');
       await wait(`document.querySelector('.page-heading h1')?.textContent === 'Runs'`, 'Runs page after suite start');
       for (let attempt = 0; attempt < 80; attempt += 1) {

@@ -182,7 +182,7 @@ describe('concrete workbench runtime', () => {
       expect(direct).toMatchObject({ prompt: expect.stringContaining('Execute add'), result: { output: { sum: 9 } }, conversation: { messageCount: 6 } });
       expect(direct.prompt).toContain('"a": 4');
       const detail = await runtime.getConversation(conversation.id);
-      expect(deltas).toEqual(['Hello ', 'there']);
+      expect(deltas.join('')).toBe('Hello there');
       expect(detail).toMatchObject({ messageCount: 6, totals: { tokens: { total: 12 }, toolCalls: 1 } });
       expect(receivedMessages[0]?.[0]).toEqual({ role: 'system', content: 'Use tools accurately.' });
       expect(receivedMessages[1]).toHaveLength(4);

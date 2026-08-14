@@ -77,6 +77,7 @@ export async function runAgent(
         break;
       }
       let response;
+      let streamedText = '';
       const turnStarted = Date.now();
       try {
         response = await dependencies.provider.complete({
@@ -85,7 +86,7 @@ export async function runAgent(
           tools,
           signal: controller.signal,
           ...(options.onUpdate === undefined ? {} : {
-            onTextDelta: (delta: string) => emit({ type: 'text_delta', turn: turn + 1, delta }),
+            onTextDelta: (delta: string) => { streamedText += delta; },
           }),
         });
       } catch (error) {
@@ -93,6 +94,7 @@ export async function runAgent(
         stopReason = timedOut ? 'max_time' : 'cancelled';
         break;
       }
+      if (streamedText) emit({ type: 'text_delta', turn: turn + 1, delta: redact(streamedText) });
       tokens.input += response.usage.input;
       tokens.output += response.usage.output;
       tokens.total += response.usage.total;

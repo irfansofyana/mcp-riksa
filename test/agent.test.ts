@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { providerConfigSchema, type ProviderAdapter, type ProviderConfig } from '../src/agent/types.js';
 import { createProviderAdapter } from '../src/agent/providers.js';
 import { runAgent } from '../src/agent/loop.js';
+import { REDACTED, registerSecretValue } from '../src/core/redaction.js';
 import { McpManager } from '../src/mcp/manager.js';
 
 const tsxCli = resolve('node_modules/tsx/dist/cli.mjs');
@@ -181,7 +182,7 @@ describe.each([
       { onUpdate: (update) => updates.push(update) },
     );
     expect(result.output).toBe('The sum is 5');
-    expect(updates.filter((update) => update.type === 'text_delta').map((update) => update.delta)).toEqual(['The sum ', 'is 5']);
+    expect(updates.filter((update) => update.type === 'text_delta').map((update) => update.delta)).toEqual(['The sum is 5']);
     expect(updates).toContainEqual(expect.objectContaining({ type: 'tool_call' }));
     expect(result.tokens.total).toBeGreaterThan(0);
   });
@@ -204,9 +205,34 @@ test('streams text deltas and progress while retaining normalized final result',
   );
 
   expect(result.output).toBe('Hello world');
-  expect(updates.filter((update) => update.type === 'text_delta').map((update) => update.delta)).toEqual(['Hello', ' world']);
+  expect(updates.filter((update) => update.type === 'text_delta').map((update) => update.delta)).toEqual(['Hello world']);
   expect(updates).toContainEqual(expect.objectContaining({ type: 'model_turn', turn: 1 }));
   expect(updates).toContainEqual(expect.objectContaining({ type: 'stop', reason: 'complete' }));
+});
+
+test('never exposes secrets split across provider text deltas', async () => {
+  const secret = 'split-stream-secret-value';
+  registerSecretValue(secret);
+  const updates: Array<{ type: string; delta?: string }> = [];
+  const provider = scriptedAdapter(async (request) => {
+    request.onTextDelta?.('Known secret: split-stream-');
+    request.onTextDelta?.('secret-value; Authorization: Bear');
+    request.onTextDelta?.('er another-secret-value');
+    return {
+      text: `Known secret: ${secret}; Authorization: Bearer another-secret-value`,
+      toolCalls: [], usage: { input: 1, output: 1, total: 2 }, stopReason: 'complete', raw: {},
+    };
+  });
+  await runAgent(
+    { prompt: 'show secret', model: 'x', serverId: 'sample', limits: { maxTurns: 1, maxToolCalls: 1, timeoutMs: 5000 } },
+    { provider, mcp: manager },
+    { onUpdate: (update) => updates.push(update) },
+  );
+
+  const streamed = updates.filter((update) => update.type === 'text_delta').map((update) => update.delta ?? '').join('');
+  expect(streamed).toBe(`Known secret: ${REDACTED}; Authorization: Bearer ${REDACTED}`);
+  expect(streamed).not.toContain(secret);
+  expect(streamed).not.toContain('another-secret-value');
 });
 
 test('normalizes missing usage to zero', async () => {
