@@ -30,6 +30,24 @@ export function App() {
     return () => { active = false; window.removeEventListener('hashchange', onHash); };
   }, []);
 
+  useEffect(() => {
+    const revealActiveNavigation = () => {
+      const rail = document.querySelector<HTMLElement>('.nav-rail');
+      const active = rail?.querySelector<HTMLElement>('a.active');
+      if (rail && active && rail.scrollWidth > rail.clientWidth) {
+        rail.scrollLeft = active.offsetLeft - ((rail.clientWidth - active.offsetWidth) / 2);
+      }
+    };
+    const frame = window.requestAnimationFrame(revealActiveNavigation);
+    const timer = window.setTimeout(revealActiveNavigation, 100);
+    window.addEventListener('resize', revealActiveNavigation);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+      window.removeEventListener('resize', revealActiveNavigation);
+    };
+  }, [page]);
+
   const navigate = (next: Page) => {
     window.location.hash = `/${next.toLowerCase()}`;
     setPage(next);
