@@ -187,6 +187,21 @@ describe('concrete workbench runtime', () => {
       expect(receivedMessages[0]?.[0]).toEqual({ role: 'system', content: 'Use tools accurately.' });
       expect(receivedMessages[1]).toHaveLength(4);
       expect(receivedMessages[1]?.[0]).toEqual({ role: 'system', content: 'Use tools accurately.' });
+      const cancelledConversation = await runtime.createConversation({ serverId: 'sample', providerId: 'local', model: 'fast', systemPrompt: 'Use tools accurately.' });
+      const controller = new AbortController();
+      controller.abort(new Error('cancelled by test'));
+      const cancelled = await runtime.streamPlayground(
+        { conversationId: cancelledConversation.id, prompt: 'Cancelled turn' },
+        () => undefined,
+        controller.signal,
+      );
+      expect(cancelled.result).toMatchObject({ stopReason: 'cancelled', transcript: [] });
+      await runtime.streamPlayground({ conversationId: cancelledConversation.id, prompt: 'After cancellation' }, () => undefined);
+      expect(receivedMessages[2]).toEqual([
+        { role: 'system', content: 'Use tools accurately.' },
+        { role: 'user', content: 'Cancelled turn' },
+        { role: 'user', content: 'After cancellation' },
+      ]);
       await expect(runtime.streamPlayground({ conversationId: conversation.id, prompt: 'Fail' }, () => undefined)).rejects.toThrow();
       expect(await runtime.getConversation(conversation.id)).toMatchObject({ messageCount: 6 });
     } finally {

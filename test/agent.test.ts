@@ -391,15 +391,28 @@ describe('agent stop boundaries', () => {
     expect(result.toolCalls).toHaveLength(0);
   });
 
-  test('stops when estimated cost exceeds the budget', async () => {
-    const provider = scriptedAdapter(async () => ({
-      text: 'expensive', toolCalls: [], usage: { input: 1, output: 1, total: 2 }, stopReason: 'complete', raw: {},
-    }));
+  test('records a completed final answer when cumulative cost exceeds the budget', async () => {
+    let turn = 0;
+    const provider = scriptedAdapter(async () => {
+      turn += 1;
+      if (turn === 1) return {
+        text: '', toolCalls: [{ id: 'cost-tool', name: 'add', arguments: { a: 1, b: 2 } }],
+        usage: { input: 0, output: 0, total: 0 }, stopReason: 'tool_use', raw: {},
+      };
+      return {
+        text: 'expensive', toolCalls: [], usage: { input: 1, output: 1, total: 2 }, stopReason: 'complete', raw: {},
+      };
+    });
     const result = await runAgent(
       { prompt: 'cost', model: 'x', serverId: 'sample', limits: { maxTurns: 2, maxToolCalls: 1, timeoutMs: 5000, maxCostUsd: 0.5 } },
       { provider, mcp: manager },
     );
     expect(result.stopReason).toBe('max_cost');
+    expect(result.transcript).toEqual([
+      { role: 'assistant', content: '', toolCalls: [{ id: 'cost-tool', name: 'add', arguments: { a: 1, b: 2 } }] },
+      { role: 'tool', toolCallId: 'cost-tool', name: 'add', content: '{"content":[{"type":"text","text":"3"}],"structuredContent":{"sum":3}}' },
+      { role: 'assistant', content: 'expensive', toolCalls: [] },
+    ]);
   });
 
   test.each([

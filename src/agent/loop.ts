@@ -140,13 +140,13 @@ export async function runAgent(
         durationMs: turnDurationMs,
       });
 
-      if (input.limits.maxCostUsd !== undefined && costUsd > input.limits.maxCostUsd) {
-        stopReason = 'max_cost';
-        break;
-      }
       if (response.toolCalls.length === 0) {
         transcript.push({ role: 'assistant', content: response.text, toolCalls: [] });
-        stopReason = 'complete';
+        stopReason = input.limits.maxCostUsd !== undefined && costUsd > input.limits.maxCostUsd ? 'max_cost' : 'complete';
+        break;
+      }
+      if (input.limits.maxCostUsd !== undefined && costUsd > input.limits.maxCostUsd) {
+        stopReason = 'max_cost';
         break;
       }
       if (turn + 1 >= input.limits.maxTurns) {

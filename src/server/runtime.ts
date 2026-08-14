@@ -305,7 +305,7 @@ export class WorkbenchRuntime {
     });
     const providerHistory: ProviderMessage[] = conversation.messages.flatMap((message): ProviderMessage[] => {
       if (message.role === 'user') return [{ role: 'user', content: message.content }];
-      if (message.providerTranscript?.length) return message.providerTranscript;
+      if (message.providerTranscript !== undefined) return message.providerTranscript;
       return [{ role: 'assistant', content: message.content, toolCalls: [] }];
     });
     const result = await this.withConfigUse([`server:${resolved.serverId}`, `provider:${resolved.providerId}`], () => runAgent({
