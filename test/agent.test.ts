@@ -423,4 +423,138 @@ describe('agent stop boundaries', () => {
     if (timer) clearTimeout(timer);
     expect(result.stopReason).toBe(expected);
   });
+
+  test.each([
+    ['cancelled', 5000, 10],
+    ['max_time', 20, 100],
+  ] as const)('returns a terminal %s result when a pending tool call aborts', async (expected, timeoutMs, cancelAfterMs) => {
+    const provider = scriptedAdapter(async () => ({
+      text: '', toolCalls: [{ id: '1', name: 'add', arguments: { a: 1, b: 1 } }],
+      usage: { input: 0, output: 0, total: 0 }, stopReason: 'tool_calls', raw: {},
+    }));
+    const blockingMcp = {
+      inspect: async () => ({ tools: [{ name: 'add', inputSchema: {} }] }),
+      call: async (_id: string, _tool: string, _args: Record<string, unknown>, options?: { signal?: AbortSignal }) => new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener('abort', () => reject(options.signal?.reason), { once: true });
+      }),
+    };
+    const controller = new AbortController();
+    const updates: Array<{ type: string; reason?: string }> = [];
+    const timer = expected === 'cancelled' ? setTimeout(() => controller.abort(new Error('user cancelled')), cancelAfterMs) : undefined;
+    const result = await runAgent(
+      { prompt: 'wait for tool', model: 'x', serverId: 'sample', limits: { maxTurns: 2, maxToolCalls: 1, timeoutMs } },
+      { provider, mcp: blockingMcp },
+      { signal: controller.signal, onUpdate: (update) => updates.push(update) },
+    );
+    if (timer) clearTimeout(timer);
+
+    expect(result.stopReason).toBe(expected);
+    expect(result.toolCalls).toEqual([]);
+    expect(updates).toContainEqual(expect.objectContaining({ type: 'stop', reason: expected }));
+  });
+
+  test('propagates a concurrent tool failure that is unrelated to cancellation', async () => {
+    const controller = new AbortController();
+    const provider = scriptedAdapter(async () => ({
+      text: '', toolCalls: [{ id: '1', name: 'add', arguments: { a: 1, b: 1 } }],
+      usage: { input: 0, output: 0, total: 0 }, stopReason: 'tool_calls', raw: {},
+    }));
+    const failingMcp = {
+      inspect: async () => ({ tools: [{ name: 'add', inputSchema: {} }] }),
+      call: async () => {
+        controller.abort(new Error('user cancelled'));
+        throw new Error('backend failed');
+      },
+    };
+
+    await expect(runAgent(
+      { prompt: 'fail tool', model: 'x', serverId: 'sample', limits: { maxTurns: 2, maxToolCalls: 1, timeoutMs: 5000 } },
+      { provider, mcp: failingMcp },
+      { signal: controller.signal },
+    )).rejects.toThrow('backend failed');
+  });
+
+  test('discards a tool result that resolves after cancellation', async () => {
+    const controller = new AbortController();
+    const provider = scriptedAdapter(async () => ({
+      text: '', toolCalls: [{ id: '1', name: 'add', arguments: { a: 1, b: 1 } }],
+      usage: { input: 0, output: 0, total: 0 }, stopReason: 'tool_calls', raw: {},
+    }));
+    const resolvingMcp = {
+      inspect: async () => ({ tools: [{ name: 'add', inputSchema: {} }] }),
+      call: async (_id: string, _tool: string, _args: Record<string, unknown>, options?: { signal?: AbortSignal }) => new Promise((resolveValue) => {
+        options?.signal?.addEventListener('abort', () => resolveValue({ sum: 2 }), { once: true });
+      }),
+    };
+    const updates: Array<{ type: string }> = [];
+    const timer = setTimeout(() => controller.abort(new Error('user cancelled')), 10);
+    const result = await runAgent(
+      { prompt: 'cancel tool', model: 'x', serverId: 'sample', limits: { maxTurns: 2, maxToolCalls: 1, timeoutMs: 5000 } },
+      { provider, mcp: resolvingMcp },
+      { signal: controller.signal, onUpdate: (update) => updates.push(update) },
+    );
+    clearTimeout(timer);
+
+    expect(result.stopReason).toBe('cancelled');
+    expect(result.toolCalls).toEqual([]);
+    expect(result.transcript.some((message) => message.role === 'tool')).toBe(false);
+    expect(updates.some((update) => update.type === 'tool_call')).toBe(false);
+  });
+
+  test('preserves caller cancellation when timeout fires before an abort rejection settles', async () => {
+    const controller = new AbortController();
+    const provider = scriptedAdapter(async ({ signal }) => new Promise((_resolve, reject) => {
+      signal?.addEventListener('abort', () => setTimeout(() => reject(signal.reason), 20), { once: true });
+    }));
+    const timer = setTimeout(() => controller.abort(new Error('user cancelled')), 5);
+    const result = await runAgent(
+      { prompt: 'cancel first', model: 'x', serverId: 'sample', limits: { maxTurns: 1, maxToolCalls: 1, timeoutMs: 15 } },
+      { provider, mcp: manager },
+      { signal: controller.signal },
+    );
+    clearTimeout(timer);
+
+    expect(result.stopReason).toBe('cancelled');
+  });
+
+  test('returns max_time when MCP inspection does not settle', async () => {
+    const provider = scriptedAdapter(async () => ({
+      text: 'unused', toolCalls: [], usage: { input: 0, output: 0, total: 0 }, stopReason: 'complete', raw: {},
+    }));
+    const hangingMcp = {
+      inspect: async () => new Promise<never>(() => undefined),
+      call: async () => undefined,
+    };
+    const updates: Array<{ type: string; reason?: string }> = [];
+    const outcome = await Promise.race([
+      runAgent(
+        { prompt: 'inspect', model: 'x', serverId: 'sample', limits: { maxTurns: 1, maxToolCalls: 1, timeoutMs: 10 } },
+        { provider, mcp: hangingMcp },
+        { onUpdate: (update) => updates.push(update) },
+      ),
+      new Promise<'still-pending'>((resolvePending) => setTimeout(() => resolvePending('still-pending'), 50)),
+    ]);
+
+    expect(outcome).not.toBe('still-pending');
+    expect(outcome).toEqual(expect.objectContaining({ stopReason: 'max_time' }));
+    expect(updates).toContainEqual(expect.objectContaining({ type: 'stop', reason: 'max_time' }));
+  });
+
+  test('propagates an inspection failure when cancellation has already fired', async () => {
+    const controller = new AbortController();
+    controller.abort(new Error('user cancelled'));
+    const provider = scriptedAdapter(async () => ({
+      text: 'unused', toolCalls: [], usage: { input: 0, output: 0, total: 0 }, stopReason: 'complete', raw: {},
+    }));
+    const failingMcp = {
+      inspect: async () => { throw new Error('inspection backend failed'); },
+      call: async () => undefined,
+    };
+
+    await expect(runAgent(
+      { prompt: 'inspect', model: 'x', serverId: 'sample', limits: { maxTurns: 1, maxToolCalls: 1, timeoutMs: 5000 } },
+      { provider, mcp: failingMcp },
+      { signal: controller.signal },
+    )).rejects.toThrow('inspection backend failed');
+  });
 });

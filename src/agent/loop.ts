@@ -33,6 +33,24 @@ function estimatedCost(adapter: ProviderAdapter, input: number, output: number):
   return (input * adapter.pricing.inputPerMillion + output * adapter.pricing.outputPerMillion) / 1_000_000;
 }
 
+function isAbortFailure(error: unknown, signal: AbortSignal): boolean {
+  return signal.aborted && (error === signal.reason || (error instanceof Error && error.name === 'AbortError'));
+}
+
+async function awaitWithAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  let onAbort: () => void = () => undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(signal.reason);
+    if (signal.aborted) onAbort();
+    else signal.addEventListener('abort', onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([operation, aborted]);
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+  }
+}
+
 export async function runAgent(
   input: AgentInput,
   dependencies: { provider: ProviderAdapter; mcp: McpForAgent },
@@ -45,6 +63,7 @@ export async function runAgent(
   options.signal?.addEventListener('abort', onAbort, { once: true });
   if (options.signal?.aborted) onAbort();
   const timeout = setTimeout(() => {
+    if (controller.signal.aborted) return;
     timedOut = true;
     controller.abort(new Error('Maximum elapsed time reached'));
   }, input.limits.timeoutMs);
@@ -66,14 +85,22 @@ export async function runAgent(
   let stopReason: AgentResult['stopReason'] = 'max_turns';
 
   try {
-    const inspection = await dependencies.mcp.inspect(input.serverId);
+    agentLoop: {
+    let inspection;
+    try {
+      inspection = await awaitWithAbort(dependencies.mcp.inspect(input.serverId), controller.signal);
+    } catch (error) {
+      if (!isAbortFailure(error, controller.signal)) throw error;
+      stopReason = timedOut ? 'max_time' : 'cancelled';
+      break agentLoop;
+    }
     const tools: ProviderTool[] = inspection.tools.map((tool) => ({
       name: tool.name,
       ...(tool.description === undefined ? {} : { description: tool.description }),
       inputSchema: tool.inputSchema,
     }));
 
-    for (let turn = 0; turn < input.limits.maxTurns; turn += 1) {
+    turnLoop: for (let turn = 0; turn < input.limits.maxTurns; turn += 1) {
       if (controller.signal.aborted) {
         stopReason = timedOut ? 'max_time' : 'cancelled';
         break;
@@ -97,7 +124,7 @@ export async function runAgent(
         streamedText += response.text;
         individuallyRedactedText += redact(response.text);
       } catch (error) {
-        if (!controller.signal.aborted) throw error;
+        if (!isAbortFailure(error, controller.signal)) throw error;
         stopReason = timedOut ? 'max_time' : 'cancelled';
         break;
       }
@@ -136,12 +163,23 @@ export async function runAgent(
       transcript.push(assistantMessage);
       for (const toolCall of response.toolCalls) {
         const toolStarted = Date.now();
-        const result = await dependencies.mcp.call(
-          input.serverId,
-          toolCall.name,
-          toolCall.arguments,
-          { signal: controller.signal },
-        );
+        let result;
+        try {
+          result = await dependencies.mcp.call(
+            input.serverId,
+            toolCall.name,
+            toolCall.arguments,
+            { signal: controller.signal },
+          );
+        } catch (error) {
+          if (!isAbortFailure(error, controller.signal)) throw error;
+          stopReason = timedOut ? 'max_time' : 'cancelled';
+          break turnLoop;
+        }
+        if (controller.signal.aborted) {
+          stopReason = timedOut ? 'max_time' : 'cancelled';
+          break turnLoop;
+        }
         const observed = {
           name: toolCall.name,
           arguments: redact(toolCall.arguments),
@@ -155,6 +193,7 @@ export async function runAgent(
         messages.push(toolMessage);
         transcript.push(toolMessage);
       }
+    }
     }
   } finally {
     clearTimeout(timeout);
