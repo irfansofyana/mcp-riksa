@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 
 export const THEME_STORAGE_KEY = 'mcp-workbench-theme';
 export const themePreferences = ['system', 'light', 'dark'] as const;
@@ -43,14 +43,13 @@ export function applyTheme(theme: ResolvedTheme, root: HTMLElement, themeColor?:
 export function useThemePreference() {
   const [media] = useState(() => window.matchMedia('(prefers-color-scheme: dark)'));
   const [preference, setPreferenceState] = useState<ThemePreference>(() => readThemePreference(browserStorage()));
-  const [systemPrefersDark, setSystemPrefersDark] = useState(media.matches);
-  const resolvedTheme = resolveTheme(preference, systemPrefersDark);
-
-  useEffect(() => {
-    const onChange = (event: MediaQueryListEvent) => setSystemPrefersDark(event.matches);
-    media.addEventListener('change', onChange);
-    return () => media.removeEventListener('change', onChange);
+  const subscribeToSystemTheme = useCallback((onStoreChange: () => void) => {
+    media.addEventListener('change', onStoreChange);
+    return () => media.removeEventListener('change', onStoreChange);
   }, [media]);
+  const readSystemTheme = useCallback(() => media.matches, [media]);
+  const systemPrefersDark = useSyncExternalStore(subscribeToSystemTheme, readSystemTheme, () => false);
+  const resolvedTheme = resolveTheme(preference, systemPrefersDark);
 
   useEffect(() => {
     applyTheme(resolvedTheme, document.documentElement, document.querySelector<HTMLMetaElement>('meta[name="theme-color"]'));
