@@ -450,6 +450,7 @@ describe('agent stop boundaries', () => {
 
     expect(result.stopReason).toBe(expected);
     expect(result.toolCalls).toEqual([]);
+    expect(result.transcript).toEqual([]);
     expect(updates).toContainEqual(expect.objectContaining({ type: 'stop', reason: expected }));
   });
 

@@ -160,7 +160,7 @@ export async function runAgent(
 
       const assistantMessage: ProviderMessage = { role: 'assistant', content: response.text, toolCalls: response.toolCalls };
       messages.push(assistantMessage);
-      transcript.push(assistantMessage);
+      const completedTurn: ProviderMessage[] = [assistantMessage];
       for (const toolCall of response.toolCalls) {
         const toolStarted = Date.now();
         let result;
@@ -191,8 +191,9 @@ export async function runAgent(
         emit({ type: 'tool_call', turn: turn + 1, call: observed });
         const toolMessage: ProviderMessage = { role: 'tool', toolCallId: toolCall.id, name: toolCall.name, content: JSON.stringify(result) };
         messages.push(toolMessage);
-        transcript.push(toolMessage);
+        completedTurn.push(toolMessage);
       }
+      transcript.push(...completedTurn);
     }
     }
   } finally {

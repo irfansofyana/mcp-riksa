@@ -67,6 +67,8 @@ function scenarioFromPath(path: string, selection: ConformanceSelection): string
 }
 
 export class OfficialConformanceRunner implements ConformanceRunner {
+  constructor(private readonly spawnProcess: typeof spawn = spawn) {}
+
   async run(input: { endpoint: string; selection: ConformanceSelection; timeoutMs: number }, signal: AbortSignal): Promise<ConformanceExecution> {
     const outputDirectory = await mkdtemp(join(tmpdir(), 'mcp-conformance-'));
     const proxy = await guardedProxy(input.endpoint);
@@ -79,17 +81,19 @@ export class OfficialConformanceRunner implements ConformanceRunner {
     let stderr = '';
     let timedOut = false;
     let cancelled = false;
+    let terminationReason: 'cancelled' | 'timeout' | undefined;
     let terminationTimer: NodeJS.Timeout | undefined;
     let timeout: NodeJS.Timeout | undefined;
     try {
       const exitCode = await new Promise<number | null>((resolve, reject) => {
-        const child = spawn(process.execPath, args, {
+        const child = this.spawnProcess(process.execPath, args, {
           shell: false,
           stdio: ['ignore', 'pipe', 'pipe'],
           env: { PATH: process.env.PATH ?? '', NO_COLOR: '1' },
         });
         const terminate = (reason: 'cancelled' | 'timeout') => {
-          if (child.exitCode !== null || child.signalCode !== null) return;
+          if (terminationReason || child.exitCode !== null || child.signalCode !== null) return;
+          terminationReason = reason;
           cancelled = reason === 'cancelled';
           timedOut = reason === 'timeout';
           child.kill('SIGTERM');

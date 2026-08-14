@@ -1,4 +1,6 @@
-import { describe, expect, test } from 'vitest';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+import { describe, expect, test, vi } from 'vitest';
 import { conformanceStatus, conformanceSummary, normalizeConformanceChecks } from '../src/conformance/model.js';
 import { OfficialConformanceRunner } from '../src/conformance/runner.js';
 
@@ -22,6 +24,30 @@ describe('official conformance report model', () => {
     expect(execution.rawReport).toMatchObject({ runner: '@modelcontextprotocol/conformance' });
     expect(execution.checks.length > 0 || execution.diagnostic).toBeTruthy();
   }, 20_000);
+
+  test('preserves timeout when cancellation arrives during process termination', async () => {
+    const child = Object.assign(new EventEmitter(), {
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      exitCode: null,
+      signalCode: null,
+      kill: vi.fn(() => true),
+    });
+    const spawnProcess = vi.fn(() => child) as unknown as typeof import('node:child_process').spawn;
+    const controller = new AbortController();
+    const executionPromise = new OfficialConformanceRunner(spawnProcess).run(
+      { endpoint: 'http://127.0.0.1:1/mcp', selection: { kind: 'scenario', scenario: 'server-initialize' }, timeoutMs: 10 },
+      controller.signal,
+    );
+
+    await vi.waitFor(() => expect(child.kill).toHaveBeenCalledWith('SIGTERM'));
+    controller.abort();
+    child.emit('close', null);
+
+    const execution = await executionPromise;
+    expect(execution.timedOut).toBe(true);
+    expect(execution.cancelled).toBe(false);
+  });
 
   test('keeps runner failure distinct from tested scenario failure', () => {
     const failed = normalizeConformanceChecks([{ scenario: 'tools-list', value: [{ id: 'tools', name: 'Tools', description: '', status: 'FAILURE' }] }]);
