@@ -86,11 +86,11 @@ export function ServersPage({ servers, conformanceReports, onRefresh, onConforma
   useEffect(() => {
     const receive = (payload: unknown) => {
       const signal = payload as { type?: string; value?: { id?: string } } | undefined;
-      if (signal?.type === 'workbench:oauth' && signal.value?.id) setOauthSignal(signal.value.id);
+      if (signal?.type === 'mcp-riksa:oauth' && signal.value?.id) setOauthSignal(signal.value.id);
     };
     const onMessage = (event: MessageEvent) => { if (event.origin === window.location.origin) receive(event.data); };
     window.addEventListener('message', onMessage);
-    const channel = typeof BroadcastChannel === 'undefined' ? undefined : new BroadcastChannel('workbench-oauth');
+    const channel = typeof BroadcastChannel === 'undefined' ? undefined : new BroadcastChannel('mcp-riksa-oauth');
     if (channel) channel.onmessage = (event) => receive(event.data);
     return () => { window.removeEventListener('message', onMessage); channel?.close(); };
   }, []);
@@ -206,11 +206,11 @@ export function ServersPage({ servers, conformanceReports, onRefresh, onConforma
             setOauthServer(selected);
             setOauth(value);
             setAuthorizationUrl(value.authorizationUrl ?? '');
-            if (value.authorizationUrl) window.open(value.authorizationUrl, 'workbench-oauth', 'popup,width=560,height=720');
+            if (value.authorizationUrl) window.open(value.authorizationUrl, 'mcp-riksa-oauth', 'popup,width=560,height=720');
           })}>{oauth?.state === 'authorized' ? 'Reconnect with OAuth' : 'Connect with OAuth'}</Button>
           <Button onClick={() => void act(async () => { setOauthServer(selected); await refreshOAuth(selected); })}>Check status</Button>
           <Button variant="danger" onClick={() => void act(async () => { await api.forgetOAuth(selected); setOauth(undefined); setOauthServer(''); setAuthorizationUrl(''); await onRefresh(); })}>Forget authorization</Button>
-          {authorizationUrl ? <a className="inline-link" href={authorizationUrl} target="workbench-oauth">Open authorization window ↗</a> : null}
+          {authorizationUrl ? <a className="inline-link" href={authorizationUrl} target="mcp-riksa-oauth">Open authorization window ↗</a> : null}
         </div>
         {oauth?.state === 'authorizing' ? <div className="oauth-waiting"><i /><span>Complete authorization in popup. This page updates automatically.</span></div> : null}
         {oauth ? <JsonView value={oauth.timeline} label="Sanitized OAuth timeline" /> : null}

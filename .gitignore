@@ -1,6 +1,6 @@
 node_modules/
 dist/
-.workbench/
+.mcp-riksa/
 coverage/
 *.db
 *.db-shm

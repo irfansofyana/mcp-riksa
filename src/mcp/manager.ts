@@ -67,7 +67,7 @@ export class McpManager {
   async connect(input: unknown, oauthProvider?: OAuthClientProvider): Promise<ReturnType<McpManager['inspect']>> {
     const config = serverConfigSchema.parse(input);
     if (this.connections.has(config.id)) await this.disconnect(config.id);
-    const client = new Client({ name: 'mcp-local-workbench', version: '0.1.0' }, { capabilities: {} });
+    const client = new Client({ name: 'mcp-riksa', version: '0.1.0' }, { capabilities: {} });
     let transport: Transport;
     let dispatcher: Agent | undefined;
     if (config.transport === 'stdio') {

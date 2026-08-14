@@ -17,7 +17,7 @@ providers:
       default: test-model
       fast: test-model
       quality: test-model
-    apiKeyEnv: WORKBENCH_PROVIDER_API_KEY
+    apiKeyEnv: MCP_RIKSA_PROVIDER_API_KEY
     headerEnv: {}
     pricing:
       inputPerMillion: 1

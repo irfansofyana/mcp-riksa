@@ -6,7 +6,7 @@ import type { ProviderSummary } from '../types.js';
 
 const initial = (): ProviderForm => ({
   id: '', name: '', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1',
-  models: [{ alias: 'default', model: '' }], apiKeyEnv: 'WORKBENCH_PROVIDER_API_KEY',
+  models: [{ alias: 'default', model: '' }], apiKeyEnv: 'MCP_RIKSA_PROVIDER_API_KEY',
   headerEnv: '', inputPrice: '0', outputPrice: '0',
 });
 

@@ -58,8 +58,8 @@ async function waitForRun(runtime: WorkbenchRuntime, id: string): Promise<RunRes
 }
 
 const program = new Command()
-  .name('mcp-workbench')
-  .description('Local-first MCP evaluation workbench')
+  .name('mcp-riksa')
+  .description('Local-first MCP Riksa evaluation workspace')
   .version('0.1.0');
 
 program.command('inspect')
@@ -86,7 +86,7 @@ program.command('run')
   .argument('<suite>', 'suite YAML path')
   .option('--config <path>', 'workbench YAML configuration')
   .option('--sample', 'register the deterministic sample stdio server')
-  .option('--data-dir <path>', 'runtime data directory', '.workbench/cli')
+  .option('--data-dir <path>', 'runtime data directory', '.mcp-riksa/cli')
   .option('--output <path>', 'report output directory', 'reports')
   .action(async (suitePath: string, options: { config?: string; sample?: boolean; dataDir: string; output: string }) => {
     const dataDirectory = resolve(options.dataDir);
@@ -121,7 +121,7 @@ program.command('serve')
   .description('Start the loopback browser workbench')
   .option('--host <host>', 'bind host', '127.0.0.1')
   .option('--port <port>', 'bind port', (value) => Number.parseInt(value, 10), 4317)
-  .option('--data-dir <path>', 'runtime data directory', '.workbench')
+  .option('--data-dir <path>', 'runtime data directory', '.mcp-riksa')
   .option('--config <path>', 'workbench YAML configuration')
   .option('--allow-external', 'explicitly permit a non-loopback bind')
   .option('--dev', 'serve the Vite development UI')

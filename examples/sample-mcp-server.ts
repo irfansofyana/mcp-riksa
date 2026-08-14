@@ -4,7 +4,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 
 const server = new McpServer(
-  { name: 'mcp-local-workbench-sample', version: '1.0.0' },
+  { name: 'mcp-riksa-sample', version: '1.0.0' },
   { capabilities: { logging: {} }, instructions: 'Deterministic tools for MCP Riksa tests.' },
 );
 

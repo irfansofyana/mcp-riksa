@@ -11,7 +11,7 @@ import { RunRepository } from '../src/storage/runs.js';
 const directories: string[] = [];
 
 function createRepository() {
-  const directory = mkdtempSync(join(tmpdir(), 'mcp-workbench-'));
+  const directory = mkdtempSync(join(tmpdir(), 'mcp-riksa-'));
   directories.push(directory);
   const database = openDatabase(join(directory, 'runs.db'));
   return { database, repository: new RunRepository(database) };
@@ -75,7 +75,7 @@ describe('SQLite run repository', () => {
   });
 
   test('backfills version-3 conversation trace JSON into canonical events', () => {
-    const directory = mkdtempSync(join(tmpdir(), 'mcp-workbench-v3-'));
+    const directory = mkdtempSync(join(tmpdir(), 'mcp-riksa-v3-'));
     directories.push(directory);
     const path = join(directory, 'runs.db');
     const legacy = openDatabase(path);

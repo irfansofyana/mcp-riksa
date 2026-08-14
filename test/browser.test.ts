@@ -44,7 +44,7 @@ describe('browser success path', () => {
       process.execPath,
       [tsx, resolve('src/cli/index.ts'), 'serve', '--dev', '--port', '0', '--data-dir', join(directory, 'data')],
       /MCP Riksa listening at (http:\/\/127\.0\.0\.1:\d+)/,
-      { ...process.env, WORKBENCH_PROVIDER_API_KEY: 'browser-only-secret' },
+      { ...process.env, MCP_RIKSA_PROVIDER_API_KEY: 'browser-only-secret' },
     );
     const appUrl = app.match[1]!;
 

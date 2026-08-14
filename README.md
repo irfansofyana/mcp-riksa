@@ -15,7 +15,7 @@ The service binds to `127.0.0.1` on port `4317`. It has no login, cloud sync, te
 
 ```bash
 npm install
-npm run dev -- --config examples/workbench.config.yaml
+npm run dev -- --config examples/mcp-riksa.config.yaml
 ```
 
 Open `http://127.0.0.1:4317`. The header appearance control offers light, dark, and system themes. First visits follow the operating-system setting; explicit choices persist in browser-local storage.
@@ -23,11 +23,11 @@ Open `http://127.0.0.1:4317`. The header appearance control offers light, dark, 
 The example config registers the deterministic stdio server and a provider alias. Start the bundled fake provider in a second terminal before running an agent case:
 
 ```bash
-export WORKBENCH_PROVIDER_API_KEY=local-test-only
+export MCP_RIKSA_PROVIDER_API_KEY=local-test-only
 npx tsx scripts/fake-provider.ts --port 4000
 ```
 
-The API key stays in the process environment. The config stores `WORKBENCH_PROVIDER_API_KEY`, which is the environment variable name.
+The API key stays in the process environment. The config stores `MCP_RIKSA_PROVIDER_API_KEY`, which is the environment variable name.
 
 ## Browser tour
 
@@ -53,7 +53,7 @@ Build and serve the production bundle with:
 
 ```bash
 npm run build
-npm start -- --config examples/workbench.config.yaml
+npm start -- --config examples/mcp-riksa.config.yaml
 ```
 
 ## Headless CLI
@@ -68,18 +68,18 @@ Run the direct-tool sample and write all three report formats:
 
 ```bash
 npx tsx src/cli/index.ts run examples/sample-suite.yaml \
-  --config examples/workbench.config.yaml \
-  --data-dir .workbench/cli \
+  --config examples/mcp-riksa.config.yaml \
+  --data-dir .mcp-riksa/cli \
   --output reports
 ```
 
 Run the provider-to-tool agent sample after starting `scripts/fake-provider.ts`:
 
 ```bash
-export WORKBENCH_PROVIDER_API_KEY=local-test-only
+export MCP_RIKSA_PROVIDER_API_KEY=local-test-only
 npx tsx src/cli/index.ts run examples/sample-agent-suite.yaml \
-  --config examples/workbench.config.yaml \
-  --data-dir .workbench/agent-cli \
+  --config examples/mcp-riksa.config.yaml \
+  --data-dir .mcp-riksa/agent-cli \
   --output agent-reports
 ```
 
@@ -87,7 +87,7 @@ The CLI writes `run.json`, `run.html`, and `junit.xml`. It prints JSON to stdout
 
 ## Configuration
 
-`examples/workbench.config.yaml` shows the complete file shape. Provider configs support:
+`examples/mcp-riksa.config.yaml` shows the complete file shape. Provider configs support:
 
 - `openai-compatible` and `anthropic-compatible` protocols
 - multiple model aliases per provider, each mapped to its upstream model ID
@@ -169,8 +169,8 @@ npm test
 npm run typecheck
 npm run build
 node dist/src/cli/index.js run examples/sample-suite.yaml \
-  --config examples/ci-workbench.config.yaml \
-  --data-dir .workbench/ci \
+  --config examples/ci-mcp-riksa.config.yaml \
+  --data-dir .mcp-riksa/ci \
   --output reports
 ```
 

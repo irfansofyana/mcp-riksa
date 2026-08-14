@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 
-export const THEME_STORAGE_KEY = 'mcp-workbench-theme';
+export const THEME_STORAGE_KEY = 'mcp-riksa-theme';
 export const themePreferences = ['system', 'light', 'dark'] as const;
 export type ThemePreference = typeof themePreferences[number];
 export type ResolvedTheme = Exclude<ThemePreference, 'system'>;

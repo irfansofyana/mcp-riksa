@@ -103,4 +103,4 @@ Interactive Authorization Code + PKCE, metadata discovery, DCR when advertised, 
 - Browser flow exercised at desktop and mobile; console clean.
 - Independent security/logic review passes.
 - README gives exact local and CI commands plus limitations.
-- Commit and push to private `irfansofyana/mcp-local-workbench` repository.
+- Commit and push to private `irfansofyana/mcp-riksa` repository.

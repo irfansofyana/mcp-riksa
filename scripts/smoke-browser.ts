@@ -53,7 +53,7 @@ class Cdp {
 }
 
 async function startChrome(appUrl: string) {
-  const profile = mkdtempSync(join(tmpdir(), 'mcp-workbench-chrome-'));
+  const profile = mkdtempSync(join(tmpdir(), 'mcp-riksa-chrome-'));
   const candidates = [process.env.CHROME_BIN, '/usr/bin/google-chrome', '/usr/bin/chromium', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].filter((value): value is string => Boolean(value));
   const executable = candidates.find(existsSync);
   if (!executable) throw new Error('Chrome executable not found; set CHROME_BIN');
@@ -139,15 +139,15 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     await wait(`document.querySelector('.app-shell')`, 'application shell');
     await wait(`document.title === 'MCP Riksa' && document.querySelector('.brand img[src$="/mcp-riksa-mark.svg"]') && document.querySelector('.brand')?.textContent?.trim() === 'MCP Riksa' && !document.body.textContent?.includes('MCP Local Workbench')`, 'MCP Riksa product identity');
     await click('theme-dark');
-    await wait(`document.documentElement.dataset.theme === 'dark' && localStorage.getItem('mcp-workbench-theme') === 'dark'`, 'explicit dark theme');
+    await wait(`document.documentElement.dataset.theme === 'dark' && localStorage.getItem('mcp-riksa-theme') === 'dark'`, 'explicit dark theme');
     await click('theme-light');
-    await wait(`document.documentElement.dataset.theme === 'light' && localStorage.getItem('mcp-workbench-theme') === 'light'`, 'explicit light theme');
+    await wait(`document.documentElement.dataset.theme === 'light' && localStorage.getItem('mcp-riksa-theme') === 'light'`, 'explicit light theme');
     await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] });
     await cdp.send('Page.reload', { ignoreCache: true });
     await new Promise((resolveWait) => setTimeout(resolveWait, 300));
     await wait(`document.querySelector('.app-shell') && document.documentElement.dataset.theme === 'light'`, 'persisted light theme after reload');
     await click('theme-system');
-    await wait(`document.documentElement.dataset.theme === 'dark' && localStorage.getItem('mcp-workbench-theme') === 'system'`, 'system dark theme', 30_000);
+    await wait(`document.documentElement.dataset.theme === 'dark' && localStorage.getItem('mcp-riksa-theme') === 'system'`, 'system dark theme', 30_000);
     await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] });
     await wait(`document.documentElement.dataset.theme === 'light'`, 'live system light theme', 30_000);
     await click('theme-light');

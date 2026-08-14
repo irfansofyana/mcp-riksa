@@ -1,11 +1,11 @@
 {
-  "name": "mcp-local-workbench",
+  "name": "mcp-riksa",
   "version": "0.1.0",
   "description": "Local-first MCP server and agent evaluation workbench",
   "type": "module",
   "private": true,
   "bin": {
-    "mcp-workbench": "dist/src/cli/index.js"
+    "mcp-riksa": "dist/src/cli/index.js"
   },
   "scripts": {
     "dev": "tsx src/cli/index.ts serve --dev",

@@ -35,6 +35,7 @@ describe('workbench browser view model', () => {
   });
 
   test('resolves system appearance and preserves explicit theme preferences', () => {
+    expect(THEME_STORAGE_KEY).toBe('mcp-riksa-theme');
     const values = new Map<string, string>();
     const storage = {
       getItem: (key: string) => values.get(key) ?? null,

@@ -11,7 +11,7 @@
       (() => {
         let preference = 'system';
         try {
-          const stored = localStorage.getItem('mcp-workbench-theme');
+          const stored = localStorage.getItem('mcp-riksa-theme');
           if (stored === 'light' || stored === 'dark' || stored === 'system') preference = stored;
         } catch { /* Storage can be unavailable in hardened browser modes. */ }
         const theme = preference === 'system'

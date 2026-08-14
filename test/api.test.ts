@@ -204,7 +204,8 @@ describe('API workbench flow', () => {
     const browserCallback = await request('/api/oauth/callback?code=browser-code&state=browser-state', { headers: { accept: 'text/html' } });
     expect(browserCallback.headers.get('content-type')).toContain('text/html');
     const html = await browserCallback.text();
-    expect(html).toContain('workbench:oauth');
+    expect(html).toContain('mcp-riksa:oauth');
+    expect(html).not.toContain('workbench:oauth');
     expect(html).toContain('window.close');
     expect(html).not.toContain('browser-code');
     expect((await request('/api/servers/sample/oauth/forget', mutation({}))).status).toBe(204);

@@ -64,7 +64,7 @@ describe('real sample MCP server over stdio', () => {
       });
 
       const inspection = await manager.inspect('sample');
-      expect(inspection.identity).toMatchObject({ name: 'mcp-local-workbench-sample', version: '1.0.0' });
+      expect(inspection.identity).toMatchObject({ name: 'mcp-riksa-sample', version: '1.0.0' });
       expect(inspection.capabilities).toHaveProperty('tools');
       expect(inspection.tools.map((tool) => tool.name)).toEqual(['add', 'unannotated_read', 'echo', 'dangerous_reset']);
       expect(inspection.tools[0]?.inputSchema).toHaveProperty('properties');
