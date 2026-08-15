@@ -151,7 +151,7 @@ export type SecretMetadata = {
   lastUsedAt?: string;
 };
 export type VaultStatus = {
-  state: 'empty' | 'ready' | 'missing-key' | 'corrupt';
+  state: 'empty' | 'ready' | 'missing-key' | 'insecure-permissions' | 'corrupt';
   keyLocation: string;
 };
 

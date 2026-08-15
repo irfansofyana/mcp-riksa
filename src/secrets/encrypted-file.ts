@@ -140,7 +140,7 @@ export class EncryptedFileSecretBackend implements ManagedSecretBackend {
     this.key = undefined;
   }
 
-  async status(): Promise<{ state: 'empty' | 'ready' | 'missing-key' | 'corrupt' }> {
+  async status(): Promise<{ state: 'empty' | 'ready' | 'missing-key' | 'insecure-permissions' | 'corrupt' }> {
     const hasVault = existsSync(this.vaultPath);
     const hasKey = existsSync(this.keyPath);
     if (!hasVault && !hasKey) return { state: 'empty' };
@@ -150,18 +150,19 @@ export class EncryptedFileSecretBackend implements ManagedSecretBackend {
       else this.requireKey(false);
       return { state: 'ready' };
     } catch (error) {
-      if (error instanceof SecretStoreError && error.code === 'SECRET_VAULT_MISSING_KEY') return { state: 'missing-key' };
+      if (error instanceof SecretStoreError) {
+        if (error.code === 'SECRET_VAULT_MISSING_KEY') return { state: 'missing-key' };
+        if (error.code === 'SECRET_VAULT_INSECURE_PERMISSIONS') return { state: 'insecure-permissions' };
+      }
       return { state: 'corrupt' };
     }
   }
 
   async reset(): Promise<void> {
     await this.clear();
-    for (const path of [this.vaultPath, this.keyPath]) {
-      if (!existsSync(path)) continue;
-      this.assertRegularSecureFile(path, path === this.keyPath ? 'key' : 'vault');
-      unlinkSync(path);
-    }
+    if (!existsSync(this.vaultPath)) return;
+    this.assertRegularSecureFile(this.vaultPath, 'vault');
+    unlinkSync(this.vaultPath);
   }
 
   private readEntries(): VaultEntry[] {

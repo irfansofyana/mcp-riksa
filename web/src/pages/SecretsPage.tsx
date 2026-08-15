@@ -8,7 +8,6 @@ const purposeOptions: Array<{ value: SecretPurpose; label: string }> = [
   { value: 'provider-header', label: 'Model provider header' },
   { value: 'mcp-header', label: 'MCP HTTP header' },
   { value: 'oauth-client-secret', label: 'OAuth client secret' },
-  { value: 'oauth-token', label: 'OAuth token' },
   { value: 'stdio-env', label: 'Stdio environment value' },
 ];
 
@@ -53,13 +52,16 @@ export function SecretsPage() {
         <div><b>Honest boundary</b><span>Protects against accidental data-directory disclosure, not malware running as your OS user or disclosure of both files.</span></div>
         <div><b>Write-only values</b><span>Stored credentials cannot be revealed or copied back through MCP Riksa.</span></div>
       </div>
+      {vault?.state === 'insecure-permissions' ? <div className="vault-recovery">
+        <Notice error>The vault or key permissions are too broad. Restore owner-only permissions (`chmod 600`) instead of resetting so the stored credentials remain recoverable.</Notice>
+      </div> : null}
       {vault && (vault.state === 'missing-key' || vault.state === 'corrupt') ? <div className="vault-recovery">
-        <Notice error>The vault cannot be decrypted. Resetting permanently removes its stored credentials.</Notice>
+        <Notice error>The vault cannot be decrypted. Resetting permanently removes this data directory's stored credentials but preserves the shared encryption key.</Notice>
         <Button variant="danger" onClick={() => void act(async () => {
-          if (!window.confirm('Reset the encrypted vault? Existing vault secrets cannot be recovered.')) return;
+          if (!window.confirm('Reset this encrypted vault? Its existing secrets cannot be recovered.')) return;
           await api.resetVault(true);
           await refresh();
-          setMessage('Encrypted vault reset. A new key will be generated on the next persistent save.');
+          setMessage('Encrypted vault reset. The existing local key will encrypt the next persistent save.');
         })}>Reset vault</Button>
       </div> : null}
     </Section>

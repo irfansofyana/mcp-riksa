@@ -1,4 +1,4 @@
-import { chmodSync, lstatSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -148,6 +148,47 @@ describe('EncryptedFileSecretBackend', () => {
         configDirectory: fixture.configDirectory,
       }).list(),
     ).rejects.toMatchObject({ code: 'SECRET_VAULT_INSECURE_PERMISSIONS' });
+  });
+
+  test('reports insecure permissions distinctly from vault corruption', async () => {
+    if (process.platform === 'win32') return;
+    const fixture = harness();
+    await fixture.store.create({
+      backend: 'vault',
+      label: 'Permission status',
+      purposes: ['provider-api-key'],
+      value: 'permission-status-secret',
+    });
+    await fixture.store.close();
+    chmodSync(fixture.keyPath, 0o640);
+
+    await expect(new EncryptedFileSecretBackend({
+      dataDirectory: fixture.dataDirectory,
+      configDirectory: fixture.configDirectory,
+    }).status()).resolves.toEqual({ state: 'insecure-permissions' });
+  });
+
+  test('reset removes only its vault and preserves a key shared by other data directories', async () => {
+    const first = harness();
+    const secondDataDirectory = join(first.root, 'second-data');
+    const secondBackend = new EncryptedFileSecretBackend({
+      dataDirectory: secondDataDirectory,
+      configDirectory: first.configDirectory,
+    });
+    const secondStore = new SecretStore({ vaultBackend: secondBackend });
+    await first.store.create({
+      backend: 'vault', label: 'First vault', purposes: ['provider-api-key'], value: 'first-vault-secret',
+    });
+    const second = await secondStore.create({
+      backend: 'vault', label: 'Second vault', purposes: ['mcp-header'], value: 'second-vault-secret',
+    });
+
+    await first.backend.reset();
+
+    expect(existsSync(first.vaultPath)).toBe(false);
+    expect(existsSync(first.keyPath)).toBe(true);
+    await expect(secondStore.resolve({ source: 'vault', id: second.id }, 'mcp-header')).resolves.toBe('second-vault-secret');
+    await secondStore.close();
   });
 
   test('rejects key material not owned by the current OS user', async () => {
