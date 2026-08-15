@@ -1,5 +1,6 @@
 import { redact, registerSecretValue, unregisterSecretValue } from '../core/redaction.js';
 import type { SecretResolver } from './types.js';
+import { assertResolvedSecretValue } from './types.js';
 
 export type SecretResolutionLease = {
   resolve: SecretResolver;
@@ -13,6 +14,7 @@ export function createSecretResolutionLease(resolveSecret: SecretResolver): Secr
     resolve: async (reference, purpose) => {
       if (released) throw new Error('Secret resolution lease has been released');
       const value = await resolveSecret(reference, purpose);
+      assertResolvedSecretValue(value);
       registerSecretValue(value);
       values.push(value);
       return value;

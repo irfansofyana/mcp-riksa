@@ -3,6 +3,9 @@ import { SessionSecretBackend } from './session.js';
 import { SecretStoreError } from './store-error.js';
 import {
   createSecretSchema,
+  assertResolvedSecretValue,
+  SECRET_VALUE_MIN_LENGTH,
+  SECRET_VALUE_TOO_SHORT_MESSAGE,
   secretPurposeSchema,
   secretReferenceSchema,
   type CreateSecretInput,
@@ -56,7 +59,7 @@ export class SecretStore {
   }
 
   async replace(id: string, value: string): Promise<SecretMetadata> {
-    if (value.length < 4) throw new SecretStoreError('SECRET_INVALID', 'Secret values must contain at least 4 characters');
+    if (value.length < SECRET_VALUE_MIN_LENGTH) throw new SecretStoreError('SECRET_INVALID', SECRET_VALUE_TOO_SHORT_MESSAGE);
     const backend = await this.findBackend(id);
     return backend.replace(id, value);
   }
@@ -73,6 +76,11 @@ export class SecretStore {
       const value = this.environment[parsedReference.name];
       if (value === undefined) {
         throw new SecretStoreError('SECRET_ENV_MISSING', `Environment variable ${parsedReference.name} is not set`);
+      }
+      try {
+        assertResolvedSecretValue(value);
+      } catch (error) {
+        throw new SecretStoreError('SECRET_INVALID', SECRET_VALUE_TOO_SHORT_MESSAGE, { cause: error });
       }
       if (!this.registeredEnvironmentValues.has(value)) {
         registerSecretValue(value);

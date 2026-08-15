@@ -30,11 +30,19 @@ export const secretMetadataSchema = z.object({
   updatedAt: z.string().datetime(),
 }).strict();
 
+export const SECRET_VALUE_MIN_LENGTH = 4;
+export const SECRET_VALUE_TOO_SHORT_MESSAGE = `Secret values must contain at least ${SECRET_VALUE_MIN_LENGTH} characters`;
+
+export function assertResolvedSecretValue(value: string): string {
+  if (value.length < SECRET_VALUE_MIN_LENGTH) throw new Error(SECRET_VALUE_TOO_SHORT_MESSAGE);
+  return value;
+}
+
 export const createSecretSchema = z.object({
   backend: z.enum(['vault', 'session']),
   label: z.string().trim().min(1).max(120),
   purposes: z.array(secretPurposeSchema).min(1).refine((items) => new Set(items).size === items.length, 'Duplicate secret purposes are not allowed'),
-  value: z.string().min(4, 'Secret values must contain at least 4 characters'),
+  value: z.string().min(SECRET_VALUE_MIN_LENGTH, SECRET_VALUE_TOO_SHORT_MESSAGE),
 }).strict();
 
 export type SecretPurpose = z.infer<typeof secretPurposeSchema>;

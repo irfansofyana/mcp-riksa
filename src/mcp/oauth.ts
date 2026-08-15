@@ -13,7 +13,7 @@ import { Agent, fetch as undiciFetch } from 'undici';
 import { z } from 'zod';
 import { environmentVariableNameSchema } from '../core/environment.js';
 import { redact, registerSecretValue, unregisterSecretValue } from '../core/redaction.js';
-import { secretReferenceSchema, type SecretResolver } from '../secrets/types.js';
+import { assertResolvedSecretValue, secretReferenceSchema, type SecretResolver } from '../secrets/types.js';
 import { createSafeLookup, validateHttpEndpoint } from './validation.js';
 
 const oauthOptionsSchema = z.strictObject({
@@ -195,6 +195,7 @@ export class OAuthCoordinator {
     if (reference.source !== 'env') throw new Error(`Secret backend ${reference.source} is not available in this context`);
     const value = process.env[reference.name];
     if (value === undefined) throw new Error(`Environment variable ${reference.name} is not set`);
+    assertResolvedSecretValue(value);
     registerSecretValue(value);
     return value;
   }) {}

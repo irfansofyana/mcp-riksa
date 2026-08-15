@@ -26,6 +26,18 @@ describe('SecretStore', () => {
     });
   });
 
+  test('rejects short environment values before registering them for redaction', async () => {
+    process.env[TEST_ENV] = 'a';
+    const store = new SecretStore();
+
+    await expect(store.resolve({ source: 'env', name: TEST_ENV }, 'provider-api-key')).rejects.toMatchObject({
+      code: 'SECRET_INVALID',
+      message: 'Secret values must contain at least 4 characters',
+    });
+    expect(redact('a normal sentence')).toBe('a normal sentence');
+    await store.close();
+  });
+
   test('fails with an actionable error when an environment reference is missing', async () => {
     const store = new SecretStore();
 
