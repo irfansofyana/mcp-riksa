@@ -177,10 +177,8 @@ export class McpManager {
           ...await resolveLegacyEnvironment(config.envRefs, 'stdio-env', secretLease.resolve),
           ...await resolveReferenceMap(config.env, 'stdio-env', secretLease.resolve),
         } } : {}),
-        stderr: hasInjectedSecrets ? 'pipe' : 'inherit',
+        stderr: hasInjectedSecrets ? 'ignore' : 'inherit',
       });
-      // Suppress untrusted child stderr when credentials are injected: chunk-wise redaction can miss split secrets.
-      if (hasInjectedSecrets) stdioTransport.stderr?.on('data', () => undefined);
       transport = stdioTransport;
     } else {
       const url = await validateHttpEndpoint(config.url, config.allowUnsafeEndpoint);
