@@ -28,6 +28,15 @@
   "files": [
     "dist",
     "examples",
+    "docs/CONFIGURATION.md",
+    "docs/SUITES.md",
+    "docs/PLAYGROUND.md",
+    "docs/CLI.md",
+    "docs/SECURITY.md",
+    "docs/DEVELOPMENT.md",
+    "docs/screenshots/stdio-server.png",
+    "docs/screenshots/secrets.png",
+    "docs/screenshots/desktop.png",
     "README.md",
     "LICENSE"
   ],

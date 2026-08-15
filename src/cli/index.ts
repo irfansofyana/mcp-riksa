@@ -19,11 +19,22 @@ import { reportJunit } from '../reporters/junit.js';
 import { redact } from '../core/redaction.js';
 import type { RunResult } from '../core/types.js';
 
-// Compiled entry point lives at dist/src/cli/index.js, so the package root
-// is three directories up. Resolving against process.cwd() would break as
-// soon as mcp-riksa is installed globally or run via npx from another
-// working directory.
-const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
+// Locate the package root by walking up from this module's own directory
+// until a package.json is found. A fixed relative depth would differ
+// between the TypeScript source path (src/cli/index.ts, used by `npm run
+// dev`/`serve`) and the compiled path (dist/src/cli/index.js, used once
+// installed), and resolving against process.cwd() would break as soon as
+// mcp-riksa is installed globally or run via npx from another directory.
+function findPackageRoot(startDirectory: string): string {
+  let current = startDirectory;
+  while (true) {
+    if (existsSync(join(current, 'package.json'))) return current;
+    const parent = dirname(current);
+    if (parent === current) throw new Error(`Could not locate package.json above ${startDirectory}`);
+    current = parent;
+  }
+}
+const packageRoot = findPackageRoot(dirname(fileURLToPath(import.meta.url)));
 
 const configurationSchema = z.strictObject({
   version: z.literal(2),
