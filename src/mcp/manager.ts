@@ -41,8 +41,20 @@ const httpConfigSchema = z.strictObject({
   }).optional(),
 });
 export const serverConfigSchema = z.discriminatedUnion('transport', [stdioConfigSchema, httpConfigSchema]).superRefine((config, context) => {
-  if (config.transport === 'http' && config.oauth !== undefined && config.staticAuth !== undefined) {
+  if (config.transport !== 'http') return;
+  if (config.oauth !== undefined && config.staticAuth !== undefined) {
     context.addIssue({ code: 'custom', message: 'OAuth and static authorization are mutually exclusive', path: ['staticAuth'] });
+  }
+  if (config.staticAuth !== undefined) {
+    const staticHeader = config.staticAuth.header.toLowerCase();
+    const configuredHeaders = [...Object.keys(config.headerEnv), ...Object.keys(config.headers)];
+    if (configuredHeaders.some((header) => header.toLowerCase() === staticHeader)) {
+      context.addIssue({
+        code: 'custom',
+        message: `Static authorization header ${config.staticAuth.header} conflicts with configured headers`,
+        path: ['staticAuth', 'header'],
+      });
+    }
   }
 });
 export type ServerConfig = z.infer<typeof serverConfigSchema>;

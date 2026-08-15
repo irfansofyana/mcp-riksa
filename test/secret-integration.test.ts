@@ -86,6 +86,15 @@ describe('secret reference integration', () => {
     )).resolves.toEqual({ TOKEN: 'stdio-secret-value' });
   });
 
+  test('rejects static authorization header collisions before saving', () => {
+    expect(() => serverConfigSchema.parse({
+      id: 'collision', name: 'Collision', transport: 'http', url: 'https://example.test/mcp',
+      headers: { authorization: { source: 'env', name: 'EXTRA_TOKEN' } },
+      staticAuth: { header: 'Authorization', scheme: 'Bearer', credential: { source: 'env', name: 'MCP_TOKEN' } },
+      allowUnsafeEndpoint: false,
+    })).toThrow(/conflicts with configured headers/i);
+  });
+
   test('rejects ambiguous OAuth and static authorization combinations', () => {
     expect(() => serverConfigSchema.parse({
       id: 'ambiguous', name: 'Ambiguous', transport: 'http', url: 'https://example.test/mcp', headers: {},
