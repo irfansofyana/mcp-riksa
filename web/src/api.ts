@@ -99,7 +99,7 @@ export const api = {
   replaceSecret: (id: string, value: string) => put<SecretMetadata>(`/api/secrets/${encodeURIComponent(id)}/value`, { value }),
   deleteSecret: (id: string, force = false) => remove<{ id: string; deleted: boolean }>(`/api/secrets/${encodeURIComponent(id)}?force=${force}`),
   vaultStatus: () => get<VaultStatus>('/api/secrets/vault/status'),
-  resetVault: (force = false) => post<{ reset: boolean }>('/api/secrets/vault/reset', { confirm: 'RESET', force }),
+  resetVault: (force = false, rotateInvalidKey = false) => post<{ reset: boolean }>('/api/secrets/vault/reset', { confirm: 'RESET', force, rotateInvalidKey }),
   addProvider: (value: unknown) => post('/api/providers', value),
   updateProvider: (id: string, value: unknown) => put(`/api/providers/${encodeURIComponent(id)}`, value),
   deleteProvider: (id: string, force = false) => remove(`/api/providers/${encodeURIComponent(id)}?force=${force}`),

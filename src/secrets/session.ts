@@ -53,7 +53,6 @@ export class SessionSecretBackend implements ManagedSecretBackend {
     if (!entry.metadata.purposes.includes(purpose)) {
       throw new SecretStoreError('SECRET_PURPOSE_DENIED', `Secret ${id} cannot be used for ${purpose}`);
     }
-    entry.metadata.lastUsedAt = new Date().toISOString();
     return entry.value;
   }
 

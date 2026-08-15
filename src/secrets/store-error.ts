@@ -6,6 +6,7 @@ export type SecretStoreErrorCode =
   | 'SECRET_BACKEND_UNAVAILABLE'
   | 'SECRET_VAULT_MISSING_KEY'
   | 'SECRET_VAULT_CORRUPT'
+  | 'SECRET_VAULT_INVALID_KEY'
   | 'SECRET_VAULT_INSECURE_PERMISSIONS';
 
 export class SecretStoreError extends Error {

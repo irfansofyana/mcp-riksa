@@ -205,6 +205,27 @@ describe('EncryptedFileSecretBackend', () => {
     }).status()).resolves.toEqual({ state: 'insecure-permissions' });
   });
 
+  test('recovers explicitly from a malformed shared key', async () => {
+    const fixture = harness();
+    await fixture.store.create({ backend: 'vault', label: 'Malformed key', purposes: ['provider-api-key'], value: 'malformed-key-secret' });
+    await fixture.store.close();
+    writeFileSync(fixture.keyPath, randomBytes(7), { mode: 0o600 });
+    if (process.platform !== 'win32') chmodSync(fixture.keyPath, 0o600);
+    const restarted = new EncryptedFileSecretBackend({ dataDirectory: fixture.dataDirectory, configDirectory: fixture.configDirectory });
+
+    await expect(restarted.status()).resolves.toEqual({ state: 'invalid-key' });
+    await expect(restarted.reset()).resolves.toBeUndefined();
+    expect(existsSync(fixture.keyPath)).toBe(true);
+    await expect(restarted.reset({ rotateInvalidKey: true })).resolves.toBeUndefined();
+    expect(existsSync(fixture.keyPath)).toBe(false);
+    expect(existsSync(fixture.vaultPath)).toBe(false);
+
+    const recovered = new SecretStore({ vaultBackend: new EncryptedFileSecretBackend({ dataDirectory: fixture.dataDirectory, configDirectory: fixture.configDirectory }) });
+    await expect(recovered.create({ backend: 'vault', label: 'Recovered', purposes: ['provider-api-key'], value: 'recovered-secret' })).resolves.toMatchObject({ configured: true });
+    expect(readFileSync(fixture.keyPath)).toHaveLength(32);
+    await recovered.close();
+  });
+
   test('reset removes only its vault and preserves a key shared by other data directories', async () => {
     const first = harness();
     const secondDataDirectory = join(first.root, 'second-data');

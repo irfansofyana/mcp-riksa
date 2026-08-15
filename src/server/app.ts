@@ -16,7 +16,7 @@ export type ApiRuntime = {
   replaceSecret(id: string, value: string): Promise<SecretMetadata> | SecretMetadata;
   deleteSecret(id: string, force: boolean): Promise<unknown> | unknown;
   vaultStatus(): Promise<unknown> | unknown;
-  resetVault(force: boolean): Promise<unknown> | unknown;
+  resetVault(force: boolean, rotateInvalidKey: boolean): Promise<unknown> | unknown;
   createProvider(value: z.infer<typeof providerConfigSchema>): Promise<unknown> | unknown;
   updateProvider(id: string, value: z.infer<typeof providerConfigSchema>): Promise<unknown> | unknown;
   deleteProvider(id: string, force: boolean): Promise<unknown> | unknown;
@@ -97,7 +97,7 @@ const conformanceSchema = z.strictObject({
   timeoutMs: z.number().int().min(5_000).max(600_000).default(120_000),
 });
 const replaceSecretSchema = z.strictObject({ value: z.string().min(4) });
-const resetVaultSchema = z.strictObject({ confirm: z.literal('RESET'), force: z.boolean().default(false) });
+const resetVaultSchema = z.strictObject({ confirm: z.literal('RESET'), force: z.boolean().default(false), rotateInvalidKey: z.boolean().default(false) });
 
 function isLoopback(value: string | undefined): boolean {
   if (!value) return false;
@@ -173,8 +173,8 @@ export function createApp(runtime: ApiRuntime, options: { sessionToken?: string;
   });
   app.get('/api/secrets/vault/status', async (_request, response) => sendSecret(response, await runtime.vaultStatus()));
   app.post('/api/secrets/vault/reset', async (request, response) => {
-    const { force } = resetVaultSchema.parse(request.body);
-    sendSecret(response, await runtime.resetVault(force));
+    const { force, rotateInvalidKey } = resetVaultSchema.parse(request.body);
+    sendSecret(response, await runtime.resetVault(force, rotateInvalidKey));
   });
 
   app.post('/api/providers', async (request, response) => {
@@ -336,6 +336,6 @@ export function createApp(runtime: ApiRuntime, options: { sessionToken?: string;
 function secretErrorStatus(error: SecretStoreError): number {
   if (error.code === 'SECRET_NOT_FOUND') return 404;
   if (error.code === 'SECRET_PURPOSE_DENIED') return 403;
-  if (error.code === 'SECRET_VAULT_MISSING_KEY' || error.code === 'SECRET_VAULT_CORRUPT' || error.code === 'SECRET_VAULT_INSECURE_PERMISSIONS') return 409;
+  if (error.code === 'SECRET_VAULT_MISSING_KEY' || error.code === 'SECRET_VAULT_CORRUPT' || error.code === 'SECRET_VAULT_INVALID_KEY' || error.code === 'SECRET_VAULT_INSECURE_PERMISSIONS') return 409;
   return 400;
 }

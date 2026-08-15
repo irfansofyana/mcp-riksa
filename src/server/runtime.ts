@@ -179,15 +179,15 @@ export class WorkbenchRuntime {
     return { ...(await this.vault.status()), keyLocation: displaySecretKeyLocation() };
   }
 
-  async resetVault(force = false) {
+  async resetVault(force = false, rotateInvalidKey = false) {
     const references = this.secretReferences(undefined, 'vault');
     return this.withConfigMutations([...references.keys, 'vault:*'], async () => {
       if (references.active.length > 0) throw new WorkbenchError('Vault secrets are currently in use', 409, references);
       if (!force && (references.providers.length > 0 || references.servers.length > 0)) {
         throw new WorkbenchError('Vault secrets are still referenced', 409, references);
       }
-      await this.vault.reset();
-      return { reset: true, references, forced: force };
+      await this.vault.reset({ rotateInvalidKey });
+      return { reset: true, references, forced: force, rotatedInvalidKey: rotateInvalidKey };
     });
   }
 

@@ -55,6 +55,15 @@ export function SecretsPage({ onRefresh }: { onRefresh: () => Promise<void> }) {
       {vault?.state === 'insecure-permissions' ? <div className="vault-recovery">
         <Notice error>The vault or key permissions are too broad. Restore owner-only permissions (`chmod 600`) instead of resetting so the stored credentials remain recoverable.</Notice>
       </div> : null}
+      {vault?.state === 'invalid-key' ? <div className="vault-recovery">
+        <Notice error>The shared vault key is malformed. Replacing it recovers future saves but permanently makes vaults in every other data directory using this key unreadable.</Notice>
+        <Button variant="danger" onClick={() => void act(async () => {
+          if (!window.confirm('Reset this vault and replace the malformed shared key? Other data directories using it will become unrecoverable.')) return;
+          await api.resetVault(true, true);
+          await Promise.all([refresh(), onRefresh()]);
+          setMessage('Malformed shared key removed. A new key will be generated on the next persistent save.');
+        })}>Reset vault and replace malformed key</Button>
+      </div> : null}
       {vault && (vault.state === 'missing-key' || vault.state === 'corrupt') ? <div className="vault-recovery">
         <Notice error>The vault cannot be decrypted. Resetting permanently removes this data directory's stored credentials but preserves the shared encryption key.</Notice>
         <Button variant="danger" onClick={() => void act(async () => {
@@ -68,7 +77,7 @@ export function SecretsPage({ onRefresh }: { onRefresh: () => Promise<void> }) {
 
     <Section title="Stored Secrets" action={<span className="count">{secrets.length}</span>}>
       <div className="secret-list">{secrets.length === 0 ? <Empty>No saved secrets. Add one below or keep using environment references.</Empty> : secrets.map((secret) => <article className="secret-row" key={secret.id}>
-        <div className="secret-details"><div><b>{secret.label}</b><Status value={secret.configured ? 'configured' : 'missing'} /></div><small>{secret.backend === 'encrypted-file' ? 'Encrypted vault' : 'Session only'} · {secret.purposes.map((entry) => purposeOptions.find((option) => option.value === entry)?.label ?? entry).join(', ')}</small><code>{secret.id}</code>{secret.lastUsedAt ? <small>Last used {new Date(secret.lastUsedAt).toLocaleString()}</small> : null}</div>
+        <div className="secret-details"><div><b>{secret.label}</b><Status value={secret.configured ? 'configured' : 'missing'} /></div><small>{secret.backend === 'encrypted-file' ? 'Encrypted vault' : 'Session only'} · {secret.purposes.map((entry) => purposeOptions.find((option) => option.value === entry)?.label ?? entry).join(', ')}</small><code>{secret.id}</code></div>
         <div className="config-actions">
           <Button onClick={() => { setReplacementId(secret.id); setReplacement(''); setMessage(''); setError(''); }}>Replace</Button>
           <Button variant="danger" onClick={() => void act(async () => {

@@ -147,7 +147,7 @@ export class EncryptedFileSecretBackend implements ManagedSecretBackend {
     this.key = undefined;
   }
 
-  async status(): Promise<{ state: 'empty' | 'ready' | 'missing-key' | 'insecure-permissions' | 'corrupt' }> {
+  async status(): Promise<{ state: 'empty' | 'ready' | 'missing-key' | 'invalid-key' | 'insecure-permissions' | 'corrupt' }> {
     const hasVault = existsSync(this.vaultPath);
     const hasKey = existsSync(this.keyPath);
     if (!hasVault && !hasKey) return { state: 'empty' };
@@ -159,21 +159,34 @@ export class EncryptedFileSecretBackend implements ManagedSecretBackend {
     } catch (error) {
       if (error instanceof SecretStoreError) {
         if (error.code === 'SECRET_VAULT_MISSING_KEY') return { state: 'missing-key' };
+        if (error.code === 'SECRET_VAULT_INVALID_KEY') return { state: 'invalid-key' };
         if (error.code === 'SECRET_VAULT_INSECURE_PERMISSIONS') return { state: 'insecure-permissions' };
       }
       return { state: 'corrupt' };
     }
   }
 
-  async reset(): Promise<void> {
+  async reset(options: { rotateInvalidKey?: boolean } = {}): Promise<void> {
     await this.withVaultLock(() => {
       for (const value of this.registeredValues.values()) unregisterSecretValue(value);
       this.registeredValues.clear();
       this.key?.fill(0);
       this.key = undefined;
-      if (!existsSync(this.vaultPath)) return;
-      this.assertRegularSecureFile(this.vaultPath, 'vault');
-      unlinkSync(this.vaultPath);
+      let rotateKey = false;
+      if (options.rotateInvalidKey && existsSync(this.keyPath)) {
+        this.assertRegularSecureFile(this.keyPath, 'key');
+        const persisted = readFileSync(this.keyPath);
+        rotateKey = persisted.length !== KEY_BYTES;
+        persisted.fill(0);
+        if (!rotateKey) {
+          throw new SecretStoreError('SECRET_INVALID', 'Refusing to replace a valid shared vault key');
+        }
+      }
+      if (existsSync(this.vaultPath)) {
+        this.assertRegularSecureFile(this.vaultPath, 'vault');
+        unlinkSync(this.vaultPath);
+      }
+      if (rotateKey) unlinkSync(this.keyPath);
     });
   }
 
@@ -275,7 +288,7 @@ export class EncryptedFileSecretBackend implements ManagedSecretBackend {
       const value = readFileSync(this.keyPath);
       if (value.length !== KEY_BYTES) {
         value.fill(0);
-        throw new SecretStoreError('SECRET_VAULT_CORRUPT', 'The MCP Riksa vault key has an invalid length');
+        throw new SecretStoreError('SECRET_VAULT_INVALID_KEY', 'The MCP Riksa vault key has an invalid length');
       }
       this.key = Buffer.from(value);
       value.fill(0);

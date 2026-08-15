@@ -148,10 +148,9 @@ export type SecretMetadata = {
   configured: boolean;
   createdAt: string;
   updatedAt: string;
-  lastUsedAt?: string;
 };
 export type VaultStatus = {
-  state: 'empty' | 'ready' | 'missing-key' | 'insecure-permissions' | 'corrupt';
+  state: 'empty' | 'ready' | 'missing-key' | 'invalid-key' | 'insecure-permissions' | 'corrupt';
   keyLocation: string;
 };
 

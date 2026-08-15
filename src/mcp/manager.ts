@@ -146,16 +146,20 @@ export class McpManager {
     let dispatcher: Agent | undefined;
     try {
       if (config.transport === 'stdio') {
-      transport = new StdioClientTransport({
+      const hasInjectedSecrets = Object.keys(config.envRefs).length > 0 || Object.keys(config.env).length > 0;
+      const stdioTransport = new StdioClientTransport({
         command: config.command,
         args: config.args,
         ...(config.cwd === undefined ? {} : { cwd: config.cwd }),
-        ...((Object.keys(config.envRefs).length === 0 && Object.keys(config.env).length === 0) ? {} : { env: {
+        ...(hasInjectedSecrets ? { env: {
           ...await resolveLegacyEnvironment(config.envRefs, 'stdio-env', this.resolveSecret),
           ...await resolveReferenceMap(config.env, 'stdio-env', this.resolveSecret),
-        } }),
-        stderr: 'inherit',
+        } } : {}),
+        stderr: hasInjectedSecrets ? 'pipe' : 'inherit',
       });
+      // Suppress untrusted child stderr when credentials are injected: chunk-wise redaction can miss split secrets.
+      if (hasInjectedSecrets) stdioTransport.stderr?.on('data', () => undefined);
+      transport = stdioTransport;
     } else {
       const url = await validateHttpEndpoint(config.url, config.allowUnsafeEndpoint);
       dispatcher = config.allowUnsafeEndpoint ? undefined : new Agent({ connect: { lookup: createSafeLookup() } });

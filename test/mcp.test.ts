@@ -1,5 +1,6 @@
 import { resolve } from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { once } from 'node:events';
 import { describe, expect, test } from 'vitest';
 import { McpManager, serverConfigSchema } from '../src/mcp/manager.js';
@@ -8,6 +9,8 @@ import { createSafeLookup, validateHttpEndpoint } from '../src/mcp/validation.js
 const tsxCli = resolve('node_modules/tsx/dist/cli.mjs');
 const sampleServer = resolve('examples/sample-mcp-server.ts');
 const httpSampleServer = resolve('examples/sample-http-mcp-server.ts');
+const execFileAsync = promisify(execFile);
+const stderrLeakRunner = resolve('test/fixtures/stdio-secret-leak-runner.ts');
 
 describe('MCP endpoint validation', () => {
   test.each([
@@ -81,6 +84,12 @@ describe('real sample MCP server over stdio', () => {
       await manager.closeAll();
     }
     expect(manager.connectionCount).toBe(0);
+  });
+
+  test('does not inherit child stderr when managed credentials are injected', async () => {
+    const result = await execFileAsync(process.execPath, [tsxCli, stderrLeakRunner], { cwd: resolve('.') });
+    expect(result.stderr).not.toContain('stdio-leak-regression-secret');
+    expect(result.stderr).toBe('');
   });
 });
 

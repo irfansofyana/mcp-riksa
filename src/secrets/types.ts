@@ -28,7 +28,6 @@ export const secretMetadataSchema = z.object({
   configured: z.boolean(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
-  lastUsedAt: z.string().datetime().optional(),
 }).strict();
 
 export const createSecretSchema = z.object({
