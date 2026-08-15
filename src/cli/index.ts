@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { createServer } from 'node:http';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { resolve, join } from 'node:path';
+import { resolve, join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Command } from 'commander';
 import type { RequestHandler } from 'express';
 import { parse as parseYaml } from 'yaml';
@@ -18,6 +19,12 @@ import { reportJunit } from '../reporters/junit.js';
 import { redact } from '../core/redaction.js';
 import type { RunResult } from '../core/types.js';
 
+// Compiled entry point lives at dist/src/cli/index.js, so the package root
+// is three directories up. Resolving against process.cwd() would break as
+// soon as mcp-riksa is installed globally or run via npx from another
+// working directory.
+const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
+
 const configurationSchema = z.strictObject({
   version: z.literal(2),
   servers: z.array(serverConfigSchema).default([]),
@@ -32,7 +39,7 @@ function loadConfiguration(path?: string): WorkbenchConfiguration {
 }
 
 function sampleConfiguration(): ServerConfig {
-  const compiled = resolve('dist/examples/sample-mcp-server.js');
+  const compiled = join(packageRoot, 'dist/examples/sample-mcp-server.js');
   if (existsSync(compiled)) {
     return { id: 'sample', name: 'Deterministic sample', transport: 'stdio', command: process.execPath, args: [compiled], envRefs: {}, env: {} };
   }
@@ -146,7 +153,7 @@ program.command('serve')
       callbackUrl: `http://127.0.0.1:${options.port}/api/oauth/callback`,
     });
     await applyConfiguration(runtime, loadConfiguration(options.config), false);
-    const staticDirectory = options.dev ? undefined : resolve('dist/web');
+    const staticDirectory = options.dev ? undefined : join(packageRoot, 'dist/web');
     const app = createApp(runtime, { ...(staticDirectory === undefined ? {} : { staticDirectory }) });
     let vite: { middlewares: RequestHandler; close(): Promise<void> } | undefined;
     if (options.dev) {

@@ -3,10 +3,34 @@
   "version": "0.1.0",
   "description": "Local-first MCP server and agent evaluation workbench",
   "type": "module",
-  "private": true,
+  "license": "MIT",
+  "author": "Irfan Sofyana Putra",
+  "homepage": "https://github.com/irfansofyana/mcp-riksa#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/irfansofyana/mcp-riksa.git"
+  },
+  "bugs": {
+    "url": "https://github.com/irfansofyana/mcp-riksa/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "agent",
+    "eval",
+    "testing",
+    "workbench",
+    "cli"
+  ],
   "bin": {
     "mcp-riksa": "dist/src/cli/index.js"
   },
+  "files": [
+    "dist",
+    "examples",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "dev": "tsx src/cli/index.ts serve --dev",
     "serve": "tsx src/cli/index.ts serve",
@@ -16,7 +40,8 @@
     "build:server": "tsc -p tsconfig.build.json",
     "build:web": "vite build",
     "build": "npm run build:server && npm run build:web",
-    "start": "node dist/src/cli/index.js serve"
+    "start": "node dist/src/cli/index.js serve",
+    "prepublishOnly": "npm run build"
   },
   "engines": {
     "node": ">=24"
