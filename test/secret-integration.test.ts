@@ -127,6 +127,18 @@ describe('secret reference integration', () => {
     })).toThrow(/clientSecret and clientSecretEnv are mutually exclusive/i);
   });
 
+  test('rejects OAuth client secret without a client ID', () => {
+    for (const oauth of [
+      { scopes: [], timeoutMs: 120_000, clientSecret: { source: 'env', name: 'MANAGED_CLIENT_SECRET' } },
+      { scopes: [], timeoutMs: 120_000, clientSecretEnv: 'LEGACY_CLIENT_SECRET' },
+    ]) {
+      expect(() => serverConfigSchema.parse({
+        id: 'oauth-no-client-id', name: 'OAuth no client id', transport: 'http', url: 'https://example.test/mcp', headers: {},
+        oauth, allowUnsafeEndpoint: false,
+      })).toThrow(/client secret requires clientId/i);
+    }
+  });
+
   test('rejects ambiguous OAuth and static authorization combinations', () => {
     expect(() => serverConfigSchema.parse({
       id: 'ambiguous', name: 'Ambiguous', transport: 'http', url: 'https://example.test/mcp', headers: {},

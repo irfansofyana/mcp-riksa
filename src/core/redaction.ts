@@ -12,6 +12,20 @@ export function registerSecretValue(value: string | undefined): void {
   if (value) KNOWN_SECRET_VALUES.set(value, (KNOWN_SECRET_VALUES.get(value) ?? 0) + 1);
 }
 
+// Protocol-issued credentials (OAuth tokens, dynamically registered client secrets,
+// PKCE verifiers) are valid regardless of length, but registering a 1-3 character
+// value globally would redact ordinary text (e.g. the article "a"). Only register
+// these for global redaction when they are long enough to be unambiguous.
+export function registerProtocolSecretValue(value: string | undefined): void {
+  if (value === undefined || value.length < 4) return;
+  registerSecretValue(value);
+}
+
+export function unregisterProtocolSecretValue(value: string | undefined): void {
+  if (value === undefined || value.length < 4) return;
+  unregisterSecretValue(value);
+}
+
 export function unregisterSecretValue(value: string | undefined): void {
   if (!value) return;
   const next = (KNOWN_SECRET_VALUES.get(value) ?? 0) - 1;

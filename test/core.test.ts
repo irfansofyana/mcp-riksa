@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { redact, REDACTED, registerSecretValue, unregisterSecretValue } from '../src/core/redaction.js';
+import { redact, REDACTED, registerProtocolSecretValue, registerSecretValue, unregisterProtocolSecretValue, unregisterSecretValue } from '../src/core/redaction.js';
 import { parseSuite } from '../src/core/suite.js';
 
 describe('redaction', () => {
@@ -14,6 +14,23 @@ describe('redaction', () => {
     registerSecretValue('a');
     expect(redact('a is a credential, data remains readable')).toBe(`${REDACTED} is ${REDACTED} credential, data remains readable`);
     unregisterSecretValue('a');
+  });
+
+  test('keeps short protocol-issued values out of global redaction', () => {
+    registerProtocolSecretValue('a');
+    expect(redact('a is a normal sentence')).toBe('a is a normal sentence');
+    registerProtocolSecretValue('tok');
+    expect(redact('tok value and token text')).toBe('tok value and token text');
+    unregisterProtocolSecretValue('a');
+    unregisterProtocolSecretValue('tok');
+    expect(redact('a tok')).toBe('a tok');
+  });
+
+  test('registers long protocol-issued values for global redaction', () => {
+    registerProtocolSecretValue('oauth-access-token-value');
+    expect(redact({ arbitrary: 'echo oauth-access-token-value' })).toEqual({ arbitrary: `echo ${REDACTED}` });
+    unregisterProtocolSecretValue('oauth-access-token-value');
+    expect(redact({ arbitrary: 'echo oauth-access-token-value' })).toEqual({ arbitrary: 'echo oauth-access-token-value' });
   });
 
   test('redacts resolved environment secrets even when reflected under arbitrary keys or text', () => {

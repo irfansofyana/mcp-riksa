@@ -12,7 +12,7 @@ import { generateRandomState } from 'oauth4webapi';
 import { Agent, fetch as undiciFetch } from 'undici';
 import { z } from 'zod';
 import { environmentVariableNameSchema } from '../core/environment.js';
-import { redact, registerSecretValue, unregisterSecretValue } from '../core/redaction.js';
+import { redact, registerProtocolSecretValue, registerSecretValue, unregisterProtocolSecretValue } from '../core/redaction.js';
 import { assertResolvedSecretValue, secretReferenceSchema, type SecretResolver } from '../secrets/types.js';
 import { createSafeLookup, validateHttpEndpoint } from './validation.js';
 
@@ -68,7 +68,7 @@ class MemoryOAuthProvider implements OAuthClientProvider {
 
   constructor(private readonly session: Session, information?: OAuthClientInformationMixed) {
     this.information = information;
-    if (information && 'client_secret' in information) registerSecretValue(information.client_secret);
+    if (information && 'client_secret' in information) registerProtocolSecretValue(information.client_secret);
   }
 
   get redirectUrl(): string {
@@ -95,8 +95,8 @@ class MemoryOAuthProvider implements OAuthClientProvider {
   }
 
   saveClientInformation(information: OAuthClientInformationMixed): void {
-    if (this.information && 'client_secret' in this.information) unregisterSecretValue(this.information.client_secret);
-    registerSecretValue(information.client_secret);
+    if (this.information && 'client_secret' in this.information) unregisterProtocolSecretValue(this.information.client_secret);
+    registerProtocolSecretValue(information.client_secret);
     this.information = information;
     timeline(this.session, 'registration', 'Dynamic client registration completed');
   }
@@ -108,13 +108,13 @@ class MemoryOAuthProvider implements OAuthClientProvider {
   saveTokens(tokens: OAuthTokens): void {
     const refresh = this.savedTokens !== undefined;
     if (this.savedTokens) {
-      unregisterSecretValue(this.savedTokens.access_token);
-      unregisterSecretValue(this.savedTokens.refresh_token);
-      unregisterSecretValue(this.savedTokens.id_token);
+      unregisterProtocolSecretValue(this.savedTokens.access_token);
+      unregisterProtocolSecretValue(this.savedTokens.refresh_token);
+      unregisterProtocolSecretValue(this.savedTokens.id_token);
     }
-    registerSecretValue(tokens.access_token);
-    registerSecretValue(tokens.refresh_token);
-    registerSecretValue(tokens.id_token);
+    registerProtocolSecretValue(tokens.access_token);
+    registerProtocolSecretValue(tokens.refresh_token);
+    registerProtocolSecretValue(tokens.id_token);
     this.savedTokens = tokens;
     this.session.expiresAt = tokens.expires_in === undefined
       ? undefined
@@ -128,8 +128,8 @@ class MemoryOAuthProvider implements OAuthClientProvider {
   }
 
   saveCodeVerifier(codeVerifier: string): void {
-    unregisterSecretValue(this.verifier);
-    registerSecretValue(codeVerifier);
+    unregisterProtocolSecretValue(this.verifier);
+    registerProtocolSecretValue(codeVerifier);
     this.verifier = codeVerifier;
   }
 
@@ -149,17 +149,17 @@ class MemoryOAuthProvider implements OAuthClientProvider {
 
   invalidateCredentials(scope: 'all' | 'client' | 'tokens' | 'verifier' | 'discovery'): void {
     if (scope === 'all' || scope === 'client') {
-      if (this.information && 'client_secret' in this.information) unregisterSecretValue(this.information.client_secret);
+      if (this.information && 'client_secret' in this.information) unregisterProtocolSecretValue(this.information.client_secret);
       this.information = undefined;
     }
     if (scope === 'all' || scope === 'tokens') {
-      unregisterSecretValue(this.savedTokens?.access_token);
-      unregisterSecretValue(this.savedTokens?.refresh_token);
-      unregisterSecretValue(this.savedTokens?.id_token);
+      unregisterProtocolSecretValue(this.savedTokens?.access_token);
+      unregisterProtocolSecretValue(this.savedTokens?.refresh_token);
+      unregisterProtocolSecretValue(this.savedTokens?.id_token);
       this.savedTokens = undefined;
     }
     if (scope === 'all' || scope === 'verifier') {
-      unregisterSecretValue(this.verifier);
+      unregisterProtocolSecretValue(this.verifier);
       this.verifier = undefined;
     }
     if (scope === 'all' || scope === 'discovery') this.discovery = undefined;
