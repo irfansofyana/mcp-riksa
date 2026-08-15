@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { environmentVariableNameSchema } from '../core/environment.js';
 import { findCaseInsensitiveDuplicateKey, httpHeaderNameSchema } from '../core/http.js';
 import { redact, registerSecretValue } from '../core/redaction.js';
+import { packageVersion } from '../core/package-info.js';
 import { assertResolvedSecretValue, secretReferenceSchema, type SecretPurpose, type SecretResolver } from '../secrets/types.js';
 import { createSecretResolutionLease } from '../secrets/lease.js';
 import { createSafeLookup, validateHttpEndpoint } from './validation.js';
@@ -174,7 +175,7 @@ export class McpManager {
       throw new Error('OAuth and static authorization are mutually exclusive');
     }
     if (this.connections.has(config.id)) await this.disconnect(config.id);
-    const client = new Client({ name: 'mcp-riksa', version: '0.1.0' }, { capabilities: {} });
+    const client = new Client({ name: 'mcp-riksa', version: packageVersion() }, { capabilities: {} });
     let transport: Transport | undefined;
     let dispatcher: Agent | undefined;
     const secretLease = createSecretResolutionLease(this.resolveSecret);

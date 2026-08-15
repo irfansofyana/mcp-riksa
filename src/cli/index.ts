@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 import { createServer } from 'node:http';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { resolve, join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { resolve, join } from 'node:path';
 import { Command } from 'commander';
 import type { RequestHandler } from 'express';
 import { parse as parseYaml } from 'yaml';
@@ -17,24 +16,8 @@ import { reportJson } from '../reporters/json.js';
 import { reportHtml } from '../reporters/html.js';
 import { reportJunit } from '../reporters/junit.js';
 import { redact } from '../core/redaction.js';
+import { packageRoot, packageVersion } from '../core/package-info.js';
 import type { RunResult } from '../core/types.js';
-
-// Locate the package root by walking up from this module's own directory
-// until a package.json is found. A fixed relative depth would differ
-// between the TypeScript source path (src/cli/index.ts, used by `npm run
-// dev`/`serve`) and the compiled path (dist/src/cli/index.js, used once
-// installed), and resolving against process.cwd() would break as soon as
-// mcp-riksa is installed globally or run via npx from another directory.
-function findPackageRoot(startDirectory: string): string {
-  let current = startDirectory;
-  while (true) {
-    if (existsSync(join(current, 'package.json'))) return current;
-    const parent = dirname(current);
-    if (parent === current) throw new Error(`Could not locate package.json above ${startDirectory}`);
-    current = parent;
-  }
-}
-const packageRoot = findPackageRoot(dirname(fileURLToPath(import.meta.url)));
 
 const configurationSchema = z.strictObject({
   version: z.literal(2),
@@ -50,7 +33,7 @@ function loadConfiguration(path?: string): WorkbenchConfiguration {
 }
 
 function sampleConfiguration(): ServerConfig {
-  const compiled = join(packageRoot, 'dist/examples/sample-mcp-server.js');
+  const compiled = join(packageRoot(), 'dist/examples/sample-mcp-server.js');
   if (existsSync(compiled)) {
     return { id: 'sample', name: 'Deterministic sample', transport: 'stdio', command: process.execPath, args: [compiled], envRefs: {}, env: {} };
   }
@@ -80,7 +63,7 @@ async function waitForRun(runtime: WorkbenchRuntime, id: string): Promise<RunRes
 const program = new Command()
   .name('mcp-riksa')
   .description('Local-first MCP Riksa evaluation workspace')
-  .version('0.1.0');
+  .version(packageVersion());
 
 program.command('inspect')
   .description('Inspect an MCP server and print its identity, capabilities and tool schemas')
@@ -164,7 +147,7 @@ program.command('serve')
       callbackUrl: `http://127.0.0.1:${options.port}/api/oauth/callback`,
     });
     await applyConfiguration(runtime, loadConfiguration(options.config), false);
-    const staticDirectory = options.dev ? undefined : join(packageRoot, 'dist/web');
+    const staticDirectory = options.dev ? undefined : join(packageRoot(), 'dist/web');
     const app = createApp(runtime, { ...(staticDirectory === undefined ? {} : { staticDirectory }) });
     let vite: { middlewares: RequestHandler; close(): Promise<void> } | undefined;
     if (options.dev) {
