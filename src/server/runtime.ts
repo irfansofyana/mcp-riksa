@@ -205,10 +205,13 @@ export class WorkbenchRuntime {
   async seedProvider(input: ProviderConfig) {
     const config = providerConfigSchema.parse(input);
     if (!this.configurations.canSeed('provider', config.id)) return false;
-    await validateHttpEndpoint(config.baseUrl);
-    if (!this.configurations.seed('provider', config.id, config)) return false;
-    this.providers.set(config.id, config);
-    return true;
+    return this.withConfigMutations([`provider:${config.id}`, ...this.configSecretLockKeys(config)], async () => {
+      await validateHttpEndpoint(config.baseUrl);
+      await this.assertManagedSecretReferences(config);
+      if (!this.configurations.seed('provider', config.id, config)) return false;
+      this.providers.set(config.id, config);
+      return true;
+    });
   }
 
   async createProvider(input: ProviderConfigInput) {
@@ -280,9 +283,12 @@ export class WorkbenchRuntime {
 
   async seedServer(input: ServerConfig) {
     const config = serverConfigSchema.parse(input);
-    if (!this.configurations.seed('server', config.id, config)) return false;
-    this.servers.set(config.id, config);
-    return true;
+    return this.withConfigMutations([`server:${config.id}`, ...this.configSecretLockKeys(config)], async () => {
+      await this.assertManagedSecretReferences(config);
+      if (!this.configurations.seed('server', config.id, config)) return false;
+      this.servers.set(config.id, config);
+      return true;
+    });
   }
 
   async createServer(input: ServerConfigInput) {

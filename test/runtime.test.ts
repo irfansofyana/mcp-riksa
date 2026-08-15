@@ -105,10 +105,12 @@ describe('concrete workbench runtime', () => {
     });
     await expect(runtime.deleteSecret(secret.id)).rejects.toMatchObject({ status: 409 });
     await expect(runtime.deleteSecret(secret.id, true)).resolves.toMatchObject({ deleted: true, forced: true });
-    await expect(runtime.createProvider({
-      id: 'dangling-provider', name: 'Dangling provider', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4012/v1',
-      apiKeyEnv: undefined, apiKey: { source: 'session', id: secret.id }, headers: {}, models: { default: { id: 'fake-model', pricing: { inputPerMillion: 0, outputPerMillion: 0 } } },
-    })).rejects.toMatchObject({ status: 409 });
+    const danglingProvider = {
+      id: 'dangling-provider', name: 'Dangling provider', type: 'openai-compatible' as const, baseUrl: 'http://127.0.0.1:4012/v1',
+      apiKeyEnv: undefined, apiKey: { source: 'session' as const, id: secret.id }, headerEnv: {}, headers: {}, models: { default: { id: 'fake-model', pricing: { inputPerMillion: 0, outputPerMillion: 0 } } },
+    };
+    await expect(runtime.createProvider(danglingProvider)).rejects.toMatchObject({ status: 409 });
+    await expect(runtime.seedProvider({ ...danglingProvider, id: 'dangling-seed' })).rejects.toMatchObject({ status: 409 });
 
     const connectedSecret = await runtime.createSecret({ backend: 'session', label: 'Connected server token', purposes: ['stdio-env'], value: 'connected-session-value' });
     await runtime.addServer({
