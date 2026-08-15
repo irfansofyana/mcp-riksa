@@ -20,8 +20,8 @@ const stdioConfigSchema = z.strictObject({
   command: z.string().min(1),
   args: z.array(z.string()).default([]),
   cwd: z.string().min(1).optional(),
-  envRefs: z.record(z.string(), environmentVariableNameSchema).optional().default({}),
-  env: z.record(z.string().min(1), secretReferenceSchema).optional().default({}),
+  envRefs: z.record(environmentVariableNameSchema, environmentVariableNameSchema).optional().default({}),
+  env: z.record(environmentVariableNameSchema, secretReferenceSchema).optional().default({}),
 });
 const httpConfigSchema = z.strictObject({
   ...baseConfig,

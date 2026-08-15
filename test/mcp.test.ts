@@ -53,6 +53,17 @@ describe('MCP secret references', () => {
       oauth: { clientId: 'public-client', clientSecretEnv: 'client-secret-value' },
     })).toThrow(/environment variable name/i);
   });
+
+  test('rejects invalid stdio environment target names', () => {
+    for (const input of [
+      { envRefs: { 'BAD=NAME': 'SOURCE_ENV' } },
+      { env: { 'BAD=NAME': { source: 'env' as const, name: 'SOURCE_ENV' } } },
+    ]) {
+      expect(() => serverConfigSchema.parse({
+        id: 'stdio', name: 'stdio', transport: 'stdio', command: 'node', ...input,
+      })).toThrow(/environment variable name/i);
+    }
+  });
 });
 
 describe('real sample MCP server over stdio', () => {

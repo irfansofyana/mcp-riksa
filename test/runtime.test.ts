@@ -326,7 +326,7 @@ describe('concrete workbench runtime', () => {
     const { runtime, databasePath, directory } = createRuntime();
     await runtime.addProvider({
       id: 'local', name: 'Local', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1',
-      models: { default: model('test') }, apiKeyEnv: 'RUNTIME_PROVIDER_SECRET', headerEnv: { Authorization: 'RUNTIME_PROVIDER_SECRET' }, headers: {},
+      models: { default: model('test') }, apiKeyEnv: 'RUNTIME_PROVIDER_SECRET', headerEnv: { 'X-Custom-Key': 'RUNTIME_PROVIDER_SECRET' }, headers: {},
     });
     await runtime.addServer({
       id: 'sample', name: 'Sample', transport: 'stdio', command: process.execPath,
@@ -341,7 +341,7 @@ describe('concrete workbench runtime', () => {
     const settings = await restored.settings();
     expect(settings).toMatchObject({ providers: [{
       id: 'local', apiKeyEnv: 'RUNTIME_PROVIDER_SECRET', apiKeyConfigured: true,
-      headerStatus: { Authorization: { source: 'env', reference: 'RUNTIME_PROVIDER_SECRET', configured: true } },
+      headerStatus: { 'X-Custom-Key': { source: 'env', reference: 'RUNTIME_PROVIDER_SECRET', configured: true } },
     }] });
     expect((await restored.bootstrap() as { servers: unknown[] }).servers).toHaveLength(1);
     await restored.close();

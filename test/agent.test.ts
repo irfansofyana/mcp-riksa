@@ -51,6 +51,20 @@ test('rejects case-insensitive duplicates across provider header maps', () => {
   })).toThrow(/duplicate http header name/i);
 });
 
+test('rejects provider API-key header collisions', () => {
+  for (const [type, header] of [
+    ['openai-compatible', 'authorization'],
+    ['anthropic-compatible', 'X-Api-Key'],
+  ] as const) {
+    expect(() => providerConfigSchema.parse({
+      id: 'safe', name: 'Safe', type, baseUrl: 'http://127.0.0.1:4000/v1',
+      models: { default: { id: 'test' } },
+      apiKey: { source: 'env', name: 'PROVIDER_API_KEY' },
+      headers: { [header]: { source: 'env', name: 'CUSTOM_HEADER_SECRET' } },
+    })).toThrow(/conflicts with the provider api-key header/i);
+  }
+});
+
 test('rejects inline secrets in provider header references', () => {
   expect(() => providerConfigSchema.parse({
     id: 'safe', name: 'Safe', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1',

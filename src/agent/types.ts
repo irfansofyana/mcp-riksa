@@ -25,6 +25,17 @@ export const providerConfigSchema = z.strictObject({
   if (duplicateHeader !== undefined) {
     context.addIssue({ code: 'custom', path: ['headers'], message: `Duplicate HTTP header name: ${duplicateHeader}` });
   }
+  if (config.apiKey !== undefined || config.apiKeyEnv !== undefined) {
+    const apiKeyHeader = config.type === 'anthropic-compatible' ? 'x-api-key' : 'authorization';
+    const configuredHeaders = [...Object.keys(config.headerEnv), ...Object.keys(config.headers)];
+    if (configuredHeaders.some((header) => header.toLowerCase() === apiKeyHeader)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['headers'],
+        message: `${apiKeyHeader} conflicts with the provider API-key header`,
+      });
+    }
+  }
 });
 
 export type ProviderConfig = z.infer<typeof providerConfigSchema>;
