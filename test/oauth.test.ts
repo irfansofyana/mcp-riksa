@@ -112,6 +112,7 @@ describe('OAuth Authorization Code + PKCE lifecycle', () => {
   test('discovers metadata, dynamically registers, validates PKCE, and exposes only sanitized status', async () => {
     const coordinator = new OAuthCoordinator();
     const started = await coordinator.begin(options());
+    expect(coordinator.isUsingCredentials('server-oauth')).toBe(true);
     const authorization = new URL(started.authorizationUrl!);
 
     expect(authorization.searchParams.get('code_challenge_method')).toBe('S256');
@@ -125,6 +126,10 @@ describe('OAuth Authorization Code + PKCE lifecycle', () => {
     expect(JSON.stringify(status)).not.toMatch(/raw-access-secret|refresh-secret|dynamic-secret|code-1/);
     expect(JSON.stringify(redact({ reflected: 'raw-access-secret refresh-secret dynamic-secret' }))).not.toMatch(/raw-access-secret|refresh-secret|dynamic-secret/);
     expect(status.timeline.map((entry) => entry.type)).toEqual(expect.arrayContaining(['discovery', 'registration', 'redirect', 'token']));
+    expect(coordinator.isUsingCredentials('server-oauth')).toBe(true);
+    coordinator.forget('server-oauth');
+    expect(coordinator.isUsingCredentials('server-oauth')).toBe(false);
+    await coordinator.close();
   });
 
   test('uses a pre-registered static client instead of DCR', async () => {

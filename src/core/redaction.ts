@@ -4,16 +4,45 @@ const SECRET_KEY = /^(?:authorization|proxy-authorization|cookie|set-cookie|api[
 const SECRET_QUERY = /^(?:access_token|refresh_token|id_token|token|api_key|apikey|key|code|client_secret)$/i;
 const AUTHORIZATION_VALUE = /(authorization\s*:\s*(?:bearer|basic)\s+)([^\s,;]+)/gi;
 const BEARER_VALUE = /(^|\s)(bearer\s+)([A-Za-z0-9._~+/=-]+)/gi;
-const KNOWN_SECRET_VALUES = new Set<string>();
+const KNOWN_SECRET_VALUES = new Map<string, number>();
+const ENVIRONMENT_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const OPAQUE_SECRET_ID = /^secret_[0-9a-f-]{36}$/i;
 
 export function registerSecretValue(value: string | undefined): void {
-  if (value && value.length >= 4) KNOWN_SECRET_VALUES.add(value);
+  if (value) KNOWN_SECRET_VALUES.set(value, (KNOWN_SECRET_VALUES.get(value) ?? 0) + 1);
+}
+
+// Protocol-issued credentials (OAuth tokens, dynamically registered client secrets,
+// PKCE verifiers) are valid regardless of length, but registering a 1-3 character
+// value globally would redact ordinary text (e.g. the article "a"). Only register
+// these for global redaction when they are long enough to be unambiguous.
+export function registerProtocolSecretValue(value: string | undefined): void {
+  if (value === undefined || value.length < 4) return;
+  registerSecretValue(value);
+}
+
+export function unregisterProtocolSecretValue(value: string | undefined): void {
+  if (value === undefined || value.length < 4) return;
+  unregisterSecretValue(value);
+}
+
+export function unregisterSecretValue(value: string | undefined): void {
+  if (!value) return;
+  const next = (KNOWN_SECRET_VALUES.get(value) ?? 0) - 1;
+  if (next <= 0) KNOWN_SECRET_VALUES.delete(value); else KNOWN_SECRET_VALUES.set(value, next);
 }
 
 function redactString(value: string): string {
   let next = value.replace(AUTHORIZATION_VALUE, `$1${REDACTED}`);
   next = next.replace(BEARER_VALUE, `$1$2${REDACTED}`);
-  for (const secret of KNOWN_SECRET_VALUES) next = next.replaceAll(secret, REDACTED);
+  for (const secret of KNOWN_SECRET_VALUES.keys()) {
+    if (secret.length >= 4) {
+      next = next.replaceAll(secret, REDACTED);
+      continue;
+    }
+    const escaped = secret.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    next = next.replace(new RegExp(`(?<![A-Za-z0-9])${escaped}(?![A-Za-z0-9])`, 'g'), REDACTED);
+  }
 
   try {
     const url = new URL(next);
@@ -30,7 +59,21 @@ function redactString(value: string): string {
   }
 }
 
+function isSecretReference(value: unknown): boolean {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record).sort();
+  if (record.source === 'env') {
+    return keys.length === 2 && keys[0] === 'name' && keys[1] === 'source'
+      && typeof record.name === 'string' && ENVIRONMENT_NAME.test(record.name);
+  }
+  return (record.source === 'vault' || record.source === 'session')
+    && keys.length === 2 && keys[0] === 'id' && keys[1] === 'source'
+    && typeof record.id === 'string' && OPAQUE_SECRET_ID.test(record.id);
+}
+
 function visit(value: unknown, seen: WeakMap<object, unknown>, key?: string): unknown {
+  if (key && SECRET_KEY.test(key) && isSecretReference(value)) return visit(value, seen);
   if (key && SECRET_KEY.test(key)) return REDACTED;
   if (typeof value === 'string') return redactString(value);
   if (value === null || typeof value !== 'object') return value;

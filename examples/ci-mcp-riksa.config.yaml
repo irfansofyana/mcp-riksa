@@ -1,4 +1,4 @@
-version: 1
+version: 2
 servers:
   - id: sample
     name: Deterministic sample
@@ -7,4 +7,5 @@ servers:
     args:
       - dist/examples/sample-mcp-server.js
     envRefs: {}
+    env: {}
 providers: []

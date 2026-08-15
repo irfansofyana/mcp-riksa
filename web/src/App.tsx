@@ -6,6 +6,7 @@ import { ComparePage } from './pages/ComparePage.js';
 import { ConformancePage } from './pages/ConformancePage.js';
 import { PlaygroundPage } from './pages/PlaygroundPage.js';
 import { RunsPage } from './pages/RunsPage.js';
+import { SecretsPage } from './pages/SecretsPage.js';
 import { ServersPage } from './pages/ServersPage.js';
 import { SettingsPage } from './pages/SettingsPage.js';
 import { SuitesPage } from './pages/SuitesPage.js';
@@ -63,7 +64,7 @@ export function App() {
       <div className="rail-note"><b>Security boundary</b><span>Loopback · session token · Origin checked</span></div>
     </aside>
     <section className="main-area">
-      <header className="page-heading"><div><h1>{page}</h1><p>{page === 'Servers' ? 'Connect, discover, authorize, and invoke.' : page === 'Playground' ? 'Observe every model and tool turn.' : page === 'Suites' ? 'Compose regression cases visually. Ship portable YAML.' : page === 'Runs' ? 'Inspect evidence, not summaries.' : page === 'Conformance' ? 'Run official MCP scenarios and retain evidence.' : page === 'Compare' ? 'Measure movement between runs.' : 'Model Providers and local security.'}</p></div><span className="version">v0.1.0</span></header>
+      <header className="page-heading"><div><h1>{page}</h1><p>{page === 'Servers' ? 'Connect, discover, authorize, and invoke.' : page === 'Playground' ? 'Observe every model and tool turn.' : page === 'Suites' ? 'Compose regression cases visually. Ship portable YAML.' : page === 'Runs' ? 'Inspect evidence, not summaries.' : page === 'Conformance' ? 'Run official MCP scenarios and retain evidence.' : page === 'Compare' ? 'Measure movement between runs.' : page === 'Secrets' ? 'Store local credentials without putting them in configuration.' : 'Model Providers and local security.'}</p></div><span className="version">v0.1.0</span></header>
       {error ? <Notice error>{error}</Notice> : null}
       {!data ? <div className="loading"><i />Opening MCP Riksa…</div> : <>
         {page === 'Servers' ? <ServersPage servers={data.servers} conformanceReports={data.conformanceReports} onRefresh={refresh} onConformanceStarted={(id) => { setSelectedConformance(id); void refresh(); navigate('Conformance'); }} /> : null}
@@ -72,6 +73,7 @@ export function App() {
         {page === 'Runs' ? <RunsPage runs={data.runs} {...(selectedRun === undefined ? {} : { initialId: selectedRun })} onRefresh={refresh} /> : null}
         {page === 'Conformance' ? <ConformancePage reports={data.conformanceReports} servers={data.servers} {...(selectedConformance === undefined ? {} : { initialId: selectedConformance })} onRefresh={refresh} /> : null}
         {page === 'Compare' ? <ComparePage runs={data.runs} /> : null}
+        {page === 'Secrets' ? <SecretsPage onRefresh={refresh} /> : null}
         {page === 'Settings' ? <SettingsPage providers={data.providers} onRefresh={refresh} /> : null}
       </>}
     </section>

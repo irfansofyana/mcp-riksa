@@ -27,7 +27,27 @@ export MCP_RIKSA_PROVIDER_API_KEY=local-test-only
 npx tsx scripts/fake-provider.ts --port 4000
 ```
 
-The API key stays in the process environment. The config stores `MCP_RIKSA_PROVIDER_API_KEY`, which is the environment variable name.
+The API key stays in the process environment. The config stores only `{ source: env, name: MCP_RIKSA_PROVIDER_API_KEY }`, never its value.
+
+### Store credentials without environment setup
+
+The **Secrets** workspace accepts write-only credentials in two forms: an encrypted persistent vault or session-only memory. Persistent saves generate a random 256-bit key at `~/.config/mcp-riksa/vault.key` and encrypt values into `.mcp-riksa/secrets.vault`. The browser and APIs return only opaque IDs and metadata—there is no reveal or copy operation.
+
+![Write-only encrypted and session secret management](docs/screenshots/secrets.png)
+
+Use the returned opaque reference in provider and server configuration:
+
+```yaml
+apiKey:
+  source: vault
+  id: secret_00000000-0000-4000-8000-000000000001
+```
+
+Environment references remain the best fit for CI, containers, and process-managed secrets; session references are useful for temporary experiments. Resolved values are registered with the redaction system immediately before use.
+
+The automatic vault prevents plaintext-at-rest and common accidental leaks, but it is not equivalent to a user-held passphrase. On POSIX systems, MCP Riksa creates and verifies owner-only directories and files. On Windows, place both paths in directories protected by owner-only ACLs; MCP Riksa does not currently verify Windows ACLs. Malware running as the same OS user, root/administrator access, or an attacker who obtains both key and vault can decrypt it.
+
+The configuration file schema is now `version: 2`. MCP Riksa is unpublished, so the per-model-pricing correction is intentionally a clean schema break rather than an automatic migration from version 1 provider pricing.
 
 ## Browser tour
 
@@ -90,13 +110,12 @@ The CLI writes `run.json`, `run.html`, and `junit.xml`. It prints JSON to stdout
 `examples/mcp-riksa.config.yaml` shows the complete file shape. Provider configs support:
 
 - `openai-compatible` and `anthropic-compatible` protocols
-- multiple model aliases per provider, each mapped to its upstream model ID
-- API key and custom header environment references
-- local input and output prices per million tokens
+- multiple model aliases per provider, each mapped to its upstream model ID and its own input/output price
+- API keys and custom headers backed by vault, session, or environment references
 - OpenAI-compatible model discovery and connection testing
 - create, edit, duplicate, and reference-safe delete workflows for providers and MCP servers
 
-Each provider owns a model catalog, so one endpoint and credential set can expose aliases such as `fast`, `quality`, and `reasoning`. Editing keeps the provider ID stable; duplicating creates a new ID. Removing model aliases is blocked while saved suites or conversations still reference them.
+Each provider owns a model catalog, so one endpoint and credential set can expose aliases such as `fast`, `quality`, and `reasoning`. Cost assertions, comparisons, reports, Playground totals, and `maxCostUsd` use the selected alias's pricing. Editing keeps the provider ID stable; duplicating creates a new ID. Removing model aliases is blocked while saved suites or conversations still reference them.
 
 Browser edits persist in SQLite. Configuration passed to `serve --config` seeds missing entries without overwriting browser edits; deleting a seeded entry creates a local tombstone so it stays deleted across restarts. Headless `run --config` remains authoritative and applies its configuration for that run.
 
@@ -108,14 +127,29 @@ oauth:
   timeoutMs: 120000
   # Omit clientId for DCR when the authorization server advertises it.
   clientId: pre-registered-client
-  clientSecretEnv: MCP_OAUTH_CLIENT_SECRET
+  clientSecret:
+    source: env
+    name: MCP_OAUTH_CLIENT_SECRET
 ```
+
+For direct token authentication without OAuth, configure static authorization. MCP Riksa resolves the credential and assembles the final header only in the backend:
+
+```yaml
+staticAuth:
+  header: Authorization
+  scheme: Bearer
+  credential:
+    source: vault
+    id: secret_00000000-0000-4000-8000-000000000001
+```
+
+Bearer, Basic, and custom schemes are supported. Static authorization and OAuth are mutually exclusive. Arbitrary HTTP headers and stdio environment values use the same secret-reference shape.
 
 The workbench discovers RFC 9728 protected-resource metadata and RFC 8414 authorization-server metadata. It uses the MCP SDK OAuth provider interface for DCR, Authorization Code + PKCE, token exchange, refresh, and invalidation. `oauth4webapi` supplies standards-based random OAuth state. The callback accepts loopback HTTP URLs and checks state before code exchange.
 
 Interactive authorization opens in a popup. Successful callbacks notify the opener through a same-origin channel, close the popup, refresh authorization status, and reconnect the MCP server automatically. A bounded status poll covers browsers that suppress popup messaging.
 
-OAuth tokens, authorization codes, PKCE verifiers, and client secrets remain in memory. “Forget authorization” clears them. A process restart requires authorization again. CI can use client credentials outside the interactive UI or inject a short-lived bearer token through a header environment reference.
+OAuth tokens, authorization codes, and PKCE verifiers remain in memory. “Forget authorization” clears them. A process restart requires authorization again. OAuth client secrets may use vault, session, or environment references. CI can inject a short-lived bearer token through a static authorization environment reference.
 
 ## Playground conversations
 

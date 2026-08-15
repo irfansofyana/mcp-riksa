@@ -16,6 +16,7 @@ import {
   groupTrace,
   normalizeMcpContent,
   normalizePage,
+  pages,
   signedDelta,
   traceWindowMs,
 } from '../web/src/model.js';
@@ -30,6 +31,8 @@ describe('workbench browser view model', () => {
   test('normalizes hash navigation including dedicated conformance page', () => {
     expect(normalizePage('#/playground')).toBe('Playground');
     expect(normalizePage('#/conformance')).toBe('Conformance');
+    expect(normalizePage('#/secrets')).toBe('Secrets');
+    expect(pages).toContain('Secrets');
     expect(normalizePage('#/not-real')).toBe('Servers');
     expect(normalizePage('')).toBe('Servers');
   });
@@ -66,39 +69,74 @@ describe('workbench browser view model', () => {
 
   test('builds stdio and HTTP server payloads without shell strings or resolved secrets', () => {
     expect(buildServerPayload({ id: 'sample', name: 'Sample', transport: 'stdio', command: 'node', args: '--flag value', url: '', headerEnv: '' })).toEqual({
-      id: 'sample', name: 'Sample', transport: 'stdio', command: 'node', args: ['--flag', 'value'], envRefs: {},
+      id: 'sample', name: 'Sample', transport: 'stdio', command: 'node', args: ['--flag', 'value'], envRefs: {}, env: {},
     });
     expect(buildServerPayload({
       id: 'remote', name: 'Remote', transport: 'http', command: '', args: '',
-      url: 'http://127.0.0.1:3000/mcp', headerEnv: 'Authorization=MCP_TOKEN',
-      oauthEnabled: true, oauthScopes: 'mcp:read mcp:write', oauthClientId: 'static-client', oauthClientSecretEnv: 'MCP_OAUTH_SECRET', oauthTimeoutMs: '90000',
+      url: 'http://127.0.0.1:3000/mcp', headerEnv: 'Authorization=env:MCP_TOKEN',
+      oauthEnabled: true, oauthScopes: 'mcp:read mcp:write', oauthClientId: 'static-client', oauthClientSecretEnv: 'env:MCP_OAUTH_SECRET', oauthTimeoutMs: '90000',
     })).toMatchObject({
-      id: 'remote', transport: 'http', url: 'http://127.0.0.1:3000/mcp', headerEnv: { Authorization: 'MCP_TOKEN' },
-      oauth: { scopes: ['mcp:read', 'mcp:write'], clientId: 'static-client', clientSecretEnv: 'MCP_OAUTH_SECRET', timeoutMs: 90000 },
+      id: 'remote', transport: 'http', url: 'http://127.0.0.1:3000/mcp', headerEnv: {}, headers: { Authorization: { source: 'env', name: 'MCP_TOKEN' } },
+      oauth: { scopes: ['mcp:read', 'mcp:write'], clientId: 'static-client', clientSecret: { source: 'env', name: 'MCP_OAUTH_SECRET' }, timeoutMs: 90000 },
     });
+  });
+
+  test('builds static HTTP authorization from an opaque reference and rejects OAuth overlap', () => {
+    const base = {
+      id: 'remote', name: 'Remote', transport: 'http' as const, command: '', args: '',
+      url: 'https://example.test/mcp', headerEnv: '', staticAuthEnabled: true,
+      staticAuthHeader: 'Authorization', staticAuthScheme: 'Bearer',
+      staticAuthCredential: 'env:MCP_SERVER_TOKEN',
+    };
+    expect(buildServerPayload(base)).toMatchObject({
+      staticAuth: {
+        header: 'Authorization', scheme: 'Bearer',
+        credential: { source: 'env', name: 'MCP_SERVER_TOKEN' },
+      },
+    });
+    expect(() => buildServerPayload({ ...base, oauthEnabled: true })).toThrow(/mutually exclusive/i);
   });
 
   test('builds generic model provider payloads with aliases and env references', () => {
     expect(buildProviderPayload({
       id: 'local', name: 'Local', type: 'anthropic-compatible', baseUrl: 'http://127.0.0.1:4000/v1',
-      models: [{ alias: 'fast', model: 'test-model' }, { alias: 'quality', model: 'large-model' }], apiKeyEnv: 'PROVIDER_KEY', headerEnv: 'x-team=TEAM_TOKEN',
-      inputPrice: '1.5', outputPrice: '2.5',
-    })).toMatchObject({ models: { fast: 'test-model', quality: 'large-model' }, apiKeyEnv: 'PROVIDER_KEY', headerEnv: { 'x-team': 'TEAM_TOKEN' }, pricing: { inputPerMillion: 1.5, outputPerMillion: 2.5 } });
+      models: [
+        { alias: 'fast', model: 'test-model', inputPrice: '0.15', outputPrice: '0.6' },
+        { alias: 'quality', model: 'large-model', inputPrice: '2.5', outputPrice: '10' },
+      ], apiKeyEnv: 'env:PROVIDER_KEY', headerEnv: 'x-team=env:TEAM_TOKEN',
+    })).toMatchObject({
+      models: {
+        fast: { id: 'test-model', pricing: { inputPerMillion: 0.15, outputPerMillion: 0.6 } },
+        quality: { id: 'large-model', pricing: { inputPerMillion: 2.5, outputPerMillion: 10 } },
+      },
+      apiKey: { source: 'env', name: 'PROVIDER_KEY' }, headerEnv: {}, headers: { 'x-team': { source: 'env', name: 'TEAM_TOKEN' } },
+    });
     expect(() => buildProviderPayload({
       id: 'local', name: 'Local', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1',
-      models: [{ alias: 'same', model: 'one' }, { alias: 'same', model: 'two' }], apiKeyEnv: '', headerEnv: '', inputPrice: '0', outputPrice: '0',
+      models: [
+        { alias: 'same', model: 'one', inputPrice: '0', outputPrice: '0' },
+        { alias: 'same', model: 'two', inputPrice: '0', outputPrice: '0' },
+      ], apiKeyEnv: '', headerEnv: '',
     })).toThrow(/duplicate model alias/i);
   });
 
   test('round-trips provider and server configs into editable forms', () => {
     expect(providerToForm({
       id: 'gateway', name: 'Gateway', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1',
-      models: { fast: 'small', quality: 'large' }, apiKeyEnv: 'KEY', headerEnv: { 'x-team': 'TEAM' }, pricing: { inputPerMillion: 1, outputPerMillion: 2 },
-    })).toMatchObject({ models: [{ alias: 'fast', model: 'small' }, { alias: 'quality', model: 'large' }], headerEnv: 'x-team=TEAM' });
-    const remote = { id: 'remote', name: 'Remote', transport: 'http' as const, url: 'https://example.test/mcp', headerEnv: { Authorization: 'MCP_TOKEN' }, allowUnsafeEndpoint: false, oauth: { scopes: ['read', 'write'], timeoutMs: 45000 } };
-    expect(serverToForm(remote)).toMatchObject({ id: 'remote', transport: 'http', headerEnv: 'Authorization=MCP_TOKEN', oauthEnabled: true, oauthScopes: 'read write', oauthTimeoutMs: '45000' });
+      models: {
+        fast: { id: 'small', pricing: { inputPerMillion: 1, outputPerMillion: 2 } },
+        quality: { id: 'large', pricing: { inputPerMillion: 3, outputPerMillion: 4 } },
+      }, apiKey: { source: 'env', name: 'KEY' }, headerEnv: {}, headers: { 'x-team': { source: 'env', name: 'TEAM' } },
+    })).toMatchObject({
+      models: [
+        { alias: 'fast', model: 'small', inputPrice: '1', outputPrice: '2' },
+        { alias: 'quality', model: 'large', inputPrice: '3', outputPrice: '4' },
+      ], apiKeyEnv: 'env:KEY', headerEnv: 'x-team=env:TEAM',
+    });
+    const remote = { id: 'remote', name: 'Remote', transport: 'http' as const, url: 'https://example.test/mcp', headerEnv: {}, headers: { Authorization: { source: 'env' as const, name: 'MCP_TOKEN' } }, allowUnsafeEndpoint: false, oauth: { scopes: ['read', 'write'], timeoutMs: 45000 } };
+    expect(serverToForm(remote)).toMatchObject({ id: 'remote', transport: 'http', headerEnv: 'Authorization=env:MCP_TOKEN', oauthEnabled: true, oauthScopes: 'read write', oauthTimeoutMs: '45000' });
     expect(buildServerPayload(serverToForm(remote))).toEqual(remote);
-    const stdio = { id: 'stdio', name: 'Stdio', transport: 'stdio' as const, command: 'node', args: ['--prompt', 'hello world'], cwd: '/tmp', envRefs: { TOKEN: 'TOKEN_ENV' } };
+    const stdio = { id: 'stdio', name: 'Stdio', transport: 'stdio' as const, command: 'node', args: ['--prompt', 'hello world'], cwd: '/tmp', envRefs: {}, env: { TOKEN: { source: 'env' as const, name: 'TOKEN_ENV' } } };
     expect(buildServerPayload(serverToForm(stdio))).toEqual(stdio);
   });
 

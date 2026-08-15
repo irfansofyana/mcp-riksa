@@ -2,8 +2,10 @@ import OpenAI from 'openai';
 import { Agent, fetch as undiciFetch } from 'undici';
 import { z } from 'zod';
 import type { ProviderAdapter, ProviderMessage, ProviderTool } from './types.js';
-import { providerConfigSchema, resolveApiKey, resolveModel, resolveProviderHeaders } from './types.js';
+import { providerConfigSchema, resolveApiKey, resolveModel, resolveModelPricing, resolveProviderHeaders } from './types.js';
 import { createSafeLookup } from '../mcp/validation.js';
+import type { SecretResolver } from '../secrets/types.js';
+import { withSecretResolutionLease } from '../secrets/lease.js';
 
 const responseSchema = z.object({
   choices: z.array(z.object({
@@ -47,22 +49,27 @@ function tools(input: ProviderTool[]): OpenAI.Chat.Completions.ChatCompletionToo
   }));
 }
 
-export function createOpenAIAdapter(input: unknown): ProviderAdapter {
+export function createOpenAIAdapter(input: unknown, resolveSecret: SecretResolver): ProviderAdapter {
   const config = providerConfigSchema.parse(input);
   const dispatcher = new Agent({ connect: { lookup: createSafeLookup() } });
   const safeFetch = ((target: string | URL | Request, init?: RequestInit) => (
     undiciFetch as unknown as (input: string | URL | Request, options: RequestInit & { dispatcher: Agent }) => Promise<Response>
   )(target, { ...init, dispatcher })) as typeof fetch;
-  const client = new OpenAI({
+  const getClient = (activeResolver: SecretResolver) => Promise.all([
+    resolveApiKey(config, activeResolver),
+    resolveProviderHeaders(config, activeResolver),
+  ]).then(([apiKey, defaultHeaders]) => new OpenAI({
     baseURL: config.baseUrl,
-    apiKey: resolveApiKey(config) ?? 'local-no-key',
-    defaultHeaders: resolveProviderHeaders(config),
+    apiKey: apiKey ?? 'local-no-key',
+    defaultHeaders,
     fetch: safeFetch,
-  });
+  }));
   return {
     id: config.id,
-    pricing: config.pricing,
+    pricingFor: (alias) => resolveModelPricing(config, alias),
     async complete(request) {
+      return withSecretResolutionLease(resolveSecret, async (activeResolver) => {
+        const client = await getClient(activeResolver);
       if (request.onTextDelta) {
         const stream = await client.chat.completions.create(
           {
@@ -155,10 +162,14 @@ export function createOpenAIAdapter(input: unknown): ProviderAdapter {
         stopReason: toolCalls.length > 0 ? 'tool_calls' : (choice.finish_reason ?? 'complete'),
         raw,
       };
+      });
     },
     async listModels() {
-      const page = await client.models.list();
-      return page.data.map((model) => model.id);
+      return withSecretResolutionLease(resolveSecret, async (activeResolver) => {
+        const client = await getClient(activeResolver);
+        const page = await client.models.list();
+        return page.data.map((model) => model.id);
+      });
     },
     async close() { await dispatcher.close(); },
   };

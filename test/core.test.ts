@@ -1,14 +1,58 @@
 import { describe, expect, test } from 'vitest';
-import { redact, REDACTED, registerSecretValue } from '../src/core/redaction.js';
+import { redact, REDACTED, registerProtocolSecretValue, registerSecretValue, unregisterProtocolSecretValue, unregisterSecretValue } from '../src/core/redaction.js';
 import { parseSuite } from '../src/core/suite.js';
 
 describe('redaction', () => {
+  test('redacts short credentials and releases scoped registrations', () => {
+    registerSecretValue('q7');
+    expect(redact({ arbitrary: 'echo q7' })).toEqual({ arbitrary: `echo ${REDACTED}` });
+    unregisterSecretValue('q7');
+    expect(redact({ arbitrary: 'echo q7' })).toEqual({ arbitrary: 'echo q7' });
+  });
+
+  test('redacts short credentials without corrupting ordinary text', () => {
+    registerSecretValue('a');
+    expect(redact('a is a credential, data remains readable')).toBe(`${REDACTED} is ${REDACTED} credential, data remains readable`);
+    unregisterSecretValue('a');
+  });
+
+  test('keeps short protocol-issued values out of global redaction', () => {
+    registerProtocolSecretValue('a');
+    expect(redact('a is a normal sentence')).toBe('a is a normal sentence');
+    registerProtocolSecretValue('tok');
+    expect(redact('tok value and token text')).toBe('tok value and token text');
+    unregisterProtocolSecretValue('a');
+    unregisterProtocolSecretValue('tok');
+    expect(redact('a tok')).toBe('a tok');
+  });
+
+  test('registers long protocol-issued values for global redaction', () => {
+    registerProtocolSecretValue('oauth-access-token-value');
+    expect(redact({ arbitrary: 'echo oauth-access-token-value' })).toEqual({ arbitrary: `echo ${REDACTED}` });
+    unregisterProtocolSecretValue('oauth-access-token-value');
+    expect(redact({ arbitrary: 'echo oauth-access-token-value' })).toEqual({ arbitrary: 'echo oauth-access-token-value' });
+  });
+
   test('redacts resolved environment secrets even when reflected under arbitrary keys or text', () => {
     registerSecretValue('company-gateway-secret');
     const output = redact({ debug: 'company-gateway-secret', message: 'upstream echoed company-gateway-secret unexpectedly' });
     expect(JSON.stringify(output)).not.toContain('company-gateway-secret');
     expect(output).toEqual({ debug: REDACTED, message: `upstream echoed ${REDACTED} unexpectedly` });
   });
+  test('preserves validated opaque secret references while redacting plaintext secret fields', () => {
+    const references = {
+      apiKey: { source: 'vault', id: 'secret_00000000-0000-4000-8000-000000000001' },
+      headers: { Authorization: { source: 'env', name: 'MCP_SERVER_TOKEN' } },
+      env: { TOKEN: { source: 'session', id: 'secret_00000000-0000-4000-8000-000000000002' } },
+    };
+
+    expect(redact(references)).toEqual(references);
+    expect(redact({ apiKey: 'plaintext', Authorization: 'Bearer plaintext' })).toEqual({
+      apiKey: REDACTED,
+      Authorization: REDACTED,
+    });
+  });
+
   test('redacts authorization headers, cookies, token fields, query secrets, and nested payloads immutably', () => {
     const input = {
       headers: {

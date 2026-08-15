@@ -20,9 +20,44 @@ const run = {
 };
 
 function runtime(): ApiRuntime {
+  const secretItems: Array<{
+    id: string;
+    label: string;
+    backend: 'encrypted-file' | 'session';
+    purposes: Array<'provider-api-key' | 'provider-header' | 'mcp-header' | 'oauth-client-secret' | 'oauth-token' | 'stdio-env'>;
+    configured: boolean;
+    createdAt: string;
+    updatedAt: string;
+  }> = [];
   return {
     bootstrap: async () => ({ servers: [], providers: [], suites: ['sample'], runs: [run], conformanceReports: [conformanceReport] }),
-    settings: async () => ({ providers: [{ id: 'local', apiKey: 'api-response-secret', apiKeyEnv: 'SAFE_ENV_NAME' }] }),
+    settings: async () => ({ providers: [{ id: 'local', apiKey: 'api-r...et', apiKeyEnv: 'SAFE_ENV_NAME' }] }),
+    listSecrets: async () => secretItems,
+    createSecret: async (value) => {
+      const now = new Date().toISOString();
+      const metadata = {
+        id: `secret_${'1'.repeat(8)}-${'1'.repeat(4)}-${'1'.repeat(4)}-${'1'.repeat(4)}-${'1'.repeat(12)}`,
+        label: value.label,
+        backend: value.backend === 'vault' ? 'encrypted-file' as const : 'session' as const,
+        purposes: [...value.purposes],
+        configured: true,
+        createdAt: now,
+        updatedAt: now,
+      };
+      secretItems.push(metadata);
+      calls.push({ method: 'createSecret', value });
+      return metadata;
+    },
+    replaceSecret: async (id, value) => {
+      calls.push({ method: 'replaceSecret', value: { id, value } });
+      const metadata = secretItems.find((entry) => entry.id === id);
+      if (!metadata) throw new WorkbenchError('Secret not found', 404);
+      metadata.updatedAt = new Date().toISOString();
+      return metadata;
+    },
+    deleteSecret: async (id) => ({ id, deleted: true }),
+    vaultStatus: async () => ({ state: 'ready', keyLocation: '~/.config/mcp-riksa/vault.key' }),
+    resetVault: async () => ({ reset: true }),
     createProvider: async (value) => { calls.push({ method: 'createProvider', value }); return { id: 'local' }; },
     updateProvider: async (id, value) => { calls.push({ method: 'updateProvider', value: { id, value } }); return { id }; },
     deleteProvider: async (id, force) => { calls.push({ method: 'deleteProvider', value: { id, force } }); return { id, deleted: true }; },
@@ -31,6 +66,7 @@ function runtime(): ApiRuntime {
     updateServer: async (id, value) => { calls.push({ method: 'updateServer', value: { id, value } }); return { id }; },
     deleteServer: async (id, force) => { calls.push({ method: 'deleteServer', value: { id, force } }); return { id, deleted: true }; },
     connectServer: async (id) => ({ id, identity: { name: 'sample' }, tools: [{ name: 'add' }] }),
+    disconnectServer: async (id) => ({ id, connected: false }),
     inspectServer: async (id) => ({ id, identity: { name: 'sample' }, tools: [{ name: 'add' }] }),
     callTool: async (id, tool, args, options) => ({ id, tool, args, options, structuredContent: { sum: 5 } }),
     playground: async () => ({ output: '5', toolCalls: [{ name: 'add' }], events: [] }),
@@ -111,6 +147,58 @@ describe('API security boundary', () => {
     expect(calls).toHaveLength(0);
   });
 
+  test('provides write-only secret management without returning credential values', async () => {
+    const secret = 'browser-entered-secret-43a8';
+    const created = await request('/api/secrets', mutation({
+      backend: 'vault',
+      label: 'Browser provider key',
+      purposes: ['provider-api-key'],
+      value: secret,
+    }));
+    expect(created.status).toBe(201);
+    expect(created.headers.get('cache-control')).toBe('no-store');
+    const createdText = await created.text();
+    expect(createdText).not.toContain(secret);
+    const metadata = JSON.parse(createdText) as { id: string; label: string; configured: boolean };
+    expect(metadata).toMatchObject({ label: 'Browser provider key', configured: true });
+
+    const listed = await request('/api/secrets');
+    expect(listed.status).toBe(200);
+    expect(listed.headers.get('cache-control')).toBe('no-store');
+    expect(await listed.json()).toEqual([expect.objectContaining({ id: metadata.id, label: 'Browser provider key' })]);
+
+    const replacement = 'replacement-browser-secret-f33a';
+    const replaced = await request(`/api/secrets/${metadata.id}/value`, {
+      ...mutation({ value: replacement }),
+      method: 'PUT',
+    });
+    expect(replaced.status).toBe(200);
+    const replacedText = await replaced.text();
+    expect(replacedText).not.toContain(secret);
+    expect(replacedText).not.toContain(replacement);
+
+    const reveal = await request(`/api/secrets/${metadata.id}/value`);
+    expect(reveal.status).toBe(404);
+  });
+
+  test('reports vault health without exposing the absolute key path', async () => {
+    const response = await request('/api/secrets/vault/status');
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    const body = await response.json() as Record<string, unknown>;
+    expect(body).toMatchObject({ state: 'ready', keyLocation: '~/.config/mcp-riksa/vault.key' });
+    expect(JSON.stringify(body)).not.toContain('/home/');
+  });
+
+  test('requires explicit confirmation before resetting the vault', async () => {
+    const rejected = await request('/api/secrets/vault/reset', mutation({ confirm: 'wrong' }));
+    expect(rejected.status).toBe(400);
+
+    const accepted = await request('/api/secrets/vault/reset', mutation({ confirm: 'RESET' }));
+    expect(accepted.status).toBe(200);
+    expect(await accepted.json()).toEqual({ reset: true });
+  });
+
   test('redacts secrets from settings and errors even if the runtime leaks one', async () => {
     const response = await request('/api/settings');
     const text = await response.text();
@@ -134,17 +222,16 @@ describe('API workbench flow', () => {
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('API failed to bind');
     origin = `http://127.0.0.1:${address.port}`;
-    expect((await request('/api/providers', mutation({ id: 'x', name: 'X', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1', models: { default: 'x' }, headerEnv: {}, pricing: { inputPerMillion: 0, outputPerMillion: 0 } }))).status).toBe(409);
+    expect((await request('/api/providers', mutation({ id: 'x', name: 'X', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1', models: { default: { id: 'x', pricing: { inputPerMillion: 0, outputPerMillion: 0 } } }, headerEnv: {} }))).status).toBe(409);
     expect((await request('/api/servers/missing', { ...mutation({ id: 'missing', name: 'Missing', transport: 'stdio', command: 'node', args: [], envRefs: {} }), method: 'PUT' })).status).toBe(404);
   });
 
   test('routes server registration, inspection, direct calls, playground, suites, runs, trace and compare', async () => {
     expect((await request('/api/providers', mutation({
       id: 'local', name: 'Local', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1',
-      models: { default: 'test-model' }, apiKeyEnv: 'SAFE_ENV_NAME', headerEnv: {},
-      pricing: { inputPerMillion: 0, outputPerMillion: 0 },
+      models: { default: { id: 'test-model', pricing: { inputPerMillion: 0, outputPerMillion: 0 } } }, apiKeyEnv: 'SAFE_ENV_NAME', headerEnv: {},
     }))).status).toBe(201);
-    expect((await request('/api/providers/local', { ...mutation({ id: 'local', name: 'Updated', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1', models: { fast: 'small', quality: 'large' }, headerEnv: {}, pricing: { inputPerMillion: 0, outputPerMillion: 0 } }), method: 'PUT' })).status).toBe(200);
+    expect((await request('/api/providers/local', { ...mutation({ id: 'local', name: 'Updated', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1', models: { fast: { id: 'small', pricing: { inputPerMillion: 0.1, outputPerMillion: 0.2 } }, quality: { id: 'large', pricing: { inputPerMillion: 1, outputPerMillion: 2 } } }, headerEnv: {} }), method: 'PUT' })).status).toBe(200);
     expect((await request('/api/providers/local/test', mutation({}))).status).toBe(200);
     expect((await request('/api/servers', mutation({
       id: 'sample', name: 'Sample', transport: 'stdio', command: process.execPath, args: [], envRefs: {},
@@ -155,6 +242,7 @@ describe('API workbench flow', () => {
 
     const tool = await request('/api/servers/sample/call', mutation({ tool: 'add', arguments: { a: 2, b: 3 }, confirmDangerous: false }));
     expect(await tool.json()).toMatchObject({ structuredContent: { sum: 5 } });
+    expect(await (await request('/api/servers/sample/disconnect', mutation({}))).json()).toEqual({ id: 'sample', connected: false });
     expect((await request('/api/playground', mutation({ prompt: 'add' }))).status).toBe(200);
     expect((await request('/api/playground/conversations', mutation({ serverId: 'sample', providerId: 'local', model: 'default', systemPrompt: 'Use tools accurately.' }))).status).toBe(201);
     expect((await request('/api/playground/conversations')).status).toBe(200);

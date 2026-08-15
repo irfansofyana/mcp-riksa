@@ -12,7 +12,8 @@ import { generateRandomState } from 'oauth4webapi';
 import { Agent, fetch as undiciFetch } from 'undici';
 import { z } from 'zod';
 import { environmentVariableNameSchema } from '../core/environment.js';
-import { redact, registerSecretValue } from '../core/redaction.js';
+import { redact, registerProtocolSecretValue, registerSecretValue, unregisterProtocolSecretValue } from '../core/redaction.js';
+import { assertResolvedSecretValue, secretReferenceSchema, type SecretResolver } from '../secrets/types.js';
 import { createSafeLookup, validateHttpEndpoint } from './validation.js';
 
 const oauthOptionsSchema = z.strictObject({
@@ -23,6 +24,7 @@ const oauthOptionsSchema = z.strictObject({
   timeoutMs: z.number().int().min(1).max(300_000).default(120_000),
   clientId: z.string().min(1).optional(),
   clientSecretEnv: environmentVariableNameSchema.optional(),
+  clientSecret: secretReferenceSchema.optional(),
 });
 
 export type OAuthOptions = z.infer<typeof oauthOptionsSchema>;
@@ -66,6 +68,7 @@ class MemoryOAuthProvider implements OAuthClientProvider {
 
   constructor(private readonly session: Session, information?: OAuthClientInformationMixed) {
     this.information = information;
+    if (information && 'client_secret' in information) registerProtocolSecretValue(information.client_secret);
   }
 
   get redirectUrl(): string {
@@ -92,7 +95,8 @@ class MemoryOAuthProvider implements OAuthClientProvider {
   }
 
   saveClientInformation(information: OAuthClientInformationMixed): void {
-    registerSecretValue(information.client_secret);
+    if (this.information && 'client_secret' in this.information) unregisterProtocolSecretValue(this.information.client_secret);
+    registerProtocolSecretValue(information.client_secret);
     this.information = information;
     timeline(this.session, 'registration', 'Dynamic client registration completed');
   }
@@ -103,8 +107,14 @@ class MemoryOAuthProvider implements OAuthClientProvider {
 
   saveTokens(tokens: OAuthTokens): void {
     const refresh = this.savedTokens !== undefined;
-    registerSecretValue(tokens.access_token);
-    registerSecretValue(tokens.refresh_token);
+    if (this.savedTokens) {
+      unregisterProtocolSecretValue(this.savedTokens.access_token);
+      unregisterProtocolSecretValue(this.savedTokens.refresh_token);
+      unregisterProtocolSecretValue(this.savedTokens.id_token);
+    }
+    registerProtocolSecretValue(tokens.access_token);
+    registerProtocolSecretValue(tokens.refresh_token);
+    registerProtocolSecretValue(tokens.id_token);
     this.savedTokens = tokens;
     this.session.expiresAt = tokens.expires_in === undefined
       ? undefined
@@ -118,6 +128,8 @@ class MemoryOAuthProvider implements OAuthClientProvider {
   }
 
   saveCodeVerifier(codeVerifier: string): void {
+    unregisterProtocolSecretValue(this.verifier);
+    registerProtocolSecretValue(codeVerifier);
     this.verifier = codeVerifier;
   }
 
@@ -136,9 +148,20 @@ class MemoryOAuthProvider implements OAuthClientProvider {
   }
 
   invalidateCredentials(scope: 'all' | 'client' | 'tokens' | 'verifier' | 'discovery'): void {
-    if (scope === 'all' || scope === 'client') this.information = undefined;
-    if (scope === 'all' || scope === 'tokens') this.savedTokens = undefined;
-    if (scope === 'all' || scope === 'verifier') this.verifier = undefined;
+    if (scope === 'all' || scope === 'client') {
+      if (this.information && 'client_secret' in this.information) unregisterProtocolSecretValue(this.information.client_secret);
+      this.information = undefined;
+    }
+    if (scope === 'all' || scope === 'tokens') {
+      unregisterProtocolSecretValue(this.savedTokens?.access_token);
+      unregisterProtocolSecretValue(this.savedTokens?.refresh_token);
+      unregisterProtocolSecretValue(this.savedTokens?.id_token);
+      this.savedTokens = undefined;
+    }
+    if (scope === 'all' || scope === 'verifier') {
+      unregisterProtocolSecretValue(this.verifier);
+      this.verifier = undefined;
+    }
     if (scope === 'all' || scope === 'discovery') this.discovery = undefined;
   }
 }
@@ -151,13 +174,12 @@ function validateCallback(input: string): void {
   }
 }
 
-function staticClient(options: OAuthOptions): OAuthClientInformationMixed | undefined {
+async function staticClient(options: OAuthOptions, resolveSecret: SecretResolver): Promise<OAuthClientInformationMixed | undefined> {
   if (options.clientId === undefined) return undefined;
-  const secret = options.clientSecretEnv === undefined ? undefined : process.env[options.clientSecretEnv];
-  if (options.clientSecretEnv !== undefined && secret === undefined) {
-    throw new Error(`Environment variable ${options.clientSecretEnv} is not set`);
-  }
-  registerSecretValue(secret);
+  const reference = options.clientSecret ?? (options.clientSecretEnv === undefined
+    ? undefined
+    : { source: 'env' as const, name: options.clientSecretEnv });
+  const secret = reference === undefined ? undefined : await resolveSecret(reference, 'oauth-client-secret');
   return {
     client_id: options.clientId,
     ...(secret === undefined ? {} : { client_secret: secret }),
@@ -168,6 +190,15 @@ function staticClient(options: OAuthOptions): OAuthClientInformationMixed | unde
 export class OAuthCoordinator {
   private readonly sessions = new Map<string, Session>();
   private readonly dispatcher = new Agent({ connect: { lookup: createSafeLookup() } });
+
+  constructor(private readonly resolveSecret: SecretResolver = async (reference) => {
+    if (reference.source !== 'env') throw new Error(`Secret backend ${reference.source} is not available in this context`);
+    const value = process.env[reference.name];
+    if (value === undefined) throw new Error(`Environment variable ${reference.name} is not set`);
+    assertResolvedSecretValue(value);
+    registerSecretValue(value);
+    return value;
+  }) {}
 
   private readonly safeFetch = ((input: string | URL | Request, init?: RequestInit) => (
     undiciFetch as unknown as (
@@ -192,7 +223,7 @@ export class OAuthCoordinator {
       completion,
       resolveCompletion,
     };
-    session.provider = new MemoryOAuthProvider(session, staticClient(options));
+    session.provider = new MemoryOAuthProvider(session, await staticClient(options, this.resolveSecret));
     this.sessions.set(options.id, session);
 
     try {
@@ -209,6 +240,7 @@ export class OAuthCoordinator {
         session.state = 'timed_out';
         session.authorizationUrl = undefined;
         timeline(session, 'error', 'OAuth callback timed out');
+        session.provider.invalidateCredentials?.('all');
         session.resolveCompletion(session.state);
       }, options.timeoutMs);
       return this.status(options.id);
@@ -285,6 +317,11 @@ export class OAuthCoordinator {
     this.sessions.delete(id);
   }
 
+  isUsingCredentials(id: string): boolean {
+    const state = this.sessions.get(id)?.state;
+    return state === 'authorizing' || state === 'authorized';
+  }
+
   status(id: string): OAuthStatus {
     const session = this.require(id);
     const scopes = session.provider.tokens()?.scope?.split(/\s+/).filter(Boolean) ?? [];
@@ -318,6 +355,7 @@ export class OAuthCoordinator {
     session.state = state;
     session.authorizationUrl = undefined;
     timeline(session, state === 'denied' ? 'denied' : state === 'cancelled' ? 'cancelled' : 'error', message);
+    session.provider.invalidateCredentials?.('all');
     session.resolveCompletion(state);
   }
 }

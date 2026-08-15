@@ -34,19 +34,25 @@ export type Tool = {
   annotations?: { destructiveHint?: boolean; readOnlyHint?: boolean; idempotentHint?: boolean };
 };
 
+export type SecretReference =
+  | { source: 'env'; name: string }
+  | { source: 'vault'; id: string }
+  | { source: 'session'; id: string };
+
 export type ServerSummary = {
   id: string;
   name: string;
   connected?: boolean;
 } & (
-  | { transport: 'stdio'; command: string; args: string[]; cwd?: string; envRefs: Record<string, string> }
-  | { transport: 'http'; url: string; headerEnv: Record<string, string>; allowUnsafeEndpoint: boolean; oauth?: { scopes: string[]; clientId?: string; clientSecretEnv?: string; timeoutMs: number } }
+  | { transport: 'stdio'; command: string; args: string[]; cwd?: string; envRefs: Record<string, string>; env: Record<string, SecretReference> }
+  | { transport: 'http'; url: string; headerEnv: Record<string, string>; headers: Record<string, SecretReference>; staticAuth?: { header: string; scheme: string; credential: SecretReference }; allowUnsafeEndpoint: boolean; oauth?: { scopes: string[]; clientId?: string; clientSecretEnv?: string; clientSecret?: SecretReference; timeoutMs: number } }
 );
 
 export type ProviderSummary = {
-  id: string; name: string; type: 'openai-compatible' | 'anthropic-compatible'; baseUrl: string; models: Record<string, string>;
-  apiKeyEnv?: string; apiKeyConfigured?: boolean; headerEnv?: Record<string, string>;
-  pricing?: { inputPerMillion: number; outputPerMillion: number };
+  id: string; name: string; type: 'openai-compatible' | 'anthropic-compatible'; baseUrl: string;
+  models: Record<string, { id: string; pricing: { inputPerMillion: number; outputPerMillion: number } }>;
+  apiKeyEnv?: string; apiKey?: SecretReference; apiKeyConfigured?: boolean; headerEnv?: Record<string, string>; headers?: Record<string, SecretReference>;
+  headerStatus?: Record<string, { source: string; reference: string; configured: boolean }>;
 };
 
 export type EventRecord = {
@@ -132,6 +138,21 @@ export type AgentUpdate =
   | { type: 'model_turn'; turn: number; usage: { input: number; output: number; total: number }; tokens: { input: number; output: number; total: number }; costUsd: number; durationMs: number }
   | { type: 'tool_call'; turn: number; call: PlaygroundResult['toolCalls'][number] }
   | { type: 'stop'; reason: string; durationMs: number };
+
+export type SecretPurpose = 'provider-api-key' | 'provider-header' | 'mcp-header' | 'oauth-client-secret' | 'oauth-token' | 'stdio-env';
+export type SecretMetadata = {
+  id: string;
+  label: string;
+  backend: 'encrypted-file' | 'session';
+  purposes: SecretPurpose[];
+  configured: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+export type VaultStatus = {
+  state: 'empty' | 'ready' | 'missing-key' | 'invalid-key' | 'insecure-permissions' | 'corrupt';
+  keyLocation: string;
+};
 
 export type Bootstrap = {
   servers: ServerSummary[];

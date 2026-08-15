@@ -10,6 +10,11 @@ const directories: string[] = [];
 const tsxCli = resolve('node_modules/tsx/dist/cli.mjs');
 const sampleServer = resolve('examples/sample-mcp-server.ts');
 
+const model = (id: string, inputPerMillion = 0, outputPerMillion = 0) => ({
+  id,
+  pricing: { inputPerMillion, outputPerMillion },
+});
+
 function createRuntime(conformanceRunner?: ConformanceRunner) {
   const directory = mkdtempSync(join(tmpdir(), 'mcp-runtime-'));
   directories.push(directory);
@@ -70,26 +75,126 @@ describe('concrete workbench runtime', () => {
       run: async (_input, signal) => new Promise((resolveRun) => signal.addEventListener('abort', () => resolveRun({ checks: [], rawReport: {}, exitCode: null, timedOut: false, cancelled: true }), { once: true })),
     };
     const { runtime } = createRuntime(runner);
-    await runtime.addServer({ id: 'http', name: 'HTTP', transport: 'http', url: 'http://127.0.0.1:3000/mcp', headerEnv: {}, allowUnsafeEndpoint: false });
-    await runtime.addServer({ id: 'stdio', name: 'Stdio', transport: 'stdio', command: process.execPath, args: [], envRefs: {} });
+    await runtime.addServer({ id: 'http', name: 'HTTP', transport: 'http', url: 'http://127.0.0.1:3000/mcp', headerEnv: {}, headers: {}, allowUnsafeEndpoint: false });
+    await runtime.addServer({ id: 'stdio', name: 'Stdio', transport: 'stdio', command: process.execPath, args: [], envRefs: {}, env: {} });
     await expect(runtime.startConformance({ serverId: 'stdio', selection: { kind: 'suite', suite: 'active' }, timeoutMs: 30_000 })).rejects.toMatchObject({ status: 400 });
     const started = await runtime.startConformance({ serverId: 'http', selection: { kind: 'scenario', scenario: 'server-initialize' }, timeoutMs: 30_000 });
-    await expect(runtime.updateServer('http', { id: 'http', name: 'Changed', transport: 'http', url: 'http://127.0.0.1:3000/mcp', headerEnv: {}, allowUnsafeEndpoint: false })).rejects.toMatchObject({ status: 409 });
+    await expect(runtime.updateServer('http', { id: 'http', name: 'Changed', transport: 'http', url: 'http://127.0.0.1:3000/mcp', headerEnv: {}, headers: {}, allowUnsafeEndpoint: false })).rejects.toMatchObject({ status: 409 });
     expect(await runtime.cancelConformance(started.id)).toBe(true);
     expect(await waitForConformance(runtime, started.id)).toMatchObject({ status: 'cancelled', runnerVersion: '0.1.10', selection: { scenario: 'server-initialize' } });
     expect(await runtime.listConformanceReports('http')).toHaveLength(1);
-    await runtime.addServer({ id: 'query-secret', name: 'Query secret', transport: 'http', url: 'http://127.0.0.1:3000/mcp?access_token=secret', headerEnv: {}, allowUnsafeEndpoint: false });
+    await runtime.addServer({ id: 'query-secret', name: 'Query secret', transport: 'http', url: 'http://127.0.0.1:3000/mcp?access_token=secret', headerEnv: {}, headers: {}, allowUnsafeEndpoint: false });
     await expect(runtime.startConformance({ serverId: 'query-secret', selection: { kind: 'suite', suite: 'active' }, timeoutMs: 30_000 })).rejects.toMatchObject({ status: 400 });
-    await runtime.addServer({ id: 'remote', name: 'Remote', transport: 'http', url: 'https://example.com/mcp', headerEnv: {}, allowUnsafeEndpoint: false });
+    await runtime.addServer({ id: 'remote', name: 'Remote', transport: 'http', url: 'https://example.com/mcp', headerEnv: {}, headers: {}, allowUnsafeEndpoint: false });
     await expect(runtime.startConformance({ serverId: 'remote', selection: { kind: 'suite', suite: 'active' }, timeoutMs: 30_000 })).rejects.toMatchObject({ status: 400 });
+    await runtime.addServer({ id: 'secret-header', name: 'Secret header', transport: 'http', url: 'http://127.0.0.1:3000/mcp', headerEnv: {}, headers: { Authorization: { source: 'env', name: 'RUNTIME_PROVIDER_SECRET' } }, allowUnsafeEndpoint: false });
+    await expect(runtime.startConformance({ serverId: 'secret-header', selection: { kind: 'suite', suite: 'active' }, timeoutMs: 30_000 })).rejects.toMatchObject({ status: 400 });
+    await runtime.addServer({ id: 'static-auth', name: 'Static auth', transport: 'http', url: 'http://127.0.0.1:3000/mcp', headerEnv: {}, headers: {}, staticAuth: { header: 'Authorization', scheme: 'Bearer', credential: { source: 'env', name: 'RUNTIME_PROVIDER_SECRET' } }, allowUnsafeEndpoint: false });
+    await expect(runtime.startConformance({ serverId: 'static-auth', selection: { kind: 'suite', suite: 'active' }, timeoutMs: 30_000 })).rejects.toMatchObject({ status: 400 });
+    await expect(runtime.beginOAuth('http')).rejects.toMatchObject({ status: 400 });
+    await expect(runtime.beginOAuth('static-auth')).rejects.toMatchObject({ status: 400 });
     await runtime.close();
   });
+
+  test('rejects a conformance start that is still validating when shutdown begins', async () => {
+    const runner: ConformanceRunner = {
+      run: async () => ({ checks: [], rawReport: {}, exitCode: 0, timedOut: false, cancelled: false }),
+    };
+    const { runtime } = createRuntime(runner);
+    await runtime.addServer({
+      id: 'http', name: 'HTTP', transport: 'http', url: 'http://127.0.0.1:3000/mcp',
+      headerEnv: {}, headers: {}, allowUnsafeEndpoint: false,
+    });
+
+    const starting = runtime.startConformance({
+      serverId: 'http', selection: { kind: 'scenario', scenario: 'server-initialize' }, timeoutMs: 30_000,
+    });
+    await runtime.close();
+    await expect(starting).rejects.toMatchObject({ status: 409 });
+  });
+
+  test('blocks referenced secret deletion unless explicitly forced', async () => {
+    const { runtime } = createRuntime();
+    const secret = await runtime.createSecret({ backend: 'session', label: 'Provider key', purposes: ['provider-api-key'], value: 'session-only-value' });
+    await runtime.addProvider({
+      id: 'secret-provider', name: 'Secret provider', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1',
+      models: { default: model('test') }, apiKey: { source: 'session', id: secret.id }, headerEnv: {}, headers: {},
+    });
+    await expect(runtime.deleteSecret(secret.id)).rejects.toMatchObject({ status: 409 });
+    await expect(runtime.deleteSecret(secret.id, true)).resolves.toMatchObject({ deleted: true, forced: true });
+    const danglingProvider = {
+      id: 'dangling-provider', name: 'Dangling provider', type: 'openai-compatible' as const, baseUrl: 'http://127.0.0.1:4012/v1',
+      apiKeyEnv: undefined, apiKey: { source: 'session' as const, id: secret.id }, headerEnv: {}, headers: {}, models: { default: { id: 'fake-model', pricing: { inputPerMillion: 0, outputPerMillion: 0 } } },
+    };
+    await expect(runtime.createProvider(danglingProvider)).rejects.toMatchObject({ status: 409 });
+    await expect(runtime.seedProvider({ ...danglingProvider, id: 'dangling-seed' })).rejects.toMatchObject({ status: 409 });
+    await runtime.addServer({ id: 'seed-tombstone', name: 'Seed tombstone', transport: 'stdio', command: process.execPath, args: [tsxCli, sampleServer], envRefs: {}, env: {} });
+    await runtime.deleteServer('seed-tombstone', true);
+    await expect(runtime.seedServer({
+      id: 'seed-tombstone', name: 'Ignored seed', transport: 'stdio', command: process.execPath, args: [tsxCli, sampleServer], envRefs: {},
+      env: { TOKEN: { source: 'session', id: 'secret_00000000-0000-4000-8000-000000000000' } },
+    })).resolves.toBe(false);
+    const wrongPurpose = await runtime.createSecret({ backend: 'session', label: 'Header only', purposes: ['mcp-header'], value: 'wrong-purpose-value' });
+    await expect(runtime.createProvider({
+      ...danglingProvider, id: 'wrong-purpose-provider', apiKey: { source: 'session', id: wrongPurpose.id },
+    })).rejects.toMatchObject({ status: 409 });
+    await runtime.deleteSecret(wrongPurpose.id, true);
+
+    const connectedSecret = await runtime.createSecret({ backend: 'session', label: 'Connected server token', purposes: ['stdio-env'], value: 'connected-session-value' });
+    await runtime.addServer({
+      id: 'secret-server', name: 'Secret server', transport: 'stdio', command: process.execPath,
+      args: [tsxCli, sampleServer], envRefs: {}, env: { API_TOKEN: { source: 'session', id: connectedSecret.id } },
+    });
+    await runtime.connectServer('secret-server');
+    await expect(runtime.updateServer('secret-server', {
+      id: 'secret-server', name: 'Rejected update', transport: 'stdio', command: process.execPath,
+      args: [tsxCli, sampleServer], envRefs: {}, env: { API_TOKEN: { source: 'session', id: 'secret_00000000-0000-4000-8000-000000000000' } },
+    })).rejects.toMatchObject({ status: 409 });
+    await expect(runtime.inspectServer('secret-server')).resolves.toMatchObject({ id: 'secret-server' });
+    await expect(runtime.replaceSecret(connectedSecret.id, 'rotated-connected-value')).rejects.toMatchObject({ status: 409 });
+    await expect(runtime.deleteSecret(connectedSecret.id, true)).rejects.toMatchObject({ status: 409 });
+    await expect(runtime.disconnectServer('secret-server')).resolves.toEqual({ id: 'secret-server', connected: false });
+    await expect(runtime.inspectServer('secret-server')).rejects.toMatchObject({ status: 409 });
+    await expect(runtime.replaceSecret(connectedSecret.id, 'rotated-connected-value')).resolves.toMatchObject({ id: connectedSecret.id });
+    await expect(runtime.deleteSecret(connectedSecret.id, true)).resolves.toMatchObject({ deleted: true });
+    await runtime.close();
+  });
+  test('rejects OAuth reauthorization while a server call is active', async () => {
+    const { runtime } = createRuntime();
+    await runtime.addServer({
+      id: 'oauth-active', name: 'OAuth active', transport: 'http', url: 'http://127.0.0.1:3000/mcp',
+      headerEnv: {}, headers: {}, oauth: { scopes: [], timeoutMs: 30_000 }, allowUnsafeEndpoint: false,
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const activeCall = runtime['withConfigUse'](['server:oauth-active'], async () => gate);
+
+    await expect(runtime.beginOAuth('oauth-active')).rejects.toMatchObject({ status: 409 });
+    release();
+    await activeCall;
+    await runtime.close();
+  });
+
+  test('waits for active configuration mutations before closing storage', async () => {
+    const { runtime } = createRuntime();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const mutation = runtime['withConfigMutation']('provider:closing-test', async () => gate);
+    let closed = false;
+    const closing = runtime.close().then(() => { closed = true; });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(closed).toBe(false);
+    release();
+    await Promise.all([mutation, closing]);
+    expect(closed).toBe(true);
+  });
+
   test('rejects credential-bearing provider URLs before seeding configuration', async () => {
     const { runtime } = createRuntime();
     await expect(runtime.seedProvider({
       id: 'credentialed', name: 'Credentialed', type: 'openai-compatible',
-      baseUrl: 'http://user:password@127.0.0.1:4000/v1', models: { default: 'test' },
-      headerEnv: {}, pricing: { inputPerMillion: 0, outputPerMillion: 0 },
+      baseUrl: 'http://user:password@127.0.0.1:4000/v1', models: { default: model('test') },
+      headerEnv: {}, headers: {},
     })).rejects.toThrow('Credentials are not allowed');
     expect((await runtime.bootstrap() as { providers: unknown[] }).providers).toEqual([]);
     await runtime.close();
@@ -98,8 +203,8 @@ describe('concrete workbench runtime', () => {
   test('ignores invalid provider seeds when the ID is already stored or tombstoned', async () => {
     const invalidSeed = {
       id: 'stale', name: 'Stale config', type: 'openai-compatible' as const,
-      baseUrl: 'http://user:password@127.0.0.1:4000/v1', models: { default: 'test' },
-      headerEnv: {}, pricing: { inputPerMillion: 0, outputPerMillion: 0 },
+      baseUrl: 'http://user:password@127.0.0.1:4000/v1', models: { default: model('test') },
+      headerEnv: {}, headers: {},
     };
     const { runtime } = createRuntime();
     await runtime.addProvider({ ...invalidSeed, name: 'Stored', baseUrl: 'http://127.0.0.1:4000/v1' });
@@ -131,12 +236,11 @@ describe('concrete workbench runtime', () => {
     try {
       await runtime.addProvider({
         id: 'alias-provider', name: 'Alias provider', type: 'openai-compatible',
-        baseUrl: `http://127.0.0.1:${address.port}/v1`, models: { fast: 'upstream-model-name' }, headerEnv: {},
-        pricing: { inputPerMillion: 0, outputPerMillion: 0 },
+        baseUrl: `http://127.0.0.1:${address.port}/v1`, models: { fast: model('upstream-model-name') }, headerEnv: {}, headers: {},
       });
       await runtime.addServer({
         id: 'sample', name: 'Sample', transport: 'stdio', command: process.execPath,
-        args: [tsxCli, sampleServer], envRefs: {},
+        args: [tsxCli, sampleServer], envRefs: {}, env: {},
       });
       await runtime.connectServer('sample');
       await runtime.playground({ serverId: 'sample', providerId: 'alias-provider', model: 'fast', prompt: 'Reply OK' });
@@ -170,8 +274,8 @@ describe('concrete workbench runtime', () => {
     if (!address || typeof address === 'string') throw new Error('Provider did not bind');
     const { runtime } = createRuntime();
     try {
-      await runtime.addProvider({ id: 'local', name: 'Local', type: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, models: { fast: 'test' }, headerEnv: {}, pricing: { inputPerMillion: 1, outputPerMillion: 2 } });
-      await runtime.addServer({ id: 'sample', name: 'Sample', transport: 'stdio', command: process.execPath, args: [tsxCli, sampleServer], envRefs: {} });
+      await runtime.addProvider({ id: 'local', name: 'Local', type: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, models: { fast: model('test', 1, 2) }, headerEnv: {}, headers: {} });
+      await runtime.addServer({ id: 'sample', name: 'Sample', transport: 'stdio', command: process.execPath, args: [tsxCli, sampleServer], envRefs: {}, env: {} });
       await runtime.connectServer('sample');
       const conversation = await runtime.createConversation({ serverId: 'sample', providerId: 'local', model: 'fast', systemPrompt: 'Use tools accurately.' });
       expect(conversation).toMatchObject({ systemPrompt: 'Use tools accurately.' });
@@ -213,13 +317,13 @@ describe('concrete workbench runtime', () => {
     const { runtime, databasePath, directory } = createRuntime();
     await runtime.createProvider({
       id: 'gateway', name: 'Gateway', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1',
-      models: { fast: 'small-model', quality: 'large-model' }, headerEnv: {}, pricing: { inputPerMillion: 1, outputPerMillion: 2 },
+      models: { fast: model('small-model', 1, 2), quality: model('large-model', 3, 4) }, headerEnv: {}, headers: {},
     });
     await expect(runtime.createProvider({
       id: 'gateway', name: 'Duplicate', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1',
-      models: { default: 'x' }, headerEnv: {}, pricing: { inputPerMillion: 0, outputPerMillion: 0 },
+      models: { default: model('x') }, headerEnv: {}, headers: {},
     })).rejects.toMatchObject({ status: 409 });
-    await runtime.createServer({ id: 'sample', name: 'Sample', transport: 'stdio', command: process.execPath, args: [tsxCli, sampleServer], envRefs: {} });
+    await runtime.createServer({ id: 'sample', name: 'Sample', transport: 'stdio', command: process.execPath, args: [tsxCli, sampleServer], envRefs: {}, env: {} });
     await runtime.connectServer('sample');
     await runtime.forgetOAuth('sample');
     expect((await runtime.bootstrap() as { servers: Array<{ connected: boolean }> }).servers[0]?.connected).toBe(false);
@@ -228,13 +332,13 @@ describe('concrete workbench runtime', () => {
 
     await expect(runtime.updateProvider('gateway', {
       id: 'gateway', name: 'Gateway', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1',
-      models: { fast: 'small-model' }, headerEnv: {}, pricing: { inputPerMillion: 1, outputPerMillion: 2 },
+      models: { fast: model('small-model', 1, 2) }, headerEnv: {}, headers: {},
     })).rejects.toMatchObject({ status: 409 });
     await runtime.updateProvider('gateway', {
       id: 'gateway', name: 'Updated Gateway', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1',
-      models: { fast: 'small-v2', quality: 'large-v2', reasoning: 'reasoner' }, headerEnv: {}, pricing: { inputPerMillion: 3, outputPerMillion: 4 },
+      models: { fast: model('small-v2', 1, 2), quality: model('large-v2', 3, 4), reasoning: model('reasoner', 5, 6) }, headerEnv: {}, headers: {},
     });
-    await runtime.updateServer('sample', { id: 'sample', name: 'Updated Sample', transport: 'stdio', command: process.execPath, args: [tsxCli, sampleServer], envRefs: {} });
+    await runtime.updateServer('sample', { id: 'sample', name: 'Updated Sample', transport: 'stdio', command: process.execPath, args: [tsxCli, sampleServer], envRefs: {}, env: {} });
     expect((await runtime.bootstrap() as { servers: Array<{ id: string; connected: boolean }> }).servers[0]).toMatchObject({ id: 'sample', connected: false });
     await expect(runtime.deleteProvider('gateway')).rejects.toMatchObject({ status: 409 });
     await expect(runtime.deleteServer('sample')).rejects.toMatchObject({ status: 409 });
@@ -244,8 +348,8 @@ describe('concrete workbench runtime', () => {
     await runtime.close();
 
     const restored = new WorkbenchRuntime({ databasePath, suiteDirectory: join(directory, 'suites'), callbackUrl: 'http://127.0.0.1:4317/api/oauth/callback' });
-    expect(await restored.seedProvider({ id: 'gateway', name: 'Seed', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1', models: { default: 'seed' }, headerEnv: {}, pricing: { inputPerMillion: 0, outputPerMillion: 0 } })).toBe(false);
-    expect(await restored.seedServer({ id: 'sample', name: 'Seed', transport: 'stdio', command: process.execPath, args: [], envRefs: {} })).toBe(false);
+    expect(await restored.seedProvider({ id: 'gateway', name: 'Seed', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1', models: { default: model('seed') }, headerEnv: {}, headers: {} })).toBe(false);
+    expect(await restored.seedServer({ id: 'sample', name: 'Seed', transport: 'stdio', command: process.execPath, args: [], envRefs: {}, env: {} })).toBe(false);
     expect((await restored.bootstrap() as { providers: unknown[]; servers: unknown[] })).toMatchObject({ providers: [], servers: [] });
     await restored.close();
   });
@@ -255,12 +359,11 @@ describe('concrete workbench runtime', () => {
     const { runtime, databasePath, directory } = createRuntime();
     await runtime.addProvider({
       id: 'local', name: 'Local', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1',
-      models: { default: 'test' }, apiKeyEnv: 'RUNTIME_PROVIDER_SECRET', headerEnv: { Authorization: 'RUNTIME_PROVIDER_SECRET' },
-      pricing: { inputPerMillion: 0, outputPerMillion: 0 },
+      models: { default: model('test') }, apiKeyEnv: 'RUNTIME_PROVIDER_SECRET', headerEnv: { 'X-Custom-Key': 'RUNTIME_PROVIDER_SECRET' }, headers: {},
     });
     await runtime.addServer({
       id: 'sample', name: 'Sample', transport: 'stdio', command: process.execPath,
-      args: [tsxCli, sampleServer], envRefs: {},
+      args: [tsxCli, sampleServer], envRefs: {}, env: {},
     });
     await runtime.close();
 
@@ -271,7 +374,7 @@ describe('concrete workbench runtime', () => {
     const settings = await restored.settings();
     expect(settings).toMatchObject({ providers: [{
       id: 'local', apiKeyEnv: 'RUNTIME_PROVIDER_SECRET', apiKeyConfigured: true,
-      headerStatus: { Authorization: { environment: 'RUNTIME_PROVIDER_SECRET', configured: true } },
+      headerStatus: { 'X-Custom-Key': { source: 'env', reference: 'RUNTIME_PROVIDER_SECRET', configured: true } },
     }] });
     expect((await restored.bootstrap() as { servers: unknown[] }).servers).toHaveLength(1);
     await restored.close();
@@ -281,7 +384,7 @@ describe('concrete workbench runtime', () => {
     const { runtime } = createRuntime();
     await runtime.addServer({
       id: 'sample', name: 'Sample', transport: 'stdio', command: process.execPath,
-      args: [tsxCli, sampleServer], envRefs: {},
+      args: [tsxCli, sampleServer], envRefs: {}, env: {},
     });
     await runtime.connectServer('sample');
     await runtime.saveSuite(suite);

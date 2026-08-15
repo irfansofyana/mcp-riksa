@@ -4,11 +4,19 @@ import { z, ZodError } from 'zod';
 import { providerConfigSchema } from '../agent/types.js';
 import { redact } from '../core/redaction.js';
 import { serverConfigSchema } from '../mcp/manager.js';
+import { createSecretSchema, type SecretMetadata } from '../secrets/types.js';
+import { SecretStoreError } from '../secrets/store.js';
 import { WorkbenchError } from './errors.js';
 
 export type ApiRuntime = {
   bootstrap(): Promise<unknown> | unknown;
   settings(): Promise<unknown> | unknown;
+  listSecrets(): Promise<SecretMetadata[]> | SecretMetadata[];
+  createSecret(value: z.infer<typeof createSecretSchema>): Promise<SecretMetadata> | SecretMetadata;
+  replaceSecret(id: string, value: string): Promise<SecretMetadata> | SecretMetadata;
+  deleteSecret(id: string, force: boolean): Promise<unknown> | unknown;
+  vaultStatus(): Promise<unknown> | unknown;
+  resetVault(force: boolean, rotateInvalidKey: boolean): Promise<unknown> | unknown;
   createProvider(value: z.infer<typeof providerConfigSchema>): Promise<unknown> | unknown;
   updateProvider(id: string, value: z.infer<typeof providerConfigSchema>): Promise<unknown> | unknown;
   deleteProvider(id: string, force: boolean): Promise<unknown> | unknown;
@@ -17,6 +25,7 @@ export type ApiRuntime = {
   updateServer(id: string, value: z.infer<typeof serverConfigSchema>): Promise<unknown> | unknown;
   deleteServer(id: string, force: boolean): Promise<unknown> | unknown;
   connectServer(id: string): Promise<unknown> | unknown;
+  disconnectServer(id: string): Promise<unknown> | unknown;
   inspectServer(id: string): Promise<unknown> | unknown;
   callTool(id: string, tool: string, args: Record<string, unknown>, options: { confirmDangerous: boolean }): Promise<unknown> | unknown;
   playground(value: unknown): Promise<unknown> | unknown;
@@ -87,6 +96,8 @@ const conformanceSchema = z.strictObject({
   ]),
   timeoutMs: z.number().int().min(5_000).max(600_000).default(120_000),
 });
+const replaceSecretSchema = z.strictObject({ value: z.string().min(4) });
+const resetVaultSchema = z.strictObject({ confirm: z.literal('RESET'), force: z.boolean().default(false), rotateInvalidKey: z.boolean().default(false) });
 
 function isLoopback(value: string | undefined): boolean {
   if (!value) return false;
@@ -111,6 +122,11 @@ function hostIsLoopback(value: string | undefined): boolean {
 
 function send(response: Response, value: unknown, status = 200): void {
   response.status(status).json(redact(value));
+}
+
+function sendSecret(response: Response, value: unknown, status = 200): void {
+  response.set('cache-control', 'no-store');
+  send(response, value, status);
 }
 
 function oauthCallbackHtml(value: unknown, ok: boolean): string {
@@ -145,6 +161,22 @@ export function createApp(runtime: ApiRuntime, options: { sessionToken?: string;
   app.get('/api/bootstrap', async (_request, response) => send(response, await runtime.bootstrap()));
   app.get('/api/settings', async (_request, response) => send(response, await runtime.settings()));
 
+  app.get('/api/secrets', async (_request, response) => sendSecret(response, await runtime.listSecrets()));
+  app.post('/api/secrets', async (request, response) => sendSecret(response, await runtime.createSecret(createSecretSchema.parse(request.body)), 201));
+  app.put('/api/secrets/:id/value', async (request, response) => {
+    const { value } = replaceSecretSchema.parse(request.body);
+    sendSecret(response, await runtime.replaceSecret(request.params.id!, value));
+  });
+  app.delete('/api/secrets/:id', async (request, response) => {
+    const { force } = z.object({ force: z.enum(['true', 'false']).default('false') }).parse(request.query);
+    sendSecret(response, await runtime.deleteSecret(request.params.id!, force === 'true'));
+  });
+  app.get('/api/secrets/vault/status', async (_request, response) => sendSecret(response, await runtime.vaultStatus()));
+  app.post('/api/secrets/vault/reset', async (request, response) => {
+    const { force, rotateInvalidKey } = resetVaultSchema.parse(request.body);
+    sendSecret(response, await runtime.resetVault(force, rotateInvalidKey));
+  });
+
   app.post('/api/providers', async (request, response) => {
     const config = providerConfigSchema.parse(request.body);
     send(response, await runtime.createProvider(config), 201);
@@ -166,6 +198,7 @@ export function createApp(runtime: ApiRuntime, options: { sessionToken?: string;
     send(response, await runtime.deleteServer(request.params.id!, force === 'true'));
   });
   app.post('/api/servers/:id/connect', async (request, response) => send(response, await runtime.connectServer(request.params.id!)));
+  app.post('/api/servers/:id/disconnect', async (request, response) => send(response, await runtime.disconnectServer(request.params.id!)));
   app.get('/api/servers/:id', async (request, response) => send(response, await runtime.inspectServer(request.params.id!)));
   app.post('/api/servers/:id/call', async (request, response) => {
     const input = toolCallSchema.parse(request.body);
@@ -282,7 +315,13 @@ export function createApp(runtime: ApiRuntime, options: { sessionToken?: string;
   }
 
   app.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {
-    const status = error instanceof ZodError ? 400 : error instanceof WorkbenchError ? error.status : 500;
+    const status = error instanceof ZodError
+      ? 400
+      : error instanceof WorkbenchError
+        ? error.status
+        : error instanceof SecretStoreError
+          ? secretErrorStatus(error)
+          : 500;
     const message = error instanceof ZodError ? 'Request validation failed' : error instanceof Error ? error.message : 'Internal error';
     send(response, {
       error: message,
@@ -292,4 +331,11 @@ export function createApp(runtime: ApiRuntime, options: { sessionToken?: string;
   });
 
   return app;
+}
+
+function secretErrorStatus(error: SecretStoreError): number {
+  if (error.code === 'SECRET_NOT_FOUND') return 404;
+  if (error.code === 'SECRET_PURPOSE_DENIED') return 403;
+  if (error.code === 'SECRET_VAULT_MISSING_KEY' || error.code === 'SECRET_VAULT_CORRUPT' || error.code === 'SECRET_VAULT_INVALID_KEY' || error.code === 'SECRET_VAULT_INSECURE_PERMISSIONS') return 409;
+  return 400;
 }

@@ -1,13 +1,18 @@
 import { resolve } from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
+import { createServer } from 'node:http';
+import { promisify } from 'node:util';
 import { once } from 'node:events';
 import { describe, expect, test } from 'vitest';
 import { McpManager, serverConfigSchema } from '../src/mcp/manager.js';
 import { createSafeLookup, validateHttpEndpoint } from '../src/mcp/validation.js';
+import { redact, registerSecretValue, unregisterSecretValue } from '../src/core/redaction.js';
 
 const tsxCli = resolve('node_modules/tsx/dist/cli.mjs');
 const sampleServer = resolve('examples/sample-mcp-server.ts');
 const httpSampleServer = resolve('examples/sample-http-mcp-server.ts');
+const execFileAsync = promisify(execFile);
+const stderrLeakRunner = resolve('test/fixtures/stdio-secret-leak-runner.ts');
 
 describe('MCP endpoint validation', () => {
   test.each([
@@ -49,6 +54,25 @@ describe('MCP secret references', () => {
       oauth: { clientId: 'public-client', clientSecretEnv: 'client-secret-value' },
     })).toThrow(/environment variable name/i);
   });
+
+  test('rejects invalid stdio environment target names', () => {
+    for (const input of [
+      { envRefs: { 'BAD=NAME': 'SOURCE_ENV' } },
+      { env: { 'BAD=NAME': { source: 'env' as const, name: 'SOURCE_ENV' } } },
+    ]) {
+      expect(() => serverConfigSchema.parse({
+        id: 'stdio', name: 'stdio', transport: 'stdio', command: 'node', ...input,
+      })).toThrow(/environment variable name/i);
+    }
+  });
+
+  test('rejects duplicate targets across stdio environment maps', () => {
+    expect(() => serverConfigSchema.parse({
+      id: 'stdio', name: 'stdio', transport: 'stdio', command: 'node',
+      envRefs: { API_TOKEN: 'LEGACY_TOKEN' },
+      env: { api_token: { source: 'env', name: 'MANAGED_TOKEN' } },
+    })).toThrow(/duplicate environment target/i);
+  });
 });
 
 describe('real sample MCP server over stdio', () => {
@@ -81,6 +105,66 @@ describe('real sample MCP server over stdio', () => {
       await manager.closeAll();
     }
     expect(manager.connectionCount).toBe(0);
+  });
+
+  test('does not inherit child stderr when managed credentials are injected', async () => {
+    const result = await execFileAsync(process.execPath, [tsxCli, stderrLeakRunner], { cwd: resolve('.') });
+    expect(result.stderr).not.toContain('stdio-leak-regression-secret');
+    expect(result.stderr).toBe('');
+  });
+
+  test('retains resolved credentials for the connected transport lifetime', async () => {
+    let current = 'old-connected-secret';
+    let registered: string | undefined;
+    const resolver = async () => {
+      if (registered !== current) {
+        unregisterSecretValue(registered);
+        registerSecretValue(current);
+        registered = current;
+      }
+      return current;
+    };
+    const manager = new McpManager(resolver);
+    try {
+      await manager.connect({
+        id: 'leased-stdio', name: 'Leased stdio', transport: 'stdio', command: process.execPath,
+        args: [tsxCli, sampleServer], env: { API_TOKEN: { source: 'env', name: 'IGNORED_BY_TEST_RESOLVER' } },
+      });
+      current = 'new-connected-secret';
+      await resolver();
+      expect(redact('old-connected-secret new-connected-secret')).toBe('[REDACTED] [REDACTED]');
+
+      await manager.disconnect('leased-stdio');
+      expect(redact('old-connected-secret new-connected-secret')).toBe('old-connected-secret [REDACTED]');
+    } finally {
+      await manager.closeAll();
+      unregisterSecretValue(registered);
+    }
+  });
+
+  test('redacts connection errors that reflect the resolved credential before releasing the lease', async () => {
+    const credential = 'http-connect-failure-secret';
+    const server = createServer((request, response) => {
+      response.writeHead(502, { 'content-type': 'text/plain' });
+      response.end(`upstream rejected credential: ${request.headers.authorization ?? ''}`);
+    });
+    server.listen(0);
+    await once(server, 'listening');
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('Expected a bound TCP address');
+    const url = `http://127.0.0.1:${address.port}/mcp`;
+    const manager = new McpManager(async () => credential);
+    try {
+      await expect(manager.connect({
+        id: 'failing-http', name: 'Failing HTTP', transport: 'http', url, allowUnsafeEndpoint: true,
+        headers: { authorization: { source: 'env', name: 'IGNORED_BY_TEST_RESOLVER' } },
+      })).rejects.toThrow(/\[REDACTED\]/);
+      expect(manager.connectionCount).toBe(0);
+      expect(redact(credential)).toBe(credential);
+    } finally {
+      await manager.closeAll();
+      await new Promise((resolveClose) => server.close(() => resolveClose(undefined)));
+    }
   });
 });
 

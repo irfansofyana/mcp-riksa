@@ -1,4 +1,4 @@
-import type { AgentUpdate, Bootstrap, ConformanceReport, ConformanceReportSummary, ConversationDetail, ConversationSummary, PlaygroundResult, Run, SuiteDetail } from './types.js';
+import type { AgentUpdate, Bootstrap, ConformanceReport, ConformanceReportSummary, ConversationDetail, ConversationSummary, PlaygroundResult, Run, SecretMetadata, SecretPurpose, SuiteDetail, VaultStatus } from './types.js';
 
 let sessionToken = '';
 
@@ -94,6 +94,12 @@ export async function initialize(): Promise<Bootstrap> {
 export const api = {
   refresh: () => get<Bootstrap>('/api/bootstrap'),
   settings: () => get<{ providers: Bootstrap['providers']; callbackUrl: string; loopbackOnly: boolean }>('/api/settings'),
+  secrets: () => get<SecretMetadata[]>('/api/secrets'),
+  createSecret: (value: { backend: 'vault' | 'session'; label: string; purposes: SecretPurpose[]; value: string }) => post<SecretMetadata>('/api/secrets', value),
+  replaceSecret: (id: string, value: string) => put<SecretMetadata>(`/api/secrets/${encodeURIComponent(id)}/value`, { value }),
+  deleteSecret: (id: string, force = false) => remove<{ id: string; deleted: boolean }>(`/api/secrets/${encodeURIComponent(id)}?force=${force}`),
+  vaultStatus: () => get<VaultStatus>('/api/secrets/vault/status'),
+  resetVault: (force = false, rotateInvalidKey = false) => post<{ reset: boolean }>('/api/secrets/vault/reset', { confirm: 'RESET', force, rotateInvalidKey }),
   addProvider: (value: unknown) => post('/api/providers', value),
   updateProvider: (id: string, value: unknown) => put(`/api/providers/${encodeURIComponent(id)}`, value),
   deleteProvider: (id: string, force = false) => remove(`/api/providers/${encodeURIComponent(id)}?force=${force}`),
@@ -102,6 +108,7 @@ export const api = {
   updateServer: (id: string, value: unknown) => put(`/api/servers/${encodeURIComponent(id)}`, value),
   deleteServer: (id: string, force = false) => remove(`/api/servers/${encodeURIComponent(id)}?force=${force}`),
   connectServer: (id: string) => post(`/api/servers/${encodeURIComponent(id)}/connect`, {}),
+  disconnectServer: (id: string) => post(`/api/servers/${encodeURIComponent(id)}/disconnect`, {}),
   inspectServer: (id: string) => get<{ id: string; identity: unknown; capabilities: unknown; tools: import('./types.js').Tool[] }>(`/api/servers/${encodeURIComponent(id)}`),
   callTool: (id: string, body: unknown) => post(`/api/servers/${encodeURIComponent(id)}/call`, body),
   beginOAuth: (id: string) => post<{ id: string; authorizationUrl?: string; state: string; scopes: string[]; timeline: unknown[]; expiresAt?: string }>(`/api/servers/${encodeURIComponent(id)}/oauth/begin`, {}),

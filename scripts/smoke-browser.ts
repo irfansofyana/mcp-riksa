@@ -74,8 +74,8 @@ async function startChrome(appUrl: string) {
   const endpoint = new URL(browserWebSocket);
   let pageWebSocket = '';
   try {
-    const created = await (await fetch(`http://${endpoint.host}/json/new?${encodeURIComponent(appUrl)}`, { method: 'PUT' })).json() as { webSocketDebuggerUrl?: string };
-    pageWebSocket = created.webSocketDebuggerUrl ?? '';
+    const created = await (await fetch(`http://${endpoint.host}/json/new?${encodeURIComponent(appUrl)}`, { method: 'PUT' })).json() as { url?: string; webSocketDebuggerUrl?: string };
+    if (created.url?.startsWith(appUrl)) pageWebSocket = created.webSocketDebuggerUrl ?? '';
   } catch { /* Fall back to an existing page target. */ }
   for (let attempt = 0; attempt < 50 && !pageWebSocket; attempt += 1) {
     const targets = await (await fetch(`http://${endpoint.host}/json/list`)).json() as Array<{ type: string; url: string; webSocketDebuggerUrl: string }>;
@@ -136,7 +136,7 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
   const waitText = (text: string, timeoutMs?: number) => wait(`document.body.textContent?.includes(${JSON.stringify(text)})`, `text ${text}`, timeoutMs);
 
   try {
-    await wait(`document.querySelector('.app-shell')`, 'application shell');
+    await wait(`document.querySelector('.app-shell')`, 'application shell', 30_000);
     await wait(`document.title === 'MCP Riksa' && document.querySelector('.brand img[src$="/mcp-riksa-mark.svg"]') && document.querySelector('.brand')?.textContent?.trim() === 'MCP Riksa' && !document.body.textContent?.includes('MCP Local Workbench')`, 'MCP Riksa product identity');
     await click('theme-dark');
     await wait(`document.documentElement.dataset.theme === 'dark' && localStorage.getItem('mcp-riksa-theme') === 'dark'`, 'explicit dark theme');
@@ -157,6 +157,19 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     const lightCapture = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     writeFileSync(lightScreenshot, Buffer.from(String(lightCapture.data), 'base64'));
     steps.push('theme-checked');
+
+    await navigate('secrets');
+    await setValue('secret-label', 'Browser smoke session key');
+    await setValue('secret-storage', 'session');
+    await setValue('secret-purpose', 'provider-api-key');
+    await setValue('secret-value', 'browser-smoke-secret-value');
+    await click('save-secret');
+    await waitText('Session-only secret added.');
+    await wait(`!document.body.textContent?.includes('browser-smoke-secret-value') && !document.body.textContent?.includes('Reveal') && !document.body.textContent?.includes('Copy')`, 'write-only secret rendering');
+    const secretsScreenshot = join(options.outputDirectory, 'secrets.png');
+    const secretsCapture = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    writeFileSync(secretsScreenshot, Buffer.from(String(secretsCapture.data), 'base64'));
+    steps.push('secret-managed');
 
     await navigate('settings');
     await setValue('provider-id', 'local');
@@ -291,7 +304,7 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     const mobile = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     writeFileSync(mobileScreenshot, Buffer.from(String(mobile.data), 'base64'));
     steps.push('mobile-checked');
-    return { steps, consoleErrors, lightScreenshot, providersScreenshot, serverScreenshot, playgroundScreenshot, playgroundTraceScreenshot, desktopScreenshot, mobileScreenshot };
+    return { steps, consoleErrors, lightScreenshot, secretsScreenshot, providersScreenshot, serverScreenshot, playgroundScreenshot, playgroundTraceScreenshot, desktopScreenshot, mobileScreenshot };
   } finally {
     cdp.close();
     if (child.exitCode === null) {

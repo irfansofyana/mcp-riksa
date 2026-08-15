@@ -30,6 +30,63 @@ test.each(['raw-secret-value', 'Bearer secret', '123_INVALID'])('rejects non-env
   })).toThrow(/environment variable name/i);
 });
 
+test('rejects invalid provider HTTP header names before saving', () => {
+  for (const input of [
+    { headers: { 'X Bad': { source: 'env' as const, name: 'TEST_PROVIDER_SECRET' } } },
+    { headerEnv: { 'X Bad': 'TEST_PROVIDER_SECRET' } },
+  ]) {
+    expect(() => providerConfigSchema.parse({
+      id: 'safe', name: 'Safe', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1',
+      models: { default: { id: 'test' } }, ...input,
+    })).toThrow(/invalid http header name/i);
+  }
+});
+
+test('rejects case-insensitive duplicates across provider header maps', () => {
+  expect(() => providerConfigSchema.parse({
+    id: 'safe', name: 'Safe', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1',
+    models: { default: { id: 'test' } },
+    headerEnv: { Authorization: 'LEGACY_TOKEN' },
+    headers: { authorization: { source: 'env', name: 'MODERN_TOKEN' } },
+  })).toThrow(/duplicate http header name/i);
+});
+
+test('rejects simultaneous provider API-key sources', () => {
+  expect(() => providerConfigSchema.parse({
+    id: 'safe', name: 'Safe', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1',
+    models: { default: { id: 'test' } }, apiKeyEnv: 'LEGACY_API_KEY',
+    apiKey: { source: 'env', name: 'MANAGED_API_KEY' },
+  })).toThrow(/apiKey and apiKeyEnv are mutually exclusive/i);
+});
+
+test('rejects provider API-key header collisions', () => {
+  for (const [type, header] of [
+    ['openai-compatible', 'authorization'],
+    ['anthropic-compatible', 'X-Api-Key'],
+  ] as const) {
+    expect(() => providerConfigSchema.parse({
+      id: 'safe', name: 'Safe', type, baseUrl: 'http://127.0.0.1:4000/v1',
+      models: { default: { id: 'test' } },
+      apiKey: { source: 'env', name: 'PROVIDER_API_KEY' },
+      headers: { [header]: { source: 'env', name: 'CUSTOM_HEADER_SECRET' } },
+    })).toThrow(/conflicts with the provider api-key header/i);
+  }
+});
+
+test('rejects fixed Anthropic-compatible header collisions via headers or headerEnv', () => {
+  for (const input of [
+    { headers: { 'Content-Type': { source: 'env' as const, name: 'CUSTOM_CONTENT_TYPE' } } },
+    { headers: { 'Anthropic-Version': { source: 'env' as const, name: 'CUSTOM_ANTHROPIC_VERSION' } } },
+    { headerEnv: { 'content-type': 'CUSTOM_CONTENT_TYPE' } },
+    { headerEnv: { 'anthropic-version': 'CUSTOM_ANTHROPIC_VERSION' } },
+  ]) {
+    expect(() => providerConfigSchema.parse({
+      id: 'safe', name: 'Safe', type: 'anthropic-compatible', baseUrl: 'http://127.0.0.1:4000/v1',
+      models: { default: { id: 'test' } }, ...input,
+    })).toThrow(/conflicts with the fixed anthropic-compatible header/i);
+  }
+});
+
 test('rejects inline secrets in provider header references', () => {
   expect(() => providerConfigSchema.parse({
     id: 'safe', name: 'Safe', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1',
@@ -146,10 +203,11 @@ function config(type: ProviderConfig['type'], segment = type.startsWith('openai'
     name: segment,
     type,
     baseUrl: `${baseUrl}/${segment}/v1`,
-    models: { default: 'test-model' },
+    models: { default: { id: 'test-model', pricing: { inputPerMillion: 1, outputPerMillion: 2 } } },
     apiKeyEnv: 'TEST_PROVIDER_SECRET',
     headerEnv: { 'x-private-provider': 'TEST_PROVIDER_SECRET' },
-    pricing: { inputPerMillion: 1, outputPerMillion: 2 },
+    headers: {},
+
   };
 }
 
@@ -358,8 +416,29 @@ test('rejects malformed compatibility responses with a precise error', async () 
 });
 
 function scriptedAdapter(script: ProviderAdapter['complete']): ProviderAdapter {
-  return { id: 'scripted', pricing: { inputPerMillion: 1_000_000, outputPerMillion: 1_000_000 }, complete: script };
+  return { id: 'scripted', pricingFor: () => ({ inputPerMillion: 1_000_000, outputPerMillion: 1_000_000 }), complete: script };
 }
+
+test('prices usage from the selected model alias', async () => {
+  const provider = {
+    id: 'model-priced',
+
+    pricingFor: (alias: string) => alias === 'cheap'
+      ? { inputPerMillion: 0.15, outputPerMillion: 0.6 }
+      : { inputPerMillion: 2.5, outputPerMillion: 10 },
+    complete: async () => ({
+      text: 'done', toolCalls: [], usage: { input: 1_000_000, output: 1_000_000, total: 2_000_000 }, stopReason: 'complete', raw: {},
+    }),
+  };
+  const noTools = { inspect: async () => ({ tools: [] }), call: async () => ({}) };
+  const limits = { maxTurns: 1, maxToolCalls: 0, timeoutMs: 5000 };
+
+  const cheap = await runAgent({ prompt: 'cheap', model: 'cheap', serverId: 'none', limits }, { provider, mcp: noTools });
+  const quality = await runAgent({ prompt: 'quality', model: 'quality', serverId: 'none', limits }, { provider, mcp: noTools });
+
+  expect(cheap.costUsd).toBeCloseTo(0.75);
+  expect(quality.costUsd).toBeCloseTo(12.5);
+});
 
 describe('agent stop boundaries', () => {
   test('stops at max turns', async () => {
