@@ -5,6 +5,7 @@ import { once } from 'node:events';
 import { describe, expect, test } from 'vitest';
 import { McpManager, serverConfigSchema } from '../src/mcp/manager.js';
 import { createSafeLookup, validateHttpEndpoint } from '../src/mcp/validation.js';
+import { redact, registerSecretValue, unregisterSecretValue } from '../src/core/redaction.js';
 
 const tsxCli = resolve('node_modules/tsx/dist/cli.mjs');
 const sampleServer = resolve('examples/sample-mcp-server.ts');
@@ -90,6 +91,35 @@ describe('real sample MCP server over stdio', () => {
     const result = await execFileAsync(process.execPath, [tsxCli, stderrLeakRunner], { cwd: resolve('.') });
     expect(result.stderr).not.toContain('stdio-leak-regression-secret');
     expect(result.stderr).toBe('');
+  });
+
+  test('retains resolved credentials for the connected transport lifetime', async () => {
+    let current = 'old-connected-secret';
+    let registered: string | undefined;
+    const resolver = async () => {
+      if (registered !== current) {
+        unregisterSecretValue(registered);
+        registerSecretValue(current);
+        registered = current;
+      }
+      return current;
+    };
+    const manager = new McpManager(resolver);
+    try {
+      await manager.connect({
+        id: 'leased-stdio', name: 'Leased stdio', transport: 'stdio', command: process.execPath,
+        args: [tsxCli, sampleServer], env: { API_TOKEN: { source: 'env', name: 'IGNORED_BY_TEST_RESOLVER' } },
+      });
+      current = 'new-connected-secret';
+      await resolver();
+      expect(redact('old-connected-secret new-connected-secret')).toBe('[REDACTED] [REDACTED]');
+
+      await manager.disconnect('leased-stdio');
+      expect(redact('old-connected-secret new-connected-secret')).toBe('old-connected-secret [REDACTED]');
+    } finally {
+      await manager.closeAll();
+      unregisterSecretValue(registered);
+    }
   });
 });
 

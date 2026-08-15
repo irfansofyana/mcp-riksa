@@ -7,8 +7,8 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { EncryptedFileSecretBackend } from '../src/secrets/encrypted-file.js';
 import { SecretStore } from '../src/secrets/store.js';
-import { createSecretResolutionLease } from '../src/secrets/lease.js';
-import { redact } from '../src/core/redaction.js';
+import { REDACTED, redact } from '../src/core/redaction.js';
+import { withSecretResolutionLease } from '../src/secrets/lease.js';
 
 const roots: string[] = [];
 const execFileAsync = promisify(execFile);
@@ -103,19 +103,21 @@ describe('EncryptedFileSecretBackend', () => {
     await fixture.store.close();
   });
 
-  test('retains an old rotated value only while an active consumer still uses it', async () => {
+  test('sanitizes provider results before releasing an old rotated value', async () => {
     const fixture = harness();
     const metadata = await fixture.store.create({ backend: 'vault', label: 'Rotating', purposes: ['provider-api-key'], value: 'old-active-secret' });
     const external = new EncryptedFileSecretBackend({ dataDirectory: fixture.dataDirectory, configDirectory: fixture.configDirectory });
-    const lease = createSecretResolutionLease(fixture.store.resolve.bind(fixture.store));
-    expect(await lease.resolve({ source: 'vault', id: metadata.id }, 'provider-api-key')).toBe('old-active-secret');
 
-    await external.replace(metadata.id, 'new-active-secret');
-    await fixture.store.resolve({ source: 'vault', id: metadata.id }, 'provider-api-key');
-    expect(redact('old-active-secret new-active-secret')).toBe('[REDACTED] [REDACTED]');
+    const result = await withSecretResolutionLease(fixture.store.resolve.bind(fixture.store), async (activeResolver) => {
+      expect(await activeResolver({ source: 'vault', id: metadata.id }, 'provider-api-key')).toBe('old-active-secret');
+      await external.replace(metadata.id, 'new-active-secret');
+      await fixture.store.resolve({ source: 'vault', id: metadata.id }, 'provider-api-key');
+      expect(redact('old-active-secret new-active-secret')).toBe(`${REDACTED} ${REDACTED}`);
+      return { reflected: 'old-active-secret' };
+    });
 
-    lease.release();
-    expect(redact('old-active-secret new-active-secret')).toBe('old-active-secret [REDACTED]');
+    expect(result).toEqual({ reflected: REDACTED });
+    expect(redact('old-active-secret new-active-secret')).toBe(`old-active-secret ${REDACTED}`);
     await external.clear();
     await fixture.store.close();
   });

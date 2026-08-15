@@ -9,6 +9,7 @@ import { environmentVariableNameSchema } from '../core/environment.js';
 import { findDuplicateHttpHeaderName, httpHeaderNameSchema } from '../core/http.js';
 import { redact, registerSecretValue } from '../core/redaction.js';
 import { secretReferenceSchema, type SecretPurpose, type SecretResolver } from '../secrets/types.js';
+import { createSecretResolutionLease } from '../secrets/lease.js';
 import { createSafeLookup, validateHttpEndpoint } from './validation.js';
 
 const baseConfig = { id: z.string().min(1), name: z.string().min(1) };
@@ -72,6 +73,7 @@ type Connection = {
   config: ServerConfig;
   tools: Awaited<ReturnType<Client['listTools']>>['tools'];
   dispatcher?: Agent;
+  releaseSecrets(): void;
 };
 
 const resolveEnvironmentSecret: SecretResolver = async (reference) => {
@@ -162,6 +164,7 @@ export class McpManager {
     const client = new Client({ name: 'mcp-riksa', version: '0.1.0' }, { capabilities: {} });
     let transport: Transport | undefined;
     let dispatcher: Agent | undefined;
+    const secretLease = createSecretResolutionLease(this.resolveSecret);
     try {
       if (config.transport === 'stdio') {
       const hasInjectedSecrets = Object.keys(config.envRefs).length > 0 || Object.keys(config.env).length > 0;
@@ -170,8 +173,8 @@ export class McpManager {
         args: config.args,
         ...(config.cwd === undefined ? {} : { cwd: config.cwd }),
         ...(hasInjectedSecrets ? { env: {
-          ...await resolveLegacyEnvironment(config.envRefs, 'stdio-env', this.resolveSecret),
-          ...await resolveReferenceMap(config.env, 'stdio-env', this.resolveSecret),
+          ...await resolveLegacyEnvironment(config.envRefs, 'stdio-env', secretLease.resolve),
+          ...await resolveReferenceMap(config.env, 'stdio-env', secretLease.resolve),
         } } : {}),
         stderr: hasInjectedSecrets ? 'pipe' : 'inherit',
       });
@@ -184,7 +187,7 @@ export class McpManager {
       const guardedDispatcher = dispatcher;
       transport = new StreamableHTTPClientTransport(url, {
         ...(oauthProvider === undefined ? {} : { authProvider: oauthProvider }),
-        requestInit: { headers: await resolveHttpHeaders(config, this.resolveSecret) },
+        requestInit: { headers: await resolveHttpHeaders(config, secretLease.resolve) },
         ...(dispatcher === undefined ? {} : {
           fetch: (input, init) => (undiciFetch as unknown as (
             target: string | URL,
@@ -201,12 +204,14 @@ export class McpManager {
         transport,
         config,
         tools,
+        releaseSecrets: secretLease.release,
         ...(config.transport === 'http' && dispatcher !== undefined ? { dispatcher } : {}),
       });
       return this.inspect(config.id);
     } catch (error) {
       await transport?.close().catch(() => undefined);
       if (config.transport === 'http' && dispatcher !== undefined) await dispatcher.close().catch(() => undefined);
+      secretLease.release();
       throw error;
     }
   }
@@ -254,7 +259,11 @@ export class McpManager {
     try {
       await connection.client.close();
     } finally {
-      await connection.dispatcher?.close();
+      try {
+        await connection.dispatcher?.close();
+      } finally {
+        connection.releaseSecrets();
+      }
     }
   }
 

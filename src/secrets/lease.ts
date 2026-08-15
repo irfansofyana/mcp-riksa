@@ -1,4 +1,4 @@
-import { registerSecretValue, unregisterSecretValue } from '../core/redaction.js';
+import { redact, registerSecretValue, unregisterSecretValue } from '../core/redaction.js';
 import type { SecretResolver } from './types.js';
 
 export type SecretResolutionLease = {
@@ -32,7 +32,13 @@ export async function withSecretResolutionLease<T>(
 ): Promise<T> {
   const lease = createSecretResolutionLease(resolveSecret);
   try {
-    return await operation(lease.resolve);
+    return redact(await operation(lease.resolve));
+  } catch (error) {
+    if (error instanceof Error) {
+      error.message = redact(error.message);
+      if (error.stack !== undefined) error.stack = redact(error.stack);
+    }
+    throw error;
   } finally {
     lease.release();
   }
