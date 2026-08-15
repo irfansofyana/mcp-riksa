@@ -96,6 +96,23 @@ describe('concrete workbench runtime', () => {
     await runtime.close();
   });
 
+  test('rejects a conformance start that is still validating when shutdown begins', async () => {
+    const runner: ConformanceRunner = {
+      run: async () => ({ checks: [], rawReport: {}, exitCode: 0, timedOut: false, cancelled: false }),
+    };
+    const { runtime } = createRuntime(runner);
+    await runtime.addServer({
+      id: 'http', name: 'HTTP', transport: 'http', url: 'http://127.0.0.1:3000/mcp',
+      headerEnv: {}, headers: {}, allowUnsafeEndpoint: false,
+    });
+
+    const starting = runtime.startConformance({
+      serverId: 'http', selection: { kind: 'scenario', scenario: 'server-initialize' }, timeoutMs: 30_000,
+    });
+    await runtime.close();
+    await expect(starting).rejects.toMatchObject({ status: 409 });
+  });
+
   test('blocks referenced secret deletion unless explicitly forced', async () => {
     const { runtime } = createRuntime();
     const secret = await runtime.createSecret({ backend: 'session', label: 'Provider key', purposes: ['provider-api-key'], value: 'session-only-value' });

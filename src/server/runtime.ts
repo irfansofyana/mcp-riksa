@@ -574,12 +574,14 @@ export class WorkbenchRuntime {
   }
 
   async startConformance(input: { serverId: string; selection: ConformanceSelection; timeoutMs: number }) {
+    if (this.closing) throw new WorkbenchError('Runtime is closing', 409);
     const config = this.requireServer(input.serverId);
     if (config.transport !== 'http') throw new WorkbenchError('Official conformance MVP supports Streamable HTTP servers only; stdio is unsupported', 400);
     if (Object.keys(config.headerEnv).length > 0 || Object.keys(config.headers).length > 0 || config.staticAuth || config.oauth) {
       throw new WorkbenchError('Pinned official conformance runner does not support workbench header, static authorization, or OAuth injection', 400);
     }
     const endpoint = await validateHttpEndpoint(config.url, false);
+    if (this.closing) throw new WorkbenchError('Runtime is closing', 409);
     const hostname = endpoint.hostname.toLowerCase().replace(/^\[|\]$/g, '');
     if (hostname !== 'localhost' && hostname !== '127.0.0.1' && hostname !== '::1') {
       throw new WorkbenchError('Conformance execution is restricted to loopback MCP endpoints', 400);
