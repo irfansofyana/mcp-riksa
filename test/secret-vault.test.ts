@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -212,6 +212,21 @@ describe('EncryptedFileSecretBackend', () => {
       .rejects.toMatchObject({ code: 'SECRET_VAULT_INSECURE_PERMISSIONS' });
     expect(lstatSync(dataDirectory).mode & 0o777).toBe(0o777);
     await store.close();
+  });
+
+  test('rejects a lock database symlink without modifying its target', async () => {
+    if (process.platform === 'win32') return;
+    const fixture = harness();
+    mkdirSync(fixture.dataDirectory, { recursive: true, mode: 0o700 });
+    const target = join(fixture.root, 'unrelated-file');
+    writeFileSync(target, 'unrelated');
+    chmodSync(target, 0o644);
+    symlinkSync(target, fixture.backend.lockPath);
+
+    await expect(fixture.store.create({ backend: 'vault', label: 'Symlink lock', purposes: ['provider-api-key'], value: 'symlink-lock-secret' }))
+      .rejects.toMatchObject({ code: 'SECRET_VAULT_INSECURE_PERMISSIONS' });
+    expect(lstatSync(target).mode & 0o777).toBe(0o644);
+    expect(readFileSync(target, 'utf8')).toBe('unrelated');
   });
 
   test('rejects group-readable key material', async () => {

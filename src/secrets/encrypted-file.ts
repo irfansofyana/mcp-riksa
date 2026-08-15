@@ -196,14 +196,26 @@ export class EncryptedFileSecretBackend implements ManagedSecretBackend {
     });
   }
 
+  private prepareLockDatabase(): void {
+    if (existsSync(this.lockPath)) {
+      this.assertRegularSecureFile(this.lockPath, 'lock database');
+      return;
+    }
+    try {
+      this.writeExclusive(this.lockPath, Buffer.alloc(0));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      this.assertRegularSecureFile(this.lockPath, 'lock database');
+    }
+  }
+
   private async withVaultLock<T>(operation: () => T): Promise<T> {
     this.ensureSecureDirectory(this.options.dataDirectory);
     let database: Database.Database | undefined;
     let transactionOpen = false;
     try {
+      this.prepareLockDatabase();
       database = new Database(this.lockPath, { timeout: 10_000 });
-      if (process.platform !== 'win32') chmodSync(this.lockPath, 0o600);
-      this.assertRegularSecureFile(this.lockPath, 'lock database');
       database.exec('BEGIN IMMEDIATE');
       transactionOpen = true;
       const result = operation();
