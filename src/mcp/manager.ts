@@ -222,6 +222,10 @@ export class McpManager {
     } catch (error) {
       await transport?.close().catch(() => undefined);
       if (config.transport === 'http' && dispatcher !== undefined) await dispatcher.close().catch(() => undefined);
+      if (error instanceof Error) {
+        error.message = redact(error.message);
+        if (error.stack !== undefined) error.stack = redact(error.stack);
+      }
       secretLease.release();
       throw error;
     }

@@ -1,5 +1,6 @@
 import { resolve } from 'node:path';
 import { spawn, execFile } from 'node:child_process';
+import { createServer } from 'node:http';
 import { promisify } from 'node:util';
 import { once } from 'node:events';
 import { describe, expect, test } from 'vitest';
@@ -138,6 +139,31 @@ describe('real sample MCP server over stdio', () => {
     } finally {
       await manager.closeAll();
       unregisterSecretValue(registered);
+    }
+  });
+
+  test('redacts connection errors that reflect the resolved credential before releasing the lease', async () => {
+    const credential = 'http-connect-failure-secret';
+    const server = createServer((request, response) => {
+      response.writeHead(502, { 'content-type': 'text/plain' });
+      response.end(`upstream rejected credential: ${request.headers.authorization ?? ''}`);
+    });
+    server.listen(0);
+    await once(server, 'listening');
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('Expected a bound TCP address');
+    const url = `http://127.0.0.1:${address.port}/mcp`;
+    const manager = new McpManager(async () => credential);
+    try {
+      await expect(manager.connect({
+        id: 'failing-http', name: 'Failing HTTP', transport: 'http', url, allowUnsafeEndpoint: true,
+        headers: { authorization: { source: 'env', name: 'IGNORED_BY_TEST_RESOLVER' } },
+      })).rejects.toThrow(/\[REDACTED\]/);
+      expect(manager.connectionCount).toBe(0);
+      expect(redact(credential)).toBe(credential);
+    } finally {
+      await manager.closeAll();
+      await new Promise((resolveClose) => server.close(() => resolveClose(undefined)));
     }
   });
 });
