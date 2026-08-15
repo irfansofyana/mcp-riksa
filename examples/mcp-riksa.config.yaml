@@ -1,4 +1,4 @@
-version: 1
+version: 2
 servers:
   - id: sample
     name: Deterministic sample
@@ -8,17 +8,24 @@ servers:
       - node_modules/tsx/dist/cli.mjs
       - examples/sample-mcp-server.ts
     envRefs: {}
+    env: {}
 providers:
   - id: local-openai
     name: Local OpenAI-compatible fake
     type: openai-compatible
     baseUrl: http://127.0.0.1:4000/v1
     models:
-      default: test-model
-      fast: test-model
-      quality: test-model
-    apiKeyEnv: MCP_RIKSA_PROVIDER_API_KEY
+      default:
+        id: test-model
+        pricing: { inputPerMillion: 1, outputPerMillion: 2 }
+      fast:
+        id: test-model
+        pricing: { inputPerMillion: 0.5, outputPerMillion: 1 }
+      quality:
+        id: test-model
+        pricing: { inputPerMillion: 2, outputPerMillion: 4 }
+    apiKey:
+      source: env
+      name: MCP_RIKSA_PROVIDER_API_KEY
     headerEnv: {}
-    pricing:
-      inputPerMillion: 1
-      outputPerMillion: 2
+    headers: {}
