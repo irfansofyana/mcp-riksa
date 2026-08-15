@@ -355,7 +355,10 @@ export class EncryptedFileSecretBackend implements ManagedSecretBackend {
       if (process.getuid !== undefined && stat.uid !== process.getuid()) {
         throw new SecretStoreError('SECRET_VAULT_INSECURE_PERMISSIONS', 'A vault directory is not owned by the current OS user');
       }
-      chmodSync(path, 0o700);
+      if (created.includes(path)) chmodSync(path, 0o700);
+      else if ((stat.mode & 0o022) !== 0) {
+        throw new SecretStoreError('SECRET_VAULT_INSECURE_PERMISSIONS', 'An existing vault directory is writable by other users');
+      }
     }
   }
 

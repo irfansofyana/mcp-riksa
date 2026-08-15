@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, lstatSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -181,6 +181,37 @@ describe('EncryptedFileSecretBackend', () => {
     const tamperedBefore = readFileSync(tampered.vaultPath);
     await expect(tampered.backend.list()).rejects.toMatchObject({ code: 'SECRET_VAULT_CORRUPT' });
     expect(readFileSync(tampered.vaultPath)).toEqual(tamperedBefore);
+  });
+
+  test('does not change permissions on an existing caller-selected data directory', async () => {
+    if (process.platform === 'win32') return;
+    const root = mkdtempSync(join(tmpdir(), 'mcp-riksa-existing-data-'));
+    roots.push(root);
+    const dataDirectory = join(root, 'shared-project');
+    const configDirectory = join(root, 'config');
+    mkdirSync(dataDirectory, { mode: 0o755 });
+    const store = new SecretStore({ vaultBackend: new EncryptedFileSecretBackend({ dataDirectory, configDirectory }) });
+
+    await store.create({ backend: 'vault', label: 'Existing directory', purposes: ['provider-api-key'], value: 'existing-directory-secret' });
+
+    expect(lstatSync(dataDirectory).mode & 0o777).toBe(0o755);
+    await store.close();
+  });
+
+  test('rejects an existing world-writable data directory without changing its mode', async () => {
+    if (process.platform === 'win32') return;
+    const root = mkdtempSync(join(tmpdir(), 'mcp-riksa-world-writable-'));
+    roots.push(root);
+    const dataDirectory = join(root, 'shared');
+    const configDirectory = join(root, 'config');
+    mkdirSync(dataDirectory);
+    chmodSync(dataDirectory, 0o777);
+    const store = new SecretStore({ vaultBackend: new EncryptedFileSecretBackend({ dataDirectory, configDirectory }) });
+
+    await expect(store.create({ backend: 'vault', label: 'Unsafe directory', purposes: ['provider-api-key'], value: 'unsafe-directory-secret' }))
+      .rejects.toMatchObject({ code: 'SECRET_VAULT_INSECURE_PERMISSIONS' });
+    expect(lstatSync(dataDirectory).mode & 0o777).toBe(0o777);
+    await store.close();
   });
 
   test('rejects group-readable key material', async () => {
