@@ -158,6 +158,19 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     writeFileSync(lightScreenshot, Buffer.from(String(lightCapture.data), 'base64'));
     steps.push('theme-checked');
 
+    await navigate('secrets');
+    await setValue('secret-label', 'Browser smoke session key');
+    await setValue('secret-storage', 'session');
+    await setValue('secret-purpose', 'provider-api-key');
+    await setValue('secret-value', 'browser-smoke-secret-value');
+    await click('save-secret');
+    await waitText('Session-only secret added.');
+    await wait(`!document.body.textContent?.includes('browser-smoke-secret-value') && !document.body.textContent?.includes('Reveal') && !document.body.textContent?.includes('Copy')`, 'write-only secret rendering');
+    const secretsScreenshot = join(options.outputDirectory, 'secrets.png');
+    const secretsCapture = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    writeFileSync(secretsScreenshot, Buffer.from(String(secretsCapture.data), 'base64'));
+    steps.push('secret-managed');
+
     await navigate('settings');
     await setValue('provider-id', 'local');
     await setValue('provider-name', 'Local fake');
@@ -291,7 +304,7 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     const mobile = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     writeFileSync(mobileScreenshot, Buffer.from(String(mobile.data), 'base64'));
     steps.push('mobile-checked');
-    return { steps, consoleErrors, lightScreenshot, providersScreenshot, serverScreenshot, playgroundScreenshot, playgroundTraceScreenshot, desktopScreenshot, mobileScreenshot };
+    return { steps, consoleErrors, lightScreenshot, secretsScreenshot, providersScreenshot, serverScreenshot, playgroundScreenshot, playgroundTraceScreenshot, desktopScreenshot, mobileScreenshot };
   } finally {
     cdp.close();
     if (child.exitCode === null) {

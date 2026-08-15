@@ -10,6 +10,7 @@ const initialForm = (): ServerForm => ({
   id: '', name: '', transport: 'stdio', command: 'node', args: '', cwd: '', envRefs: '',
   url: 'http://127.0.0.1:3000/mcp', headerEnv: '', allowUnsafeEndpoint: false,
   oauthEnabled: false, oauthScopes: '', oauthClientId: '', oauthClientSecretEnv: '', oauthTimeoutMs: '120000',
+  staticAuthEnabled: false, staticAuthHeader: 'Authorization', staticAuthScheme: 'Bearer', staticAuthCredential: '',
 });
 
 export function ServersPage({ servers, conformanceReports, onRefresh, onConformanceStarted }: {
@@ -151,15 +152,21 @@ export function ServersPage({ servers, conformanceReports, onRefresh, onConforma
             <Field label="Executable" hint="Spawned directly; no shell is used."><Input required value={form.command} onChange={(event) => change('command', event.target.value)} data-testid="server-command" /></Field>
             <Field label="Arguments" hint={'JSON string array preserves spaces, e.g. ["--prompt","hello world"].'}><Input value={form.args} onChange={(event) => change('args', event.target.value)} data-testid="server-args" placeholder={'["--flag","value"]'} /></Field>
             <Field label="Working directory"><Input value={form.cwd ?? ''} onChange={(event) => change('cwd', event.target.value)} /></Field>
-            <Field label="Environment refs" hint="NAME=ENV_NAME, never resolved values."><Input value={form.envRefs ?? ''} onChange={(event) => change('envRefs', event.target.value)} /></Field>
+            <Field label="Environment secret references" hint="NAME=env:ENV_NAME, NAME=vault:secret-id, or NAME=session:secret-id."><Input value={form.envRefs ?? ''} onChange={(event) => change('envRefs', event.target.value)} /></Field>
           </> : <>
             <Field label="Endpoint"><Input type="url" required value={form.url} onChange={(event) => change('url', event.target.value)} /></Field>
-            <Field label="Header env references" hint="Header=ENV_NAME, never a value."><Input value={form.headerEnv} onChange={(event) => change('headerEnv', event.target.value)} /></Field>
-            <label className="check"><input type="checkbox" checked={form.oauthEnabled ?? false} onChange={(event) => change('oauthEnabled', event.target.checked)} /> Enable interactive OAuth</label>
+            <Field label="Header secret references" hint="Header=env:ENV_NAME, Header=vault:secret-id, or Header=session:secret-id."><Input value={form.headerEnv} onChange={(event) => change('headerEnv', event.target.value)} /></Field>
+            <label className="check"><input type="checkbox" checked={form.staticAuthEnabled ?? false} disabled={form.oauthEnabled} onChange={(event) => change('staticAuthEnabled', event.target.checked)} /> Use static HTTP authorization</label>
+            {form.staticAuthEnabled ? <>
+              <Field label="Authorization header"><Input required value={form.staticAuthHeader ?? 'Authorization'} onChange={(event) => change('staticAuthHeader', event.target.value)} /></Field>
+              <Field label="Authorization scheme" hint="Bearer, Basic, or a custom token scheme."><Input required value={form.staticAuthScheme ?? 'Bearer'} onChange={(event) => change('staticAuthScheme', event.target.value)} /></Field>
+              <Field label="Credential reference" hint="env:ENV_NAME, vault:secret-id, or session:secret-id. The backend assembles the header."><Input required value={form.staticAuthCredential ?? ''} onChange={(event) => change('staticAuthCredential', event.target.value)} /></Field>
+            </> : null}
+            <label className="check"><input type="checkbox" checked={form.oauthEnabled ?? false} disabled={form.staticAuthEnabled} onChange={(event) => change('oauthEnabled', event.target.checked)} /> Enable interactive OAuth</label>
             {form.oauthEnabled ? <>
               <Field label="OAuth scopes" hint="Space-separated scopes for interactive OAuth."><Input value={form.oauthScopes} onChange={(event) => change('oauthScopes', event.target.value)} placeholder="mcp:read mcp:write" /></Field>
               <Field label="OAuth client ID" hint="Optional. Leave blank to use DCR when advertised."><Input value={form.oauthClientId} onChange={(event) => change('oauthClientId', event.target.value)} /></Field>
-              <Field label="OAuth client-secret env" hint="Environment variable name only."><Input value={form.oauthClientSecretEnv} onChange={(event) => change('oauthClientSecretEnv', event.target.value)} placeholder="MCP_OAUTH_CLIENT_SECRET" /></Field>
+              <Field label="OAuth client-secret reference" hint="env:ENV_NAME, vault:secret-id, or session:secret-id."><Input value={form.oauthClientSecretEnv} onChange={(event) => change('oauthClientSecretEnv', event.target.value)} placeholder="env:MCP_OAUTH_CLIENT_SECRET" /></Field>
               <Field label="OAuth timeout (ms)"><Input type="number" min={1} max={300000} value={form.oauthTimeoutMs ?? '120000'} onChange={(event) => change('oauthTimeoutMs', event.target.value)} /></Field>
             </> : null}
             <label className="check"><input type="checkbox" checked={form.allowUnsafeEndpoint ?? false} onChange={(event) => change('allowUnsafeEndpoint', event.target.checked)} /> Allow endpoint addresses blocked by default safety policy</label>

@@ -4,13 +4,14 @@ import type {
   DirectSuiteCase,
   JsonValue,
   ProviderSummary,
+  SecretReference,
   ServerSummary,
   SuiteAssertion,
   SuiteCase,
   SuiteDraft,
 } from './types.js';
 
-export const pages = ['Servers', 'Playground', 'Suites', 'Runs', 'Conformance', 'Compare', 'Settings'] as const;
+export const pages = ['Servers', 'Playground', 'Suites', 'Runs', 'Conformance', 'Compare', 'Secrets', 'Settings'] as const;
 export type Page = typeof pages[number];
 
 export function normalizePage(hash: string): Page {
@@ -18,24 +19,40 @@ export function normalizePage(hash: string): Page {
   return pages.find((page) => page.toLowerCase() === requested) ?? 'Servers';
 }
 
-function envMap(input: string): Record<string, string> {
-  return Object.fromEntries(
-    input.split(/[\n,]/).map((line) => line.trim()).filter(Boolean).map((line) => {
-      const separator = line.indexOf('=');
-      if (separator < 1 || separator === line.length - 1) throw new Error(`Expected NAME=ENV_VAR, received ${line}`);
-      return [line.slice(0, separator).trim(), line.slice(separator + 1).trim()];
-    }),
-  );
+function parseSecretReference(input: string): SecretReference {
+  const value = input.trim();
+  const separator = value.indexOf(':');
+  if (separator === -1) return { source: 'env', name: value };
+  const source = value.slice(0, separator);
+  const reference = value.slice(separator + 1);
+  if (!reference || !['env', 'vault', 'session'].includes(source)) throw new Error(`Expected env:NAME, vault:secret-id, or session:secret-id; received ${input}`);
+  return source === 'env' ? { source, name: reference } : { source: source as 'vault' | 'session', id: reference };
 }
 
-function envText(input: Record<string, string> | undefined): string {
-  return Object.entries(input ?? {}).map(([key, value]) => `${key}=${value}`).join('\n');
+function secretMap(input: string): Record<string, SecretReference> {
+  return Object.fromEntries(input.split(/[\n,]/).map((line) => line.trim()).filter(Boolean).map((line) => {
+    const separator = line.indexOf('=');
+    if (separator < 1 || separator === line.length - 1) throw new Error(`Expected NAME=env:ENV_VAR or NAME=vault:secret-id, received ${line}`);
+    return [line.slice(0, separator).trim(), parseSecretReference(line.slice(separator + 1))];
+  }));
+}
+
+function secretReferenceText(reference: SecretReference): string {
+  return `${reference.source}:${reference.source === 'env' ? reference.name : reference.id}`;
+}
+
+function secretMapText(input: Record<string, SecretReference> | undefined, legacy?: Record<string, string>): string {
+  return [
+    ...Object.entries(legacy ?? {}).map(([key, value]) => `${key}=env:${value}`),
+    ...Object.entries(input ?? {}).map(([key, value]) => `${key}=${secretReferenceText(value)}`),
+  ].join('\n');
 }
 
 export type ServerForm = {
   id: string; name: string; transport: 'stdio' | 'http'; command: string; args: string; url: string; headerEnv: string;
   cwd?: string; envRefs?: string; allowUnsafeEndpoint?: boolean;
   oauthEnabled?: boolean; oauthScopes?: string; oauthClientId?: string; oauthClientSecretEnv?: string; oauthTimeoutMs?: string;
+  staticAuthEnabled?: boolean; staticAuthHeader?: string; staticAuthScheme?: string; staticAuthCredential?: string;
 };
 
 export function buildServerPayload(form: ServerForm) {
@@ -51,47 +68,55 @@ export function buildServerPayload(form: ServerForm) {
     return {
       id: form.id.trim(), name: form.name.trim(), transport: 'stdio' as const,
       command: form.command.trim(), args,
-      ...(form.cwd?.trim() ? { cwd: form.cwd.trim() } : {}), envRefs: envMap(form.envRefs ?? ''),
+      ...(form.cwd?.trim() ? { cwd: form.cwd.trim() } : {}), envRefs: {}, env: secretMap(form.envRefs ?? ''),
     };
   }
   const oauthEnabled = form.oauthEnabled ?? Boolean((form.oauthScopes ?? '').trim() || (form.oauthClientId ?? '').trim() || (form.oauthClientSecretEnv ?? '').trim());
+  if (oauthEnabled && form.staticAuthEnabled) throw new Error('OAuth and static authorization are mutually exclusive');
   return {
     id: form.id.trim(), name: form.name.trim(), transport: 'http' as const,
-    url: form.url.trim(), headerEnv: envMap(form.headerEnv), allowUnsafeEndpoint: form.allowUnsafeEndpoint ?? false,
+    url: form.url.trim(), headerEnv: {}, headers: secretMap(form.headerEnv), allowUnsafeEndpoint: form.allowUnsafeEndpoint ?? false,
+    ...(form.staticAuthEnabled ? { staticAuth: {
+      header: (form.staticAuthHeader ?? 'Authorization').trim(),
+      scheme: (form.staticAuthScheme ?? 'Bearer').trim(),
+      credential: parseSecretReference(form.staticAuthCredential ?? ''),
+    } } : {}),
     ...(oauthEnabled ? { oauth: {
       scopes: (form.oauthScopes ?? '').split(/\s+/).map((scope) => scope.trim()).filter(Boolean),
       timeoutMs: Number(form.oauthTimeoutMs || 120_000),
       ...((form.oauthClientId ?? '').trim() ? { clientId: form.oauthClientId!.trim() } : {}),
-      ...((form.oauthClientSecretEnv ?? '').trim() ? { clientSecretEnv: form.oauthClientSecretEnv!.trim() } : {}),
+      ...((form.oauthClientSecretEnv ?? '').trim() ? { clientSecret: parseSecretReference(form.oauthClientSecretEnv!) } : {}),
     } } : {}),
   };
 }
 
 export type ProviderForm = {
   id: string; name: string; type: 'openai-compatible' | 'anthropic-compatible'; baseUrl: string;
-  models: Array<{ alias: string; model: string }>;
-  apiKeyEnv: string; headerEnv: string; inputPrice: string; outputPrice: string;
+  models: Array<{ alias: string; model: string; inputPrice: string; outputPrice: string }>;
+  apiKeyEnv: string; headerEnv: string;
 };
 
 export function buildProviderPayload(form: ProviderForm) {
   if (form.models.length === 0) throw new Error('At least one model is required');
-  const models: Record<string, string> = Object.create(null) as Record<string, string>;
+  const models: Record<string, { id: string; pricing: { inputPerMillion: number; outputPerMillion: number } }> = Object.create(null) as Record<string, { id: string; pricing: { inputPerMillion: number; outputPerMillion: number } }>;
   for (const entry of form.models) {
     const alias = entry.alias.trim();
     const model = entry.model.trim();
     if (!alias || !model) throw new Error('Every model needs an alias and provider model ID');
     if (Object.hasOwn(models, alias)) throw new Error(`Duplicate model alias: ${alias}`);
-    models[alias] = model;
+    models[alias] = {
+      id: model,
+      pricing: {
+        inputPerMillion: Number(entry.inputPrice || 0),
+        outputPerMillion: Number(entry.outputPrice || 0),
+      },
+    };
   }
   return {
     id: form.id.trim(), name: form.name.trim(), type: form.type, baseUrl: form.baseUrl.trim(),
     models,
-    ...(form.apiKeyEnv.trim() ? { apiKeyEnv: form.apiKeyEnv.trim() } : {}),
-    headerEnv: envMap(form.headerEnv),
-    pricing: {
-      inputPerMillion: Number(form.inputPrice || 0),
-      outputPerMillion: Number(form.outputPrice || 0),
-    },
+    ...(form.apiKeyEnv.trim() ? { apiKey: parseSecretReference(form.apiKeyEnv) } : {}),
+    headerEnv: {}, headers: secretMap(form.headerEnv),
   };
 }
 
@@ -101,25 +126,32 @@ export function providerToForm(provider: ProviderSummary): ProviderForm {
     name: provider.name,
     type: provider.type,
     baseUrl: provider.baseUrl,
-    models: Object.entries(provider.models).map(([alias, model]) => ({ alias, model })),
-    apiKeyEnv: provider.apiKeyEnv ?? '',
-    headerEnv: envText(provider.headerEnv),
-    inputPrice: String(provider.pricing?.inputPerMillion ?? 0),
-    outputPrice: String(provider.pricing?.outputPerMillion ?? 0),
+    models: Object.entries(provider.models).map(([alias, model]) => ({
+      alias,
+      model: model.id,
+      inputPrice: String(model.pricing.inputPerMillion),
+      outputPrice: String(model.pricing.outputPerMillion),
+    })),
+    apiKeyEnv: provider.apiKey ? secretReferenceText(provider.apiKey) : provider.apiKeyEnv ? `env:${provider.apiKeyEnv}` : '',
+    headerEnv: secretMapText(provider.headers, provider.headerEnv),
+
   };
 }
 
 export function serverToForm(server: ServerSummary): ServerForm {
   if (server.transport === 'stdio') return {
     id: server.id, name: server.name, transport: 'stdio', command: server.command, args: JSON.stringify(server.args),
-    url: 'http://127.0.0.1:3000/mcp', headerEnv: '', cwd: server.cwd ?? '', envRefs: envText(server.envRefs), allowUnsafeEndpoint: false,
+    url: 'http://127.0.0.1:3000/mcp', headerEnv: '', cwd: server.cwd ?? '', envRefs: secretMapText(server.env, server.envRefs), allowUnsafeEndpoint: false,
     oauthEnabled: false, oauthScopes: '', oauthClientId: '', oauthClientSecretEnv: '', oauthTimeoutMs: '120000',
+    staticAuthEnabled: false, staticAuthHeader: 'Authorization', staticAuthScheme: 'Bearer', staticAuthCredential: '',
   };
   return {
     id: server.id, name: server.name, transport: 'http', command: 'node', args: '', url: server.url,
-    headerEnv: envText(server.headerEnv), cwd: '', envRefs: '', allowUnsafeEndpoint: server.allowUnsafeEndpoint,
+    headerEnv: secretMapText(server.headers, server.headerEnv), cwd: '', envRefs: '', allowUnsafeEndpoint: server.allowUnsafeEndpoint,
     oauthEnabled: server.oauth !== undefined, oauthScopes: server.oauth?.scopes.join(' ') ?? '', oauthClientId: server.oauth?.clientId ?? '',
-    oauthClientSecretEnv: server.oauth?.clientSecretEnv ?? '', oauthTimeoutMs: String(server.oauth?.timeoutMs ?? 120000),
+    oauthClientSecretEnv: server.oauth?.clientSecret ? secretReferenceText(server.oauth.clientSecret) : server.oauth?.clientSecretEnv ? `env:${server.oauth.clientSecretEnv}` : '', oauthTimeoutMs: String(server.oauth?.timeoutMs ?? 120000),
+    staticAuthEnabled: server.staticAuth !== undefined, staticAuthHeader: server.staticAuth?.header ?? 'Authorization', staticAuthScheme: server.staticAuth?.scheme ?? 'Bearer',
+    staticAuthCredential: server.staticAuth ? secretReferenceText(server.staticAuth.credential) : '',
   };
 }
 
