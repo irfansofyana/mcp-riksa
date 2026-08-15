@@ -18,7 +18,7 @@ import { OAuthCoordinator } from '../mcp/oauth.js';
 import { validateHttpEndpoint } from '../mcp/validation.js';
 import { EncryptedFileSecretBackend } from '../secrets/encrypted-file.js';
 import { SecretStore, type CreateSecretInput } from '../secrets/store.js';
-import type { SecretReference } from '../secrets/types.js';
+import type { SecretPurpose, SecretReference } from '../secrets/types.js';
 import { ConfigurationRepository } from '../storage/configurations.js';
 import { ConformanceRepository } from '../storage/conformance.js';
 import { ConversationRepository } from '../storage/conversations.js';
@@ -725,32 +725,47 @@ export class WorkbenchRuntime {
       servers,
       keys,
       active: keys.filter((key) => (this.activeConfigUses.get(key) ?? 0) > 0
-        || (key.startsWith('server:') && this.mcp.isConnected(key.slice('server:'.length)))),
+        || (key.startsWith('server:') && (
+          this.mcp.isConnected(key.slice('server:'.length))
+          || this.oauth.isUsingCredentials(key.slice('server:'.length))
+        ))),
     };
   }
 
-  private configSecretReferences(config: ProviderConfig | ServerConfig): Array<Extract<SecretReference, { source: 'vault' | 'session' }>> {
-    const references: Array<SecretReference | undefined> = 'type' in config
-      ? [config.apiKey, ...Object.values(config.headers)]
+  private configSecretRequirements(config: ProviderConfig | ServerConfig): Array<{
+    reference: Extract<SecretReference, { source: 'vault' | 'session' }>;
+    purpose: SecretPurpose;
+  }> {
+    const requirements: Array<{ reference: SecretReference | undefined; purpose: SecretPurpose }> = 'type' in config
+      ? [
+          { reference: config.apiKey, purpose: 'provider-api-key' },
+          ...Object.values(config.headers).map((reference) => ({ reference, purpose: 'provider-header' as const })),
+        ]
       : config.transport === 'stdio'
-        ? Object.values(config.env)
-        : [...Object.values(config.headers), config.staticAuth?.credential, config.oauth?.clientSecret];
-    return references.filter((reference): reference is Extract<SecretReference, { source: 'vault' | 'session' }> =>
-      reference !== undefined && reference.source !== 'env');
+        ? Object.values(config.env).map((reference) => ({ reference, purpose: 'stdio-env' as const }))
+        : [
+            ...Object.values(config.headers).map((reference) => ({ reference, purpose: 'mcp-header' as const })),
+            { reference: config.staticAuth?.credential, purpose: 'mcp-header' },
+            { reference: config.oauth?.clientSecret, purpose: 'oauth-client-secret' },
+          ];
+    return requirements.filter((requirement): requirement is {
+      reference: Extract<SecretReference, { source: 'vault' | 'session' }>;
+      purpose: SecretPurpose;
+    } => requirement.reference !== undefined && requirement.reference.source !== 'env');
   }
 
   private configSecretLockKeys(config: ProviderConfig | ServerConfig): string[] {
-    const references = this.configSecretReferences(config);
-    return [...new Set(references.flatMap((reference) => [
+    const requirements = this.configSecretRequirements(config);
+    return [...new Set(requirements.flatMap(({ reference }) => [
       `secret:${reference.id}`,
       ...(reference.source === 'vault' ? ['vault:*'] : []),
     ]))];
   }
 
   private async assertManagedSecretReferences(config: ProviderConfig | ServerConfig): Promise<void> {
-    for (const reference of this.configSecretReferences(config)) {
-      if (!(await this.secrets.isConfigured(reference))) {
-        throw new WorkbenchError(`Referenced ${reference.source} secret ${reference.id} is not configured`, 409);
+    for (const { reference, purpose } of this.configSecretRequirements(config)) {
+      if (!(await this.secrets.isConfigured(reference, purpose))) {
+        throw new WorkbenchError(`Referenced ${reference.source} secret ${reference.id} is not configured for ${purpose}`, 409);
       }
     }
   }

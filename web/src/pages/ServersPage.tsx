@@ -202,7 +202,7 @@ export function ServersPage({ servers, conformanceReports, onRefresh, onConforma
         </div>}
       </Section>
 
-      {servers.find((server) => server.id === selected)?.transport === 'http' ? <Section title="OAuth connection" action={<Status value={oauth?.state ?? 'not connected'} />}>
+      {selectedServer?.transport === 'http' && selectedServer.oauth !== undefined ? <Section title="OAuth connection" action={<Status value={oauth?.state ?? 'not connected'} />}>
         <div className="oauth-summary">
           <div><span className="eyebrow">Secure handoff</span><b>{oauth?.state === 'authorized' ? 'Authorization active' : oauth?.state === 'authorizing' ? 'Waiting for provider' : 'Connect account'}</b><p>Authorization Code + PKCE. Callback returns here, refreshes status, and reconnects server automatically.</p></div>
           {oauth?.scopes?.length ? <div className="scope-list">{oauth.scopes.map((scope) => <code key={scope}>{scope}</code>)}</div> : null}

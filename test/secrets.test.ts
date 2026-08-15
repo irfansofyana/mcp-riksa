@@ -92,6 +92,8 @@ describe('SecretStore', () => {
       value: clearableValue,
     });
 
+    expect(await store.isConfigured({ source: 'session', id: metadata.id }, 'provider-api-key')).toBe(true);
+    expect(await store.isConfigured({ source: 'session', id: metadata.id }, 'mcp-header')).toBe(false);
     await expect(
       store.resolve({ source: 'session', id: metadata.id }, 'mcp-header'),
     ).rejects.toMatchObject({ code: 'SECRET_PURPOSE_DENIED' });

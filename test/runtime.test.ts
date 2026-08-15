@@ -111,6 +111,11 @@ describe('concrete workbench runtime', () => {
     };
     await expect(runtime.createProvider(danglingProvider)).rejects.toMatchObject({ status: 409 });
     await expect(runtime.seedProvider({ ...danglingProvider, id: 'dangling-seed' })).rejects.toMatchObject({ status: 409 });
+    const wrongPurpose = await runtime.createSecret({ backend: 'session', label: 'Header only', purposes: ['mcp-header'], value: 'wrong-purpose-value' });
+    await expect(runtime.createProvider({
+      ...danglingProvider, id: 'wrong-purpose-provider', apiKey: { source: 'session', id: wrongPurpose.id },
+    })).rejects.toMatchObject({ status: 409 });
+    await runtime.deleteSecret(wrongPurpose.id, true);
 
     const connectedSecret = await runtime.createSecret({ backend: 'session', label: 'Connected server token', purposes: ['stdio-env'], value: 'connected-session-value' });
     await runtime.addServer({

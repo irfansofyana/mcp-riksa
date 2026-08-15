@@ -316,6 +316,11 @@ export class OAuthCoordinator {
     this.sessions.delete(id);
   }
 
+  isUsingCredentials(id: string): boolean {
+    const state = this.sessions.get(id)?.state;
+    return state === 'authorizing' || state === 'authorized';
+  }
+
   status(id: string): OAuthStatus {
     const session = this.require(id);
     const scopes = session.provider.tokens()?.scope?.split(/\s+/).filter(Boolean) ?? [];

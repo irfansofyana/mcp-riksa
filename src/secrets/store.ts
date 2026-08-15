@@ -78,13 +78,15 @@ export class SecretStore {
     return this.backend(parsedReference.source).resolve(parsedReference.id, parsedPurpose);
   }
 
-  async isConfigured(reference: SecretReference): Promise<boolean> {
+  async isConfigured(reference: SecretReference, purpose?: SecretPurpose): Promise<boolean> {
     const parsed = this.parseReference(reference);
     if (parsed.source === 'env') return this.environment[parsed.name] !== undefined;
     const backend = parsed.source === 'session' ? this.session : this.vault;
     if (!backend) return false;
     try {
-      return (await backend.list()).some((entry) => entry.id === parsed.id && entry.configured);
+      return (await backend.list()).some((entry) => entry.id === parsed.id
+        && entry.configured
+        && (purpose === undefined || entry.purposes.includes(purpose)));
     } catch (error) {
       if (parsed.source === 'vault' && error instanceof SecretStoreError) return false;
       throw error;
