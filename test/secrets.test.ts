@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from 'vitest';
 import { redact } from '../src/core/redaction.js';
 import { SecretStore, SecretStoreError } from '../src/secrets/store.js';
+import type { ManagedSecretBackend } from '../src/secrets/types.js';
 
 const TEST_ENV = 'MCP_RIKSA_SECRET_TEST_VALUE';
 const secretValue = 'vault-test-value-7c3f';
@@ -104,6 +105,23 @@ describe('SecretStore', () => {
     await expect(
       store.resolve({ source: 'session', id: metadata.id }, 'provider-api-key'),
     ).rejects.toMatchObject({ code: 'SECRET_NOT_FOUND' });
+  });
+
+  test('keeps session secrets manageable when the vault is unavailable', async () => {
+    const vaultError = () => new SecretStoreError('SECRET_VAULT_CORRUPT', 'Vault unavailable');
+    const unavailableVault: ManagedSecretBackend = {
+      source: 'vault',
+      create: async () => { throw vaultError(); },
+      list: async () => { throw vaultError(); },
+      replace: async () => { throw vaultError(); },
+      delete: async () => { throw vaultError(); },
+      resolve: async () => { throw vaultError(); },
+    };
+    const store = new SecretStore({ vaultBackend: unavailableVault });
+    const metadata = await store.create({ backend: 'session', label: 'Still manageable', purposes: ['provider-api-key'], value: 'session-survives-vault' });
+
+    await expect(store.list()).resolves.toEqual([expect.objectContaining({ id: metadata.id, backend: 'session' })]);
+    await store.close();
   });
 
   test('rejects malformed references before resolution', async () => {

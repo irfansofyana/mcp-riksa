@@ -43,10 +43,15 @@ export class SecretStore {
   }
 
   async list(): Promise<SecretMetadata[]> {
-    const [session, vault] = await Promise.all([
-      this.session.list(),
-      this.vault?.list() ?? Promise.resolve([]),
-    ]);
+    const session = await this.session.list();
+    let vault: SecretMetadata[] = [];
+    if (this.vault) {
+      try {
+        vault = await this.vault.list();
+      } catch (error) {
+        if (!(error instanceof SecretStoreError)) throw error;
+      }
+    }
     return [...vault, ...session].sort((left, right) => left.label.localeCompare(right.label));
   }
 

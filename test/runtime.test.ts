@@ -111,6 +111,12 @@ describe('concrete workbench runtime', () => {
     };
     await expect(runtime.createProvider(danglingProvider)).rejects.toMatchObject({ status: 409 });
     await expect(runtime.seedProvider({ ...danglingProvider, id: 'dangling-seed' })).rejects.toMatchObject({ status: 409 });
+    await runtime.addServer({ id: 'seed-tombstone', name: 'Seed tombstone', transport: 'stdio', command: process.execPath, args: [tsxCli, sampleServer], envRefs: {}, env: {} });
+    await runtime.deleteServer('seed-tombstone', true);
+    await expect(runtime.seedServer({
+      id: 'seed-tombstone', name: 'Ignored seed', transport: 'stdio', command: process.execPath, args: [tsxCli, sampleServer], envRefs: {},
+      env: { TOKEN: { source: 'session', id: 'secret_00000000-0000-4000-8000-000000000000' } },
+    })).resolves.toBe(false);
     const wrongPurpose = await runtime.createSecret({ backend: 'session', label: 'Header only', purposes: ['mcp-header'], value: 'wrong-purpose-value' });
     await expect(runtime.createProvider({
       ...danglingProvider, id: 'wrong-purpose-provider', apiKey: { source: 'session', id: wrongPurpose.id },
@@ -123,6 +129,11 @@ describe('concrete workbench runtime', () => {
       args: [tsxCli, sampleServer], envRefs: {}, env: { API_TOKEN: { source: 'session', id: connectedSecret.id } },
     });
     await runtime.connectServer('secret-server');
+    await expect(runtime.updateServer('secret-server', {
+      id: 'secret-server', name: 'Rejected update', transport: 'stdio', command: process.execPath,
+      args: [tsxCli, sampleServer], envRefs: {}, env: { API_TOKEN: { source: 'session', id: 'secret_00000000-0000-4000-8000-000000000000' } },
+    })).rejects.toMatchObject({ status: 409 });
+    await expect(runtime.inspectServer('secret-server')).resolves.toMatchObject({ id: 'secret-server' });
     await expect(runtime.replaceSecret(connectedSecret.id, 'rotated-connected-value')).rejects.toMatchObject({ status: 409 });
     await expect(runtime.deleteSecret(connectedSecret.id, true)).rejects.toMatchObject({ status: 409 });
     await runtime.updateServer('secret-server', {

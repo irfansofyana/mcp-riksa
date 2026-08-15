@@ -283,6 +283,7 @@ export class WorkbenchRuntime {
 
   async seedServer(input: ServerConfig) {
     const config = serverConfigSchema.parse(input);
+    if (!this.configurations.canSeed('server', config.id)) return false;
     return this.withConfigMutations([`server:${config.id}`, ...this.configSecretLockKeys(config)], async () => {
       await this.assertManagedSecretReferences(config);
       if (!this.configurations.seed('server', config.id, config)) return false;
@@ -307,9 +308,9 @@ export class WorkbenchRuntime {
     if (config.id !== id) throw new WorkbenchError('Server ID cannot be changed while editing', 400);
     this.requireServer(id);
     return this.withConfigMutations([`server:${id}`, ...this.configSecretLockKeys(config)], async () => {
+      await this.assertManagedSecretReferences(config);
       await this.mcp.disconnect(id);
       this.oauth.forget(id);
-      await this.assertManagedSecretReferences(config);
       if (!this.configurations.update('server', id, config)) throw new WorkbenchError(`MCP server ${id} not found`, 404);
       this.servers.set(id, config);
       return { id, name: config.name, transport: config.transport, reconnectRequired: true };
