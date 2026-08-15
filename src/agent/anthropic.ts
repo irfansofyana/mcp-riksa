@@ -4,6 +4,7 @@ import type { ProviderAdapter, ProviderMessage } from './types.js';
 import { providerConfigSchema, resolveApiKey, resolveModel, resolveModelPricing, resolveProviderHeaders } from './types.js';
 import { createSafeLookup } from '../mcp/validation.js';
 import type { SecretResolver } from '../secrets/types.js';
+import { withSecretResolutionLease } from '../secrets/lease.js';
 
 const contentSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('text'), text: z.string() }).passthrough(),
@@ -60,9 +61,10 @@ export function createAnthropicAdapter(input: unknown, resolveSecret: SecretReso
     id: config.id,
     pricingFor: (alias) => resolveModelPricing(config, alias),
     async complete(request) {
+      return withSecretResolutionLease(resolveSecret, async (activeResolver) => {
       const [providerHeaders, apiKey] = await Promise.all([
-        resolveProviderHeaders(config, resolveSecret),
-        resolveApiKey(config, resolveSecret),
+        resolveProviderHeaders(config, activeResolver),
+        resolveApiKey(config, activeResolver),
       ]);
       const headers = {
         'content-type': 'application/json',
@@ -181,6 +183,7 @@ export function createAnthropicAdapter(input: unknown, resolveSecret: SecretReso
         stopReason: toolCalls.length > 0 ? 'tool_calls' : (parsed.data.stop_reason ?? 'complete'),
         raw,
       };
+      });
     },
     async close() { await dispatcher.close(); },
   };

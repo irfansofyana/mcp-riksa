@@ -42,6 +42,15 @@ test('rejects invalid provider HTTP header names before saving', () => {
   }
 });
 
+test('rejects case-insensitive duplicates across provider header maps', () => {
+  expect(() => providerConfigSchema.parse({
+    id: 'safe', name: 'Safe', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1',
+    models: { default: { id: 'test' } },
+    headerEnv: { Authorization: 'LEGACY_TOKEN' },
+    headers: { authorization: { source: 'env', name: 'MODERN_TOKEN' } },
+  })).toThrow(/duplicate http header name/i);
+});
+
 test('rejects inline secrets in provider header references', () => {
   expect(() => providerConfigSchema.parse({
     id: 'safe', name: 'Safe', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1',

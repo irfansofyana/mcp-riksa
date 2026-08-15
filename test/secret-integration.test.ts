@@ -107,6 +107,15 @@ describe('secret reference integration', () => {
     })).toThrow(/conflicts with configured headers/i);
   });
 
+  test('rejects case-insensitive duplicates across server header maps', () => {
+    expect(() => serverConfigSchema.parse({
+      id: 'duplicate-headers', name: 'Duplicate headers', transport: 'http', url: 'https://example.test/mcp',
+      headerEnv: { Authorization: 'LEGACY_TOKEN' },
+      headers: { authorization: { source: 'env', name: 'MODERN_TOKEN' } },
+      allowUnsafeEndpoint: false,
+    })).toThrow(/duplicate http header name/i);
+  });
+
   test('rejects ambiguous OAuth and static authorization combinations', () => {
     expect(() => serverConfigSchema.parse({
       id: 'ambiguous', name: 'Ambiguous', transport: 'http', url: 'https://example.test/mcp', headers: {},

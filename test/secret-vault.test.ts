@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { EncryptedFileSecretBackend } from '../src/secrets/encrypted-file.js';
 import { SecretStore } from '../src/secrets/store.js';
+import { createSecretResolutionLease } from '../src/secrets/lease.js';
 import { redact } from '../src/core/redaction.js';
 
 const roots: string[] = [];
@@ -99,6 +100,23 @@ describe('EncryptedFileSecretBackend', () => {
     expect(JSON.stringify(redact({ reflected: rotated }))).not.toContain(rotated);
     expect(JSON.stringify(redact({ reflected: original }))).toContain(original);
     await external.close();
+    await fixture.store.close();
+  });
+
+  test('retains an old rotated value only while an active consumer still uses it', async () => {
+    const fixture = harness();
+    const metadata = await fixture.store.create({ backend: 'vault', label: 'Rotating', purposes: ['provider-api-key'], value: 'old-active-secret' });
+    const external = new EncryptedFileSecretBackend({ dataDirectory: fixture.dataDirectory, configDirectory: fixture.configDirectory });
+    const lease = createSecretResolutionLease(fixture.store.resolve.bind(fixture.store));
+    expect(await lease.resolve({ source: 'vault', id: metadata.id }, 'provider-api-key')).toBe('old-active-secret');
+
+    await external.replace(metadata.id, 'new-active-secret');
+    await fixture.store.resolve({ source: 'vault', id: metadata.id }, 'provider-api-key');
+    expect(redact('old-active-secret new-active-secret')).toBe('[REDACTED] [REDACTED]');
+
+    lease.release();
+    expect(redact('old-active-secret new-active-secret')).toBe('old-active-secret [REDACTED]');
+    await external.clear();
     await fixture.store.close();
   });
 

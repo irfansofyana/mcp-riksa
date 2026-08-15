@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { environmentVariableNameSchema } from '../core/environment.js';
-import { httpHeaderNameSchema } from '../core/http.js';
+import { findDuplicateHttpHeaderName, httpHeaderNameSchema } from '../core/http.js';
 import { registerSecretValue } from '../core/redaction.js';
 import { secretReferenceSchema, type SecretResolver } from '../secrets/types.js';
 
@@ -20,6 +20,11 @@ export const providerConfigSchema = z.strictObject({
   headerEnv: z.record(httpHeaderNameSchema, environmentVariableNameSchema).optional().default({}),
   apiKey: secretReferenceSchema.optional(),
   headers: z.record(httpHeaderNameSchema, secretReferenceSchema).optional().default({}),
+}).superRefine((config, context) => {
+  const duplicateHeader = findDuplicateHttpHeaderName(config.headerEnv, config.headers);
+  if (duplicateHeader !== undefined) {
+    context.addIssue({ code: 'custom', path: ['headers'], message: `Duplicate HTTP header name: ${duplicateHeader}` });
+  }
 });
 
 export type ProviderConfig = z.infer<typeof providerConfigSchema>;
