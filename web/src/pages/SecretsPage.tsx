@@ -11,7 +11,7 @@ const purposeOptions: Array<{ value: SecretPurpose; label: string }> = [
   { value: 'stdio-env', label: 'Stdio environment value' },
 ];
 
-export function SecretsPage() {
+export function SecretsPage({ onRefresh }: { onRefresh: () => Promise<void> }) {
   const [secrets, setSecrets] = useState<SecretMetadata[]>([]);
   const [vault, setVault] = useState<VaultStatus>();
   const [backend, setBackend] = useState<'vault' | 'session'>('vault');
@@ -60,7 +60,7 @@ export function SecretsPage() {
         <Button variant="danger" onClick={() => void act(async () => {
           if (!window.confirm('Reset this encrypted vault? Its existing secrets cannot be recovered.')) return;
           await api.resetVault(true);
-          await refresh();
+          await Promise.all([refresh(), onRefresh()]);
           setMessage('Encrypted vault reset. The existing local key will encrypt the next persistent save.');
         })}>Reset vault</Button>
       </div> : null}
@@ -75,7 +75,7 @@ export function SecretsPage() {
             if (!window.confirm(`Delete ${secret.label}? Configurations using it will stop working.`)) return;
             await api.deleteSecret(secret.id, true);
             if (replacementId === secret.id) { setReplacementId(''); setReplacement(''); }
-            await refresh();
+            await Promise.all([refresh(), onRefresh()]);
             setMessage('Secret deleted.');
           })}>Delete</Button>
         </div>

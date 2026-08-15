@@ -21,7 +21,14 @@ export function unregisterSecretValue(value: string | undefined): void {
 function redactString(value: string): string {
   let next = value.replace(AUTHORIZATION_VALUE, `$1${REDACTED}`);
   next = next.replace(BEARER_VALUE, `$1$2${REDACTED}`);
-  for (const secret of KNOWN_SECRET_VALUES.keys()) next = next.replaceAll(secret, REDACTED);
+  for (const secret of KNOWN_SECRET_VALUES.keys()) {
+    if (secret.length >= 4) {
+      next = next.replaceAll(secret, REDACTED);
+      continue;
+    }
+    const escaped = secret.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    next = next.replace(new RegExp(`(?<![A-Za-z0-9])${escaped}(?![A-Za-z0-9])`, 'g'), REDACTED);
+  }
 
   try {
     const url = new URL(next);

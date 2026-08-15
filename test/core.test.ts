@@ -10,6 +10,12 @@ describe('redaction', () => {
     expect(redact({ arbitrary: 'echo q7' })).toEqual({ arbitrary: 'echo q7' });
   });
 
+  test('redacts short credentials without corrupting ordinary text', () => {
+    registerSecretValue('a');
+    expect(redact('a is a credential, data remains readable')).toBe(`${REDACTED} is ${REDACTED} credential, data remains readable`);
+    unregisterSecretValue('a');
+  });
+
   test('redacts resolved environment secrets even when reflected under arbitrary keys or text', () => {
     registerSecretValue('company-gateway-secret');
     const output = redact({ debug: 'company-gateway-secret', message: 'upstream echoed company-gateway-secret unexpectedly' });

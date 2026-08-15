@@ -59,30 +59,34 @@ export class EncryptedFileSecretBackend implements ManagedSecretBackend {
   readonly source = 'vault' as const;
   readonly vaultPath: string;
   readonly keyPath: string;
+  readonly lockPath: string;
   private key?: Buffer;
   private readonly registeredValues = new Map<string, string>();
 
   constructor(private readonly options: EncryptedFileOptions) {
     this.vaultPath = join(options.dataDirectory, 'secrets.vault');
     this.keyPath = join(options.configDirectory, 'mcp-riksa', 'vault.key');
+    this.lockPath = join(options.dataDirectory, 'secrets.vault.lock');
   }
 
   async create(input: Omit<CreateSecretInput, 'backend'>): Promise<SecretMetadata> {
-    const entries = this.readEntries();
-    this.requireKey(true);
-    const now = new Date().toISOString();
-    const metadata: SecretMetadata = {
-      id: `secret_${randomUUID()}`,
-      label: input.label,
-      backend: 'encrypted-file',
-      purposes: [...input.purposes],
-      configured: true,
-      createdAt: now,
-      updatedAt: now,
-    };
-    entries.push({ metadata, value: input.value });
-    this.writeEntries(entries);
-    return cloneMetadata(metadata);
+    return this.withVaultLock(() => {
+      const entries = this.readEntries();
+      this.requireKey(true);
+      const now = new Date().toISOString();
+      const metadata: SecretMetadata = {
+        id: `secret_${randomUUID()}`,
+        label: input.label,
+        backend: 'encrypted-file',
+        purposes: [...input.purposes],
+        configured: true,
+        createdAt: now,
+        updatedAt: now,
+      };
+      entries.push({ metadata, value: input.value });
+      this.writeEntries(entries);
+      return cloneMetadata(metadata);
+    });
   }
 
   async list(): Promise<SecretMetadata[]> {
@@ -90,32 +94,36 @@ export class EncryptedFileSecretBackend implements ManagedSecretBackend {
   }
 
   async replace(id: string, value: string): Promise<SecretMetadata> {
-    const entries = this.readEntries();
-    const entry = requireEntry(entries, id);
-    const registered = this.registeredValues.get(id);
-    entry.value = value;
-    entry.metadata.updatedAt = new Date().toISOString();
-    this.writeEntries(entries);
-    if (registered !== undefined) {
-      unregisterSecretValue(registered);
-      registerSecretValue(value);
-      this.registeredValues.set(id, value);
-    }
-    return cloneMetadata(entry.metadata);
+    return this.withVaultLock(() => {
+      const entries = this.readEntries();
+      const entry = requireEntry(entries, id);
+      const registered = this.registeredValues.get(id);
+      entry.value = value;
+      entry.metadata.updatedAt = new Date().toISOString();
+      this.writeEntries(entries);
+      if (registered !== undefined) {
+        unregisterSecretValue(registered);
+        registerSecretValue(value);
+        this.registeredValues.set(id, value);
+      }
+      return cloneMetadata(entry.metadata);
+    });
   }
 
   async delete(id: string): Promise<boolean> {
-    const entries = this.readEntries();
-    const index = entries.findIndex((entry) => entry.metadata.id === id);
-    if (index < 0) return false;
-    const registered = this.registeredValues.get(id);
-    entries.splice(index, 1);
-    this.writeEntries(entries);
-    if (registered !== undefined) {
-      unregisterSecretValue(registered);
-      this.registeredValues.delete(id);
-    }
-    return true;
+    return this.withVaultLock(() => {
+      const entries = this.readEntries();
+      const index = entries.findIndex((entry) => entry.metadata.id === id);
+      if (index < 0) return false;
+      const registered = this.registeredValues.get(id);
+      entries.splice(index, 1);
+      this.writeEntries(entries);
+      if (registered !== undefined) {
+        unregisterSecretValue(registered);
+        this.registeredValues.delete(id);
+      }
+      return true;
+    });
   }
 
   async resolve(id: string, purpose: SecretPurpose): Promise<string> {
@@ -157,10 +165,74 @@ export class EncryptedFileSecretBackend implements ManagedSecretBackend {
   }
 
   async reset(): Promise<void> {
-    await this.clear();
-    if (!existsSync(this.vaultPath)) return;
-    this.assertRegularSecureFile(this.vaultPath, 'vault');
-    unlinkSync(this.vaultPath);
+    await this.withVaultLock(() => {
+      for (const value of this.registeredValues.values()) unregisterSecretValue(value);
+      this.registeredValues.clear();
+      this.key?.fill(0);
+      this.key = undefined;
+      if (!existsSync(this.vaultPath)) return;
+      this.assertRegularSecureFile(this.vaultPath, 'vault');
+      unlinkSync(this.vaultPath);
+    });
+  }
+
+  private async withVaultLock<T>(operation: () => T): Promise<T> {
+    this.ensureSecureDirectory(this.options.dataDirectory);
+    const deadline = Date.now() + 10_000;
+    let descriptor: number | undefined;
+    while (descriptor === undefined) {
+      try {
+        const candidate = openSync(this.lockPath, 'wx', 0o600);
+        try {
+          writeFileSync(candidate, String(process.pid));
+          fsyncSync(candidate);
+          descriptor = candidate;
+        } catch (error) {
+          closeSync(candidate);
+          try { unlinkSync(this.lockPath); } catch { /* preserve the original write failure */ }
+          throw error;
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        this.removeStaleLock();
+        if (Date.now() >= deadline) {
+          throw new SecretStoreError('SECRET_BACKEND_UNAVAILABLE', 'The encrypted MCP Riksa vault is busy in another process');
+        }
+        await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+      }
+    }
+    try {
+      return operation();
+    } finally {
+      closeSync(descriptor);
+      unlinkSync(this.lockPath);
+    }
+  }
+
+  private removeStaleLock(): void {
+    let owner: number;
+    try {
+      const stat = lstatSync(this.lockPath);
+      if (!stat.isFile() || stat.isSymbolicLink()) {
+        throw new SecretStoreError('SECRET_VAULT_INSECURE_PERMISSIONS', 'The MCP Riksa vault lock is not a regular file');
+      }
+      if (process.platform !== 'win32' && process.getuid !== undefined && stat.uid !== process.getuid()) {
+        throw new SecretStoreError('SECRET_VAULT_INSECURE_PERMISSIONS', 'The MCP Riksa vault lock is not owned by the current OS user');
+      }
+      owner = Number.parseInt(readFileSync(this.lockPath, 'utf8'), 10);
+      if (!Number.isInteger(owner) || owner <= 0) return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw error;
+    }
+    try {
+      process.kill(owner, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') return;
+      try { unlinkSync(this.lockPath); } catch (unlinkError) {
+        if ((unlinkError as NodeJS.ErrnoException).code !== 'ENOENT') throw unlinkError;
+      }
+    }
   }
 
   private readEntries(): VaultEntry[] {
@@ -254,9 +326,25 @@ export class EncryptedFileSecretBackend implements ManagedSecretBackend {
     this.ensureSecureDirectory(join(this.options.configDirectory, 'mcp-riksa'));
     const key = randomBytes(KEY_BYTES);
     try {
-      this.writeExclusive(this.keyPath, key);
-      this.key = Buffer.from(key);
-      return this.key;
+      try {
+        this.writeExclusive(this.keyPath, key);
+        this.key = Buffer.from(key);
+        return this.key;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        for (let attempt = 0; attempt < 20; attempt += 1) {
+          const value = readFileSync(this.keyPath);
+          if (value.length === KEY_BYTES) {
+            this.assertRegularSecureFile(this.keyPath, 'key');
+            this.key = Buffer.from(value);
+            value.fill(0);
+            return this.key;
+          }
+          value.fill(0);
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+        }
+        throw new SecretStoreError('SECRET_VAULT_CORRUPT', 'The MCP Riksa vault key could not be initialized safely');
+      }
     } finally {
       key.fill(0);
     }

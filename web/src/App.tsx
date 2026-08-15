@@ -73,7 +73,7 @@ export function App() {
         {page === 'Runs' ? <RunsPage runs={data.runs} {...(selectedRun === undefined ? {} : { initialId: selectedRun })} onRefresh={refresh} /> : null}
         {page === 'Conformance' ? <ConformancePage reports={data.conformanceReports} servers={data.servers} {...(selectedConformance === undefined ? {} : { initialId: selectedConformance })} onRefresh={refresh} /> : null}
         {page === 'Compare' ? <ComparePage runs={data.runs} /> : null}
-        {page === 'Secrets' ? <SecretsPage /> : null}
+        {page === 'Secrets' ? <SecretsPage onRefresh={refresh} /> : null}
         {page === 'Settings' ? <SettingsPage providers={data.providers} onRefresh={refresh} /> : null}
       </>}
     </section>

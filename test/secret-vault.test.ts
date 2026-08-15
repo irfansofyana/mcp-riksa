@@ -1,12 +1,17 @@
 import { chmodSync, existsSync, lstatSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { EncryptedFileSecretBackend } from '../src/secrets/encrypted-file.js';
 import { SecretStore } from '../src/secrets/store.js';
 
 const roots: string[] = [];
+const execFileAsync = promisify(execFile);
+const tsxCli = resolve('node_modules/tsx/dist/cli.mjs');
+const vaultWriter = resolve('test/fixtures/vault-writer.ts');
 
 function harness() {
   const root = mkdtempSync(join(tmpdir(), 'mcp-riksa-vault-'));
@@ -75,6 +80,32 @@ describe('EncryptedFileSecretBackend', () => {
       restarted.resolve({ source: 'vault', id: metadata.id }, 'mcp-header'),
     ).resolves.toBe(value);
     expect(readFileSync(join(dataDirectory, 'secrets.vault'))).toEqual(beforeResolve);
+  });
+
+  test('serializes vault mutations across processes', async () => {
+    const fixture = harness();
+    const writers = 4;
+    const entriesPerWriter = 6;
+    await Promise.all(Array.from({ length: writers }, (_, index) => execFileAsync(
+      process.execPath,
+      [tsxCli, vaultWriter, fixture.dataDirectory, fixture.configDirectory, `writer-${index}`, String(entriesPerWriter)],
+      { cwd: resolve('.') },
+    )));
+
+    await expect(fixture.store.list()).resolves.toHaveLength(writers * entriesPerWriter);
+  }, 30_000);
+
+  test('shares a concurrently initialized key across data directories', async () => {
+    const fixture = harness();
+    const otherDataDirectory = join(fixture.root, 'other-data');
+    await Promise.all([
+      execFileAsync(process.execPath, [tsxCli, vaultWriter, fixture.dataDirectory, fixture.configDirectory, 'first', '1'], { cwd: resolve('.') }),
+      execFileAsync(process.execPath, [tsxCli, vaultWriter, otherDataDirectory, fixture.configDirectory, 'second', '1'], { cwd: resolve('.') }),
+    ]);
+    const otherStore = new SecretStore({ vaultBackend: new EncryptedFileSecretBackend({ dataDirectory: otherDataDirectory, configDirectory: fixture.configDirectory }) });
+    await expect(fixture.store.list()).resolves.toHaveLength(1);
+    await expect(otherStore.list()).resolves.toHaveLength(1);
+    await otherStore.close();
   });
 
   test('fails closed without overwriting a vault whose key is missing', async () => {
