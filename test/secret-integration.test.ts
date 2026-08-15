@@ -86,6 +86,18 @@ describe('secret reference integration', () => {
     )).resolves.toEqual({ TOKEN: 'stdio-secret-value' });
   });
 
+  test('rejects invalid HTTP header names before saving', () => {
+    for (const input of [
+      { headers: { 'X Bad': { source: 'env' as const, name: 'EXTRA_TOKEN' } } },
+      { headerEnv: { 'X Bad': 'EXTRA_TOKEN' } },
+    ]) {
+      expect(() => serverConfigSchema.parse({
+        id: 'invalid-header', name: 'Invalid header', transport: 'http', url: 'https://example.test/mcp',
+        ...input, allowUnsafeEndpoint: false,
+      })).toThrow(/invalid http header name/i);
+    }
+  });
+
   test('rejects static authorization header collisions before saving', () => {
     expect(() => serverConfigSchema.parse({
       id: 'collision', name: 'Collision', transport: 'http', url: 'https://example.test/mcp',

@@ -11,6 +11,7 @@ import { secretReferenceSchema, type SecretPurpose, type SecretResolver } from '
 import { createSafeLookup, validateHttpEndpoint } from './validation.js';
 
 const baseConfig = { id: z.string().min(1), name: z.string().min(1) };
+const httpHeaderNameSchema = z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/, 'Invalid HTTP header name');
 const stdioConfigSchema = z.strictObject({
   ...baseConfig,
   transport: z.literal('stdio'),
@@ -24,10 +25,10 @@ const httpConfigSchema = z.strictObject({
   ...baseConfig,
   transport: z.literal('http'),
   url: z.string().min(1),
-  headerEnv: z.record(z.string(), environmentVariableNameSchema).optional().default({}),
-  headers: z.record(z.string().min(1), secretReferenceSchema).optional().default({}),
+  headerEnv: z.record(httpHeaderNameSchema, environmentVariableNameSchema).optional().default({}),
+  headers: z.record(httpHeaderNameSchema, secretReferenceSchema).optional().default({}),
   staticAuth: z.strictObject({
-    header: z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/, 'Invalid HTTP header name').default('Authorization'),
+    header: httpHeaderNameSchema.default('Authorization'),
     scheme: z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/, 'Invalid authorization scheme').default('Bearer'),
     credential: secretReferenceSchema,
   }).optional(),
