@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, lstatSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -86,6 +86,10 @@ describe('EncryptedFileSecretBackend', () => {
     const fixture = harness();
     const writers = 4;
     const entriesPerWriter = 6;
+    mkdirSync(fixture.dataDirectory, { recursive: true });
+    mkdirSync(fixture.backend.lockPath);
+    const staleTime = new Date(Date.now() - 30_000);
+    utimesSync(fixture.backend.lockPath, staleTime, staleTime);
     await Promise.all(Array.from({ length: writers }, (_, index) => execFileAsync(
       process.execPath,
       [tsxCli, vaultWriter, fixture.dataDirectory, fixture.configDirectory, `writer-${index}`, String(entriesPerWriter)],

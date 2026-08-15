@@ -14,6 +14,7 @@ import {
 } from 'node:fs';
 import { createCipheriv, createDecipheriv, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { join } from 'node:path';
+import lockfile from 'proper-lockfile';
 import { z } from 'zod';
 import { registerSecretValue, unregisterSecretValue } from '../core/redaction.js';
 import { SecretStoreError } from './store-error.js';
@@ -178,60 +179,23 @@ export class EncryptedFileSecretBackend implements ManagedSecretBackend {
 
   private async withVaultLock<T>(operation: () => T): Promise<T> {
     this.ensureSecureDirectory(this.options.dataDirectory);
-    const deadline = Date.now() + 10_000;
-    let descriptor: number | undefined;
-    while (descriptor === undefined) {
-      try {
-        const candidate = openSync(this.lockPath, 'wx', 0o600);
-        try {
-          writeFileSync(candidate, String(process.pid));
-          fsyncSync(candidate);
-          descriptor = candidate;
-        } catch (error) {
-          closeSync(candidate);
-          try { unlinkSync(this.lockPath); } catch { /* preserve the original write failure */ }
-          throw error;
-        }
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-        this.removeStaleLock();
-        if (Date.now() >= deadline) {
-          throw new SecretStoreError('SECRET_BACKEND_UNAVAILABLE', 'The encrypted MCP Riksa vault is busy in another process');
-        }
-        await new Promise((resolveWait) => setTimeout(resolveWait, 20));
-      }
-    }
+    let release: (() => Promise<void>) | undefined;
     try {
+      release = await lockfile.lock(this.options.dataDirectory, {
+        lockfilePath: this.lockPath,
+        realpath: false,
+        stale: 10_000,
+        update: 2_000,
+        retries: { retries: 100, factor: 1.2, minTimeout: 10, maxTimeout: 100 },
+      });
       return operation();
-    } finally {
-      closeSync(descriptor);
-      unlinkSync(this.lockPath);
-    }
-  }
-
-  private removeStaleLock(): void {
-    let owner: number;
-    try {
-      const stat = lstatSync(this.lockPath);
-      if (!stat.isFile() || stat.isSymbolicLink()) {
-        throw new SecretStoreError('SECRET_VAULT_INSECURE_PERMISSIONS', 'The MCP Riksa vault lock is not a regular file');
-      }
-      if (process.platform !== 'win32' && process.getuid !== undefined && stat.uid !== process.getuid()) {
-        throw new SecretStoreError('SECRET_VAULT_INSECURE_PERMISSIONS', 'The MCP Riksa vault lock is not owned by the current OS user');
-      }
-      owner = Number.parseInt(readFileSync(this.lockPath, 'utf8'), 10);
-      if (!Number.isInteger(owner) || owner <= 0) return;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      if ((error as NodeJS.ErrnoException).code === 'ELOCKED') {
+        throw new SecretStoreError('SECRET_BACKEND_UNAVAILABLE', 'The encrypted MCP Riksa vault is busy in another process', { cause: error });
+      }
       throw error;
-    }
-    try {
-      process.kill(owner, 0);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') return;
-      try { unlinkSync(this.lockPath); } catch (unlinkError) {
-        if ((unlinkError as NodeJS.ErrnoException).code !== 'ENOENT') throw unlinkError;
-      }
+    } finally {
+      await release?.();
     }
   }
 
@@ -386,6 +350,7 @@ export class EncryptedFileSecretBackend implements ManagedSecretBackend {
       writeFileSync(descriptor, content);
       fsyncSync(descriptor);
     } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw error;
       throw new SecretStoreError('SECRET_VAULT_INSECURE_PERMISSIONS', 'Unable to create the MCP Riksa vault key securely', { cause: error });
     } finally {
       if (descriptor !== undefined) closeSync(descriptor);
