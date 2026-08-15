@@ -159,6 +159,22 @@ describe('concrete workbench runtime', () => {
     await expect(runtime.deleteSecret(connectedSecret.id, true)).resolves.toMatchObject({ deleted: true });
     await runtime.close();
   });
+  test('rejects OAuth reauthorization while a server call is active', async () => {
+    const { runtime } = createRuntime();
+    await runtime.addServer({
+      id: 'oauth-active', name: 'OAuth active', transport: 'http', url: 'http://127.0.0.1:3000/mcp',
+      headerEnv: {}, headers: {}, oauth: { scopes: [], timeoutMs: 30_000 }, allowUnsafeEndpoint: false,
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const activeCall = runtime['withConfigUse'](['server:oauth-active'], async () => gate);
+
+    await expect(runtime.beginOAuth('oauth-active')).rejects.toMatchObject({ status: 409 });
+    release();
+    await activeCall;
+    await runtime.close();
+  });
+
   test('waits for active configuration mutations before closing storage', async () => {
     const { runtime } = createRuntime();
     let release!: () => void;

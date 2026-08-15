@@ -637,16 +637,19 @@ export class WorkbenchRuntime {
     if (config.staticAuth !== undefined) throw new WorkbenchError('OAuth and static authorization are mutually exclusive', 400);
     if (config.oauth === undefined) throw new WorkbenchError('OAuth is not configured for this server', 400);
     const oauth = config.oauth;
-    return this.withConfigUse([`server:${id}`], () => this.oauth.begin({
-      id,
-      serverUrl: config.url,
-      callbackUrl: this.options.callbackUrl,
-      scopes: oauth.scopes,
-      timeoutMs: oauth.timeoutMs,
-      ...(oauth.clientId === undefined ? {} : { clientId: oauth.clientId }),
-      ...(oauth.clientSecretEnv === undefined ? {} : { clientSecretEnv: oauth.clientSecretEnv }),
-      ...(oauth.clientSecret === undefined ? {} : { clientSecret: oauth.clientSecret }),
-    }));
+    return this.withConfigMutation(`server:${id}`, async () => {
+      await this.mcp.disconnect(id);
+      return this.oauth.begin({
+        id,
+        serverUrl: config.url,
+        callbackUrl: this.options.callbackUrl,
+        scopes: oauth.scopes,
+        timeoutMs: oauth.timeoutMs,
+        ...(oauth.clientId === undefined ? {} : { clientId: oauth.clientId }),
+        ...(oauth.clientSecretEnv === undefined ? {} : { clientSecretEnv: oauth.clientSecretEnv }),
+        ...(oauth.clientSecret === undefined ? {} : { clientSecret: oauth.clientSecret }),
+      });
+    });
   }
 
   async oauthCallback(parameters: Record<string, string>) { return this.oauth.callbackByState(parameters); }
