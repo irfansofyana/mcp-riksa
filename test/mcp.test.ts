@@ -64,6 +64,14 @@ describe('MCP secret references', () => {
       })).toThrow(/environment variable name/i);
     }
   });
+
+  test('rejects duplicate targets across stdio environment maps', () => {
+    expect(() => serverConfigSchema.parse({
+      id: 'stdio', name: 'stdio', transport: 'stdio', command: 'node',
+      envRefs: { API_TOKEN: 'LEGACY_TOKEN' },
+      env: { api_token: { source: 'env', name: 'MANAGED_TOKEN' } },
+    })).toThrow(/duplicate environment target/i);
+  });
 });
 
 describe('real sample MCP server over stdio', () => {

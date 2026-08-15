@@ -5,7 +5,7 @@ export const httpHeaderNameSchema = z.string().regex(
   'Invalid HTTP header name',
 );
 
-export function findDuplicateHttpHeaderName(...maps: ReadonlyArray<Record<string, unknown>>): string | undefined {
+export function findCaseInsensitiveDuplicateKey(...maps: ReadonlyArray<Record<string, unknown>>): string | undefined {
   const seen = new Set<string>();
   for (const map of maps) {
     for (const name of Object.keys(map)) {

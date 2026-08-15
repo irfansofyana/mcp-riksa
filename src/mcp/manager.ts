@@ -6,7 +6,7 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { Agent, fetch as undiciFetch } from 'undici';
 import { z } from 'zod';
 import { environmentVariableNameSchema } from '../core/environment.js';
-import { findDuplicateHttpHeaderName, httpHeaderNameSchema } from '../core/http.js';
+import { findCaseInsensitiveDuplicateKey, httpHeaderNameSchema } from '../core/http.js';
 import { redact, registerSecretValue } from '../core/redaction.js';
 import { assertResolvedSecretValue, secretReferenceSchema, type SecretPurpose, type SecretResolver } from '../secrets/types.js';
 import { createSecretResolutionLease } from '../secrets/lease.js';
@@ -44,8 +44,14 @@ const httpConfigSchema = z.strictObject({
   }).optional(),
 });
 export const serverConfigSchema = z.discriminatedUnion('transport', [stdioConfigSchema, httpConfigSchema]).superRefine((config, context) => {
-  if (config.transport !== 'http') return;
-  const duplicateHeader = findDuplicateHttpHeaderName(config.headerEnv, config.headers);
+  if (config.transport === 'stdio') {
+    const duplicateTarget = findCaseInsensitiveDuplicateKey(config.envRefs, config.env);
+    if (duplicateTarget !== undefined) {
+      context.addIssue({ code: 'custom', path: ['env'], message: `Duplicate environment target: ${duplicateTarget}` });
+    }
+    return;
+  }
+  const duplicateHeader = findCaseInsensitiveDuplicateKey(config.headerEnv, config.headers);
   if (duplicateHeader !== undefined) {
     context.addIssue({ code: 'custom', path: ['headers'], message: `Duplicate HTTP header name: ${duplicateHeader}` });
   }
