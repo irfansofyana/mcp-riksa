@@ -13,7 +13,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { createCipheriv, createDecipheriv, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import lockfile from 'proper-lockfile';
 import { z } from 'zod';
 import { registerSecretValue, unregisterSecretValue } from '../core/redaction.js';
@@ -185,8 +185,12 @@ export class EncryptedFileSecretBackend implements ManagedSecretBackend {
       if (existsSync(this.vaultPath)) {
         this.assertRegularSecureFile(this.vaultPath, 'vault');
         unlinkSync(this.vaultPath);
+        this.fsyncDirectory(dirname(this.vaultPath));
       }
-      if (rotateKey) unlinkSync(this.keyPath);
+      if (rotateKey) {
+        unlinkSync(this.keyPath);
+        this.fsyncDirectory(dirname(this.keyPath));
+      }
     });
   }
 
@@ -313,6 +317,7 @@ export class EncryptedFileSecretBackend implements ManagedSecretBackend {
           const value = readFileSync(this.keyPath);
           if (value.length === KEY_BYTES) {
             this.assertRegularSecureFile(this.keyPath, 'key');
+            this.fsyncDirectory(dirname(this.keyPath));
             this.key = Buffer.from(value);
             value.fill(0);
             return this.key;
@@ -328,7 +333,13 @@ export class EncryptedFileSecretBackend implements ManagedSecretBackend {
   }
 
   private ensureSecureDirectory(path: string): void {
+    const created: string[] = [];
+    for (let candidate = path; !existsSync(candidate); candidate = dirname(candidate)) {
+      created.push(candidate);
+      if (dirname(candidate) === candidate) break;
+    }
     mkdirSync(path, { recursive: true, mode: 0o700 });
+    for (const directory of created) this.fsyncDirectory(dirname(directory));
     const stat = lstatSync(path);
     if (stat.isSymbolicLink() || !stat.isDirectory()) {
       throw new SecretStoreError('SECRET_VAULT_INSECURE_PERMISSIONS', 'A vault directory is not a regular directory');
@@ -356,13 +367,30 @@ export class EncryptedFileSecretBackend implements ManagedSecretBackend {
     }
   }
 
+  private fsyncDirectory(path: string): void {
+    if (process.platform === 'win32') return;
+    let descriptor: number | undefined;
+    try {
+      descriptor = openSync(path, constants.O_RDONLY | NOFOLLOW);
+      fsyncSync(descriptor);
+    } catch (error) {
+      throw new SecretStoreError('SECRET_BACKEND_UNAVAILABLE', 'Unable to durably persist the MCP Riksa vault directory entry', { cause: error });
+    } finally {
+      if (descriptor !== undefined) closeSync(descriptor);
+    }
+  }
+
   private writeExclusive(path: string, content: Buffer): void {
     let descriptor: number | undefined;
     try {
       descriptor = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NOFOLLOW, 0o600);
       writeFileSync(descriptor, content);
       fsyncSync(descriptor);
+      closeSync(descriptor);
+      descriptor = undefined;
+      this.fsyncDirectory(dirname(path));
     } catch (error) {
+      if (error instanceof SecretStoreError) throw error;
       if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw error;
       throw new SecretStoreError('SECRET_VAULT_INSECURE_PERMISSIONS', 'Unable to create the MCP Riksa vault key securely', { cause: error });
     } finally {
@@ -380,7 +408,7 @@ export class EncryptedFileSecretBackend implements ManagedSecretBackend {
       closeSync(descriptor);
       descriptor = undefined;
       renameSync(temporary, path);
-      if (process.platform !== 'win32') chmodSync(path, 0o600);
+      this.fsyncDirectory(dirname(path));
     } finally {
       if (descriptor !== undefined) closeSync(descriptor);
       if (existsSync(temporary)) unlinkSync(temporary);
