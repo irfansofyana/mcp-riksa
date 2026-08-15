@@ -73,6 +73,20 @@ test('rejects provider API-key header collisions', () => {
   }
 });
 
+test('rejects fixed Anthropic-compatible header collisions via headers or headerEnv', () => {
+  for (const input of [
+    { headers: { 'Content-Type': { source: 'env' as const, name: 'CUSTOM_CONTENT_TYPE' } } },
+    { headers: { 'Anthropic-Version': { source: 'env' as const, name: 'CUSTOM_ANTHROPIC_VERSION' } } },
+    { headerEnv: { 'content-type': 'CUSTOM_CONTENT_TYPE' } },
+    { headerEnv: { 'anthropic-version': 'CUSTOM_ANTHROPIC_VERSION' } },
+  ]) {
+    expect(() => providerConfigSchema.parse({
+      id: 'safe', name: 'Safe', type: 'anthropic-compatible', baseUrl: 'http://127.0.0.1:4000/v1',
+      models: { default: { id: 'test' } }, ...input,
+    })).toThrow(/conflicts with the fixed anthropic-compatible header/i);
+  }
+});
+
 test('rejects inline secrets in provider header references', () => {
   expect(() => providerConfigSchema.parse({
     id: 'safe', name: 'Safe', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1',

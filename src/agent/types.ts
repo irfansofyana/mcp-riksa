@@ -39,6 +39,18 @@ export const providerConfigSchema = z.strictObject({
       });
     }
   }
+  if (config.type === 'anthropic-compatible') {
+    const fixedHeaders = ['content-type', 'anthropic-version'];
+    const configuredHeaders = [...Object.keys(config.headerEnv), ...Object.keys(config.headers)];
+    const fixedHeaderCollision = configuredHeaders.find((header) => fixedHeaders.includes(header.toLowerCase()));
+    if (fixedHeaderCollision !== undefined) {
+      context.addIssue({
+        code: 'custom',
+        path: ['headers'],
+        message: `${fixedHeaderCollision} conflicts with the fixed Anthropic-compatible header`,
+      });
+    }
+  }
 });
 
 export type ProviderConfig = z.infer<typeof providerConfigSchema>;
