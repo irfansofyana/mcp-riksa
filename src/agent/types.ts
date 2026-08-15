@@ -21,6 +21,9 @@ export const providerConfigSchema = z.strictObject({
   apiKey: secretReferenceSchema.optional(),
   headers: z.record(httpHeaderNameSchema, secretReferenceSchema).optional().default({}),
 }).superRefine((config, context) => {
+  if (config.apiKey !== undefined && config.apiKeyEnv !== undefined) {
+    context.addIssue({ code: 'custom', path: ['apiKey'], message: 'apiKey and apiKeyEnv are mutually exclusive' });
+  }
   const duplicateHeader = findCaseInsensitiveDuplicateKey(config.headerEnv, config.headers);
   if (duplicateHeader !== undefined) {
     context.addIssue({ code: 'custom', path: ['headers'], message: `Duplicate HTTP header name: ${duplicateHeader}` });

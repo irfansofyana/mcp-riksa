@@ -116,6 +116,17 @@ describe('secret reference integration', () => {
     })).toThrow(/duplicate http header name/i);
   });
 
+  test('rejects simultaneous OAuth client-secret sources', () => {
+    expect(() => serverConfigSchema.parse({
+      id: 'oauth-duplicate', name: 'OAuth duplicate', transport: 'http', url: 'https://example.test/mcp', headers: {},
+      oauth: {
+        scopes: [], timeoutMs: 120_000, clientId: 'client', clientSecretEnv: 'LEGACY_CLIENT_SECRET',
+        clientSecret: { source: 'env', name: 'MANAGED_CLIENT_SECRET' },
+      },
+      allowUnsafeEndpoint: false,
+    })).toThrow(/clientSecret and clientSecretEnv are mutually exclusive/i);
+  });
+
   test('rejects ambiguous OAuth and static authorization combinations', () => {
     expect(() => serverConfigSchema.parse({
       id: 'ambiguous', name: 'Ambiguous', transport: 'http', url: 'https://example.test/mcp', headers: {},
