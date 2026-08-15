@@ -4,6 +4,7 @@ import { SecretStoreError } from './store-error.js';
 import {
   createSecretSchema,
   assertResolvedSecretValue,
+  assertSecretValueForPurposes,
   SECRET_VALUE_MIN_LENGTH,
   SECRET_VALUE_TOO_SHORT_MESSAGE,
   secretPurposeSchema,
@@ -61,6 +62,14 @@ export class SecretStore {
   async replace(id: string, value: string): Promise<SecretMetadata> {
     if (value.length < SECRET_VALUE_MIN_LENGTH) throw new SecretStoreError('SECRET_INVALID', SECRET_VALUE_TOO_SHORT_MESSAGE);
     const backend = await this.findBackend(id);
+    const existing = (await backend.list()).find((entry) => entry.id === id);
+    if (existing) {
+      try {
+        assertSecretValueForPurposes(value, existing.purposes);
+      } catch (error) {
+        throw new SecretStoreError('SECRET_INVALID', error instanceof Error ? error.message : String(error), { cause: error });
+      }
+    }
     return backend.replace(id, value);
   }
 

@@ -95,6 +95,48 @@ describe('SecretStore', () => {
     ).resolves.toBe(replacement);
   });
 
+  test('rejects secret values that are invalid for their declared header purposes', async () => {
+    const store = new SecretStore();
+    for (const purposes of [['provider-api-key'], ['provider-header'], ['mcp-header']] as const) {
+      for (const value of ['with\rcarriage', 'with\nnewline', 'with\0nul']) {
+        await expect(
+          store.create({ backend: 'session', label: 'Bad header secret', purposes: [...purposes], value }),
+        ).rejects.toMatchObject({ code: 'SECRET_INVALID', message: /must not contain CR, LF, or NUL/i });
+      }
+    }
+    await store.close();
+  });
+
+  test('rejects stdio-env secret values containing NUL', async () => {
+    const store = new SecretStore();
+    await expect(
+      store.create({ backend: 'session', label: 'Bad env secret', purposes: ['stdio-env'], value: 'with\0nul' }),
+    ).rejects.toMatchObject({ code: 'SECRET_INVALID', message: /must not contain NUL/i });
+    // CR/LF are structurally valid for environment values, so only NUL is rejected.
+    await expect(
+      store.create({ backend: 'session', label: 'Multiline env', purposes: ['stdio-env'], value: 'line-one\nline-two' }),
+    ).resolves.toMatchObject({ configured: true });
+    await store.close();
+  });
+
+  test('rejects a replacement value that is invalid for the existing purposes', async () => {
+    const store = new SecretStore();
+    const metadata = await store.create({
+      backend: 'session',
+      label: 'Header secret',
+      purposes: ['mcp-header'],
+      value: secretValue,
+    });
+
+    await expect(
+      store.replace(metadata.id, 'bad\nheader-value'),
+    ).rejects.toMatchObject({ code: 'SECRET_INVALID', message: /must not contain CR, LF, or NUL/i });
+    await expect(
+      store.resolve({ source: 'session', id: metadata.id }, 'mcp-header'),
+    ).resolves.toBe(secretValue);
+    await store.close();
+  });
+
   test('enforces purpose binding and clears session secrets', async () => {
     const store = new SecretStore();
     const clearableValue = 'session-clear-lifecycle-61f4';
