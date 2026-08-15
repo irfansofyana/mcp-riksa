@@ -7,6 +7,7 @@ import { Agent, fetch as undiciFetch } from 'undici';
 import { z } from 'zod';
 import { environmentVariableNameSchema } from '../core/environment.js';
 import { redact, registerSecretValue } from '../core/redaction.js';
+import { secretReferenceSchema, type SecretPurpose, type SecretResolver } from '../secrets/types.js';
 import { createSafeLookup, validateHttpEndpoint } from './validation.js';
 
 const baseConfig = { id: z.string().min(1), name: z.string().min(1) };
@@ -16,23 +17,36 @@ const stdioConfigSchema = z.strictObject({
   command: z.string().min(1),
   args: z.array(z.string()).default([]),
   cwd: z.string().min(1).optional(),
-  envRefs: z.record(z.string(), environmentVariableNameSchema).default({}),
+  envRefs: z.record(z.string(), environmentVariableNameSchema).optional().default({}),
+  env: z.record(z.string().min(1), secretReferenceSchema).optional().default({}),
 });
 const httpConfigSchema = z.strictObject({
   ...baseConfig,
   transport: z.literal('http'),
   url: z.string().min(1),
-  headerEnv: z.record(z.string(), environmentVariableNameSchema).default({}),
+  headerEnv: z.record(z.string(), environmentVariableNameSchema).optional().default({}),
+  headers: z.record(z.string().min(1), secretReferenceSchema).optional().default({}),
+  staticAuth: z.strictObject({
+    header: z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/, 'Invalid HTTP header name').default('Authorization'),
+    scheme: z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/, 'Invalid authorization scheme').default('Bearer'),
+    credential: secretReferenceSchema,
+  }).optional(),
   allowUnsafeEndpoint: z.boolean().default(false),
   oauth: z.strictObject({
     scopes: z.array(z.string().min(1)).default([]),
     clientId: z.string().min(1).optional(),
     clientSecretEnv: environmentVariableNameSchema.optional(),
+    clientSecret: secretReferenceSchema.optional(),
     timeoutMs: z.number().int().min(1).max(300_000).default(120_000),
   }).optional(),
 });
-export const serverConfigSchema = z.discriminatedUnion('transport', [stdioConfigSchema, httpConfigSchema]);
+export const serverConfigSchema = z.discriminatedUnion('transport', [stdioConfigSchema, httpConfigSchema]).superRefine((config, context) => {
+  if (config.transport === 'http' && config.oauth !== undefined && config.staticAuth !== undefined) {
+    context.addIssue({ code: 'custom', message: 'OAuth and static authorization are mutually exclusive', path: ['staticAuth'] });
+  }
+});
 export type ServerConfig = z.infer<typeof serverConfigSchema>;
+export type ServerConfigInput = z.input<typeof serverConfigSchema>;
 
 type Connection = {
   client: Client;
@@ -42,19 +56,58 @@ type Connection = {
   dispatcher?: Agent;
 };
 
-function resolveEnvironment(references: Record<string, string>): Record<string, string> {
+const resolveEnvironmentSecret: SecretResolver = async (reference) => {
+  if (reference.source !== 'env') throw new Error(`Secret backend ${reference.source} is not available in this context`);
+  const value = process.env[reference.name];
+  if (value === undefined) throw new Error(`Environment variable ${reference.name} is not set`);
+  registerSecretValue(value);
+  return value;
+};
+
+export async function resolveReferenceMap(
+  references: Record<string, z.infer<typeof secretReferenceSchema>>,
+  purpose: SecretPurpose,
+  resolveSecret: SecretResolver,
+): Promise<Record<string, string>> {
   const resolved: Record<string, string> = {};
-  for (const [target, source] of Object.entries(references)) {
-    const value = process.env[source];
-    if (value === undefined) throw new Error(`Environment variable ${source} is not set`);
-    registerSecretValue(value);
-    resolved[target] = value;
+  for (const [target, reference] of Object.entries(references)) {
+    resolved[target] = await resolveSecret(reference, purpose);
   }
   return resolved;
 }
 
+async function resolveLegacyEnvironment(references: Record<string, string>, purpose: SecretPurpose, resolveSecret: SecretResolver): Promise<Record<string, string>> {
+  return resolveReferenceMap(
+    Object.fromEntries(Object.entries(references).map(([target, name]) => [target, { source: 'env' as const, name }])),
+    purpose,
+    resolveSecret,
+  );
+}
+
+export async function resolveHttpHeaders(
+  config: Extract<ServerConfig, { transport: 'http' }>,
+  resolveSecret: SecretResolver,
+): Promise<Record<string, string>> {
+  const headers = {
+    ...await resolveLegacyEnvironment(config.headerEnv, 'mcp-header', resolveSecret),
+    ...await resolveReferenceMap(config.headers, 'mcp-header', resolveSecret),
+  };
+  if (config.staticAuth !== undefined) {
+    if (Object.keys(headers).some((header) => header.toLowerCase() === config.staticAuth!.header.toLowerCase())) {
+      throw new Error(`Static authorization header ${config.staticAuth.header} conflicts with configured headers`);
+    }
+    const credential = await resolveSecret(config.staticAuth.credential, 'mcp-header');
+    headers[config.staticAuth.header] = `${config.staticAuth.scheme} ${credential}`;
+  }
+  return headers;
+}
+
 export class McpManager {
   private readonly connections = new Map<string, Connection>();
+  private readonly connectionTasks = new Map<string, Promise<ReturnType<McpManager['inspect']>>>();
+  private closing = false;
+
+  constructor(private readonly resolveSecret: SecretResolver = resolveEnvironmentSecret) {}
 
   get connectionCount(): number {
     return this.connections.size;
@@ -65,17 +118,42 @@ export class McpManager {
   }
 
   async connect(input: unknown, oauthProvider?: OAuthClientProvider): Promise<ReturnType<McpManager['inspect']>> {
+    const parsed = serverConfigSchema.parse(input);
+    if (this.closing) throw new Error('MCP manager is closing');
+    const previous = this.connectionTasks.get(parsed.id);
+    if (previous) {
+      await previous.catch(() => undefined);
+      return this.connect(parsed, oauthProvider);
+    }
+    if (this.closing) throw new Error('MCP manager is closing');
+    const task = this.connectNow(parsed, oauthProvider);
+    this.connectionTasks.set(parsed.id, task);
+    try {
+      return await task;
+    } finally {
+      if (this.connectionTasks.get(parsed.id) === task) this.connectionTasks.delete(parsed.id);
+    }
+  }
+
+  private async connectNow(input: unknown, oauthProvider?: OAuthClientProvider): Promise<ReturnType<McpManager['inspect']>> {
     const config = serverConfigSchema.parse(input);
+    if (oauthProvider !== undefined && config.transport === 'http' && config.staticAuth !== undefined) {
+      throw new Error('OAuth and static authorization are mutually exclusive');
+    }
     if (this.connections.has(config.id)) await this.disconnect(config.id);
     const client = new Client({ name: 'mcp-riksa', version: '0.1.0' }, { capabilities: {} });
-    let transport: Transport;
+    let transport: Transport | undefined;
     let dispatcher: Agent | undefined;
-    if (config.transport === 'stdio') {
+    try {
+      if (config.transport === 'stdio') {
       transport = new StdioClientTransport({
         command: config.command,
         args: config.args,
         ...(config.cwd === undefined ? {} : { cwd: config.cwd }),
-        ...(Object.keys(config.envRefs).length === 0 ? {} : { env: resolveEnvironment(config.envRefs) }),
+        ...((Object.keys(config.envRefs).length === 0 && Object.keys(config.env).length === 0) ? {} : { env: {
+          ...await resolveLegacyEnvironment(config.envRefs, 'stdio-env', this.resolveSecret),
+          ...await resolveReferenceMap(config.env, 'stdio-env', this.resolveSecret),
+        } }),
         stderr: 'inherit',
       });
     } else {
@@ -84,7 +162,7 @@ export class McpManager {
       const guardedDispatcher = dispatcher;
       transport = new StreamableHTTPClientTransport(url, {
         ...(oauthProvider === undefined ? {} : { authProvider: oauthProvider }),
-        requestInit: { headers: resolveEnvironment(config.headerEnv) },
+        requestInit: { headers: await resolveHttpHeaders(config, this.resolveSecret) },
         ...(dispatcher === undefined ? {} : {
           fetch: (input, init) => (undiciFetch as unknown as (
             target: string | URL,
@@ -92,8 +170,8 @@ export class McpManager {
           ) => Promise<Response>)(input, { ...init, dispatcher: guardedDispatcher! }),
         }),
       });
-    }
-    try {
+      }
+      if (!transport) throw new Error('MCP transport was not initialized');
       await client.connect(transport);
       const { tools } = await client.listTools();
       this.connections.set(config.id, {
@@ -105,7 +183,7 @@ export class McpManager {
       });
       return this.inspect(config.id);
     } catch (error) {
-      await transport.close().catch(() => undefined);
+      await transport?.close().catch(() => undefined);
       if (config.transport === 'http' && dispatcher !== undefined) await dispatcher.close().catch(() => undefined);
       throw error;
     }
@@ -159,6 +237,8 @@ export class McpManager {
   }
 
   async closeAll(): Promise<void> {
+    this.closing = true;
+    await Promise.allSettled([...this.connectionTasks.values()]);
     await Promise.all([...this.connections.keys()].map((id) => this.disconnect(id)));
   }
 

@@ -50,7 +50,7 @@ describe('headless CLI', () => {
     directories.push(directory);
     const reports = join(directory, 'reports');
     const config = join(directory, 'config.yaml');
-    writeFileSync(config, `version: 1\nservers:\n  - id: sample\n    name: Sample\n    transport: stdio\n    command: ${JSON.stringify(process.execPath)}\n    args:\n      - ${JSON.stringify(tsxCli)}\n      - ${JSON.stringify(resolve('examples/sample-mcp-server.ts'))}\nproviders: []\n`);
+    writeFileSync(config, `version: 2\nservers:\n  - id: sample\n    name: Sample\n    transport: stdio\n    command: ${JSON.stringify(process.execPath)}\n    args:\n      - ${JSON.stringify(tsxCli)}\n      - ${JSON.stringify(resolve('examples/sample-mcp-server.ts'))}\nproviders: []\n`);
     const result = await execute([
       'run', resolve('examples/sample-suite.yaml'), '--config', config, '--data-dir', join(directory, 'data'), '--output', reports,
     ]);

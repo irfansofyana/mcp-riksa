@@ -1,8 +1,9 @@
 import { z } from 'zod';
 import { Agent, fetch as undiciFetch } from 'undici';
 import type { ProviderAdapter, ProviderMessage } from './types.js';
-import { providerConfigSchema, resolveApiKey, resolveModel, resolveProviderHeaders } from './types.js';
+import { providerConfigSchema, resolveApiKey, resolveModel, resolveModelPricing, resolveProviderHeaders } from './types.js';
 import { createSafeLookup } from '../mcp/validation.js';
+import type { SecretResolver } from '../secrets/types.js';
 
 const contentSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('text'), text: z.string() }).passthrough(),
@@ -51,19 +52,23 @@ function messages(input: ProviderMessage[]) {
   });
 }
 
-export function createAnthropicAdapter(input: unknown): ProviderAdapter {
+export function createAnthropicAdapter(input: unknown, resolveSecret: SecretResolver): ProviderAdapter {
   const config = providerConfigSchema.parse(input);
   const dispatcher = new Agent({ connect: { lookup: createSafeLookup() } });
   const endpoint = `${config.baseUrl.replace(/\/$/, '')}/messages`;
   return {
     id: config.id,
-    pricing: config.pricing,
+    pricingFor: (alias) => resolveModelPricing(config, alias),
     async complete(request) {
+      const [providerHeaders, apiKey] = await Promise.all([
+        resolveProviderHeaders(config, resolveSecret),
+        resolveApiKey(config, resolveSecret),
+      ]);
       const headers = {
         'content-type': 'application/json',
         'anthropic-version': '2023-06-01',
-        ...resolveProviderHeaders(config),
-        ...(resolveApiKey(config) === undefined ? {} : { 'x-api-key': resolveApiKey(config)! }),
+        ...providerHeaders,
+        ...(apiKey === undefined ? {} : { 'x-api-key': apiKey }),
       };
       if (request.onTextDelta) {
         const streamingResponse = await (undiciFetch as unknown as (

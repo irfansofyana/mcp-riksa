@@ -2,8 +2,9 @@ import OpenAI from 'openai';
 import { Agent, fetch as undiciFetch } from 'undici';
 import { z } from 'zod';
 import type { ProviderAdapter, ProviderMessage, ProviderTool } from './types.js';
-import { providerConfigSchema, resolveApiKey, resolveModel, resolveProviderHeaders } from './types.js';
+import { providerConfigSchema, resolveApiKey, resolveModel, resolveModelPricing, resolveProviderHeaders } from './types.js';
 import { createSafeLookup } from '../mcp/validation.js';
+import type { SecretResolver } from '../secrets/types.js';
 
 const responseSchema = z.object({
   choices: z.array(z.object({
@@ -47,22 +48,27 @@ function tools(input: ProviderTool[]): OpenAI.Chat.Completions.ChatCompletionToo
   }));
 }
 
-export function createOpenAIAdapter(input: unknown): ProviderAdapter {
+export function createOpenAIAdapter(input: unknown, resolveSecret: SecretResolver): ProviderAdapter {
   const config = providerConfigSchema.parse(input);
   const dispatcher = new Agent({ connect: { lookup: createSafeLookup() } });
   const safeFetch = ((target: string | URL | Request, init?: RequestInit) => (
     undiciFetch as unknown as (input: string | URL | Request, options: RequestInit & { dispatcher: Agent }) => Promise<Response>
   )(target, { ...init, dispatcher })) as typeof fetch;
-  const client = new OpenAI({
+  let clientPromise: Promise<OpenAI> | undefined;
+  const getClient = () => clientPromise ??= Promise.all([
+    resolveApiKey(config, resolveSecret),
+    resolveProviderHeaders(config, resolveSecret),
+  ]).then(([apiKey, defaultHeaders]) => new OpenAI({
     baseURL: config.baseUrl,
-    apiKey: resolveApiKey(config) ?? 'local-no-key',
-    defaultHeaders: resolveProviderHeaders(config),
+    apiKey: apiKey ?? 'local-no-key',
+    defaultHeaders,
     fetch: safeFetch,
-  });
+  }));
   return {
     id: config.id,
-    pricing: config.pricing,
+    pricingFor: (alias) => resolveModelPricing(config, alias),
     async complete(request) {
+      const client = await getClient();
       if (request.onTextDelta) {
         const stream = await client.chat.completions.create(
           {
@@ -157,6 +163,7 @@ export function createOpenAIAdapter(input: unknown): ProviderAdapter {
       };
     },
     async listModels() {
+      const client = await getClient();
       const page = await client.models.list();
       return page.data.map((model) => model.id);
     },

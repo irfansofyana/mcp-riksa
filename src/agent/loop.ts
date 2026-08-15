@@ -29,8 +29,9 @@ export type AgentResult = Observation & {
   stopReason: 'complete' | 'cancelled' | 'max_turns' | 'max_tool_calls' | 'max_time' | 'max_cost';
 };
 
-function estimatedCost(adapter: ProviderAdapter, input: number, output: number): number {
-  return (input * adapter.pricing.inputPerMillion + output * adapter.pricing.outputPerMillion) / 1_000_000;
+function estimatedCost(adapter: ProviderAdapter, model: string, input: number, output: number): number {
+  const pricing = adapter.pricingFor(model);
+  return (input * pricing.inputPerMillion + output * pricing.outputPerMillion) / 1_000_000;
 }
 
 function isAbortFailure(error: unknown, signal: AbortSignal): boolean {
@@ -131,7 +132,8 @@ export async function runAgent(
       tokens.input += response.usage.input;
       tokens.output += response.usage.output;
       tokens.total += response.usage.total;
-      costUsd += estimatedCost(dependencies.provider, response.usage.input, response.usage.output);
+      const turnCost = estimatedCost(dependencies.provider, input.model, response.usage.input, response.usage.output);
+      costUsd += turnCost;
       const turnDurationMs = Date.now() - turnStarted;
       events.push(event(input.serverId, 'model_turn', { turn: turn + 1, response: response.raw, usage: response.usage }, turnDurationMs));
       output = response.text;

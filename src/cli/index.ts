@@ -17,26 +17,26 @@ import { redact } from '../core/redaction.js';
 import type { RunResult } from '../core/types.js';
 
 const configurationSchema = z.strictObject({
-  version: z.literal(1),
+  version: z.literal(2),
   servers: z.array(serverConfigSchema).default([]),
   providers: z.array(providerConfigSchema).default([]),
 });
 
-type WorkbenchConfiguration = { version: 1; servers: ServerConfig[]; providers: ProviderConfig[] };
+type WorkbenchConfiguration = { version: 2; servers: ServerConfig[]; providers: ProviderConfig[] };
 
 function loadConfiguration(path?: string): WorkbenchConfiguration {
-  if (!path) return { version: 1, servers: [], providers: [] };
+  if (!path) return { version: 2, servers: [], providers: [] };
   return configurationSchema.parse(parseYaml(readFileSync(resolve(path), 'utf8'))) as WorkbenchConfiguration;
 }
 
 function sampleConfiguration(): ServerConfig {
   const compiled = resolve('dist/examples/sample-mcp-server.js');
   if (existsSync(compiled)) {
-    return { id: 'sample', name: 'Deterministic sample', transport: 'stdio', command: process.execPath, args: [compiled], envRefs: {} };
+    return { id: 'sample', name: 'Deterministic sample', transport: 'stdio', command: process.execPath, args: [compiled], envRefs: {}, env: {} };
   }
   return {
     id: 'sample', name: 'Deterministic sample', transport: 'stdio', command: process.execPath,
-    args: [resolve('node_modules/tsx/dist/cli.mjs'), resolve('examples/sample-mcp-server.ts')], envRefs: {},
+    args: [resolve('node_modules/tsx/dist/cli.mjs'), resolve('examples/sample-mcp-server.ts')], envRefs: {}, env: {},
   };
 }
 

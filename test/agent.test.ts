@@ -146,10 +146,11 @@ function config(type: ProviderConfig['type'], segment = type.startsWith('openai'
     name: segment,
     type,
     baseUrl: `${baseUrl}/${segment}/v1`,
-    models: { default: 'test-model' },
+    models: { default: { id: 'test-model', pricing: { inputPerMillion: 1, outputPerMillion: 2 } } },
     apiKeyEnv: 'TEST_PROVIDER_SECRET',
     headerEnv: { 'x-private-provider': 'TEST_PROVIDER_SECRET' },
-    pricing: { inputPerMillion: 1, outputPerMillion: 2 },
+    headers: {},
+
   };
 }
 
@@ -358,8 +359,29 @@ test('rejects malformed compatibility responses with a precise error', async () 
 });
 
 function scriptedAdapter(script: ProviderAdapter['complete']): ProviderAdapter {
-  return { id: 'scripted', pricing: { inputPerMillion: 1_000_000, outputPerMillion: 1_000_000 }, complete: script };
+  return { id: 'scripted', pricingFor: () => ({ inputPerMillion: 1_000_000, outputPerMillion: 1_000_000 }), complete: script };
 }
+
+test('prices usage from the selected model alias', async () => {
+  const provider = {
+    id: 'model-priced',
+
+    pricingFor: (alias: string) => alias === 'cheap'
+      ? { inputPerMillion: 0.15, outputPerMillion: 0.6 }
+      : { inputPerMillion: 2.5, outputPerMillion: 10 },
+    complete: async () => ({
+      text: 'done', toolCalls: [], usage: { input: 1_000_000, output: 1_000_000, total: 2_000_000 }, stopReason: 'complete', raw: {},
+    }),
+  };
+  const noTools = { inspect: async () => ({ tools: [] }), call: async () => ({}) };
+  const limits = { maxTurns: 1, maxToolCalls: 0, timeoutMs: 5000 };
+
+  const cheap = await runAgent({ prompt: 'cheap', model: 'cheap', serverId: 'none', limits }, { provider, mcp: noTools });
+  const quality = await runAgent({ prompt: 'quality', model: 'quality', serverId: 'none', limits }, { provider, mcp: noTools });
+
+  expect(cheap.costUsd).toBeCloseTo(0.75);
+  expect(quality.costUsd).toBeCloseTo(12.5);
+});
 
 describe('agent stop boundaries', () => {
   test('stops at max turns', async () => {

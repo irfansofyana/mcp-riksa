@@ -1,20 +1,24 @@
 import { existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync, closeSync, fsyncSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
+import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { createProviderAdapter } from '../agent/providers.js';
 import { conformanceStatus } from '../conformance/model.js';
 import { OfficialConformanceRunner } from '../conformance/runner.js';
 import { CONFORMANCE_RUNNER_VERSION, type ConformanceRunner, type ConformanceSelection } from '../conformance/types.js';
-import { providerConfigSchema, type ProviderConfig, type ProviderMessage } from '../agent/types.js';
+import { providerConfigSchema, type ProviderConfig, type ProviderConfigInput, type ProviderMessage } from '../agent/types.js';
 import { runAgent, type AgentUpdate } from '../agent/loop.js';
 import { event } from '../core/events.js';
 import { redact } from '../core/redaction.js';
 import { parseSuite } from '../core/suite.js';
 import { runSuite } from '../core/runner.js';
 import type { Observation, Suite } from '../core/types.js';
-import { McpManager, serverConfigSchema, type ServerConfig } from '../mcp/manager.js';
+import { McpManager, serverConfigSchema, type ServerConfig, type ServerConfigInput } from '../mcp/manager.js';
 import { OAuthCoordinator } from '../mcp/oauth.js';
 import { validateHttpEndpoint } from '../mcp/validation.js';
+import { EncryptedFileSecretBackend } from '../secrets/encrypted-file.js';
+import { SecretStore, type CreateSecretInput } from '../secrets/store.js';
+import type { SecretReference } from '../secrets/types.js';
 import { ConfigurationRepository } from '../storage/configurations.js';
 import { ConformanceRepository } from '../storage/conformance.js';
 import { ConversationRepository } from '../storage/conversations.js';
@@ -26,6 +30,7 @@ type RuntimeOptions = {
   databasePath: string;
   suiteDirectory: string;
   callbackUrl: string;
+  secretConfigDirectory?: string;
   conformanceRunner?: ConformanceRunner;
 };
 
@@ -46,8 +51,10 @@ export class WorkbenchRuntime {
   private readonly conversations: ConversationRepository;
   private readonly conformance: ConformanceRepository;
   private readonly conformanceRunner: ConformanceRunner;
-  private readonly mcp = new McpManager();
-  private readonly oauth = new OAuthCoordinator();
+  private readonly vault: EncryptedFileSecretBackend;
+  private readonly secrets: SecretStore;
+  private readonly mcp: McpManager;
+  private readonly oauth: OAuthCoordinator;
   private readonly providers = new Map<string, ProviderConfig>();
   private readonly servers = new Map<string, ServerConfig>();
   private readonly suites = new Map<string, { source: string; suite: Suite }>();
@@ -57,9 +64,19 @@ export class WorkbenchRuntime {
   private readonly activeConformanceTasks = new Map<string, Promise<void>>();
   private readonly activeConfigUses = new Map<string, number>();
   private readonly mutatingConfigs = new Set<string>();
+  private readonly activeConfigTasks = new Set<Promise<unknown>>();
+  private closing = false;
 
   constructor(private readonly options: RuntimeOptions) {
     mkdirSync(options.suiteDirectory, { recursive: true });
+    this.vault = new EncryptedFileSecretBackend({
+      dataDirectory: dirname(options.databasePath),
+      configDirectory: options.secretConfigDirectory ?? defaultSecretConfigDirectory(),
+    });
+    this.secrets = new SecretStore({ vaultBackend: this.vault });
+    const resolveSecret = this.secrets.resolve.bind(this.secrets);
+    this.mcp = new McpManager(resolveSecret);
+    this.oauth = new OAuthCoordinator(resolveSecret);
     this.database = openDatabase(options.databasePath);
     this.runs = new RunRepository(this.database);
     this.configurations = new ConfigurationRepository(this.database);
@@ -104,20 +121,85 @@ export class WorkbenchRuntime {
     return {
       loopbackOnly: true,
       callbackUrl: this.options.callbackUrl,
-      providers: [...this.providers.values()].map((config) => ({
+      providers: await Promise.all([...this.providers.values()].map(async (config) => ({
         ...config,
-        apiKeyConfigured: config.apiKeyEnv === undefined ? false : process.env[config.apiKeyEnv] !== undefined,
-        headerStatus: Object.fromEntries(Object.entries(config.headerEnv).map(([header, environment]) => [header, { environment, configured: process.env[environment] !== undefined }])),
-      })),
+        apiKeyConfigured: config.apiKey !== undefined
+          ? await this.secrets.isConfigured(config.apiKey)
+          : config.apiKeyEnv !== undefined && process.env[config.apiKeyEnv] !== undefined,
+        headerStatus: Object.fromEntries(await Promise.all([
+          ...Object.entries(config.headerEnv).map(async ([header, environment]) => [
+            header,
+            { source: 'env', reference: environment, configured: process.env[environment] !== undefined },
+          ] as const),
+          ...Object.entries(config.headers).map(async ([header, reference]) => [
+            header,
+            {
+              source: reference.source,
+              reference: reference.source === 'env' ? reference.name : reference.id,
+              configured: await this.secrets.isConfigured(reference),
+            },
+          ] as const),
+        ])),
+      }))),
     };
+  }
+
+  async listSecrets() {
+    return this.secrets.list();
+  }
+
+  async createSecret(input: CreateSecretInput) {
+    return input.backend === 'vault'
+      ? this.withConfigMutations(['vault:*'], () => this.secrets.create(input))
+      : this.secrets.create(input);
+  }
+
+  async replaceSecret(id: string, value: string) {
+    const references = this.secretReferences(id);
+    return this.withConfigMutations([...references.keys, `secret:${id}`, 'vault:*'], async () => {
+      if (references.active.length > 0) throw new WorkbenchError('Secret is currently in use', 409, references);
+      return this.secrets.replace(id, value);
+    });
+  }
+
+  async deleteSecret(id: string, force = false) {
+    const references = this.secretReferences(id);
+    return this.withConfigMutations([...references.keys, `secret:${id}`, 'vault:*'], async () => {
+      if (references.active.length > 0) throw new WorkbenchError('Secret is currently in use', 409, references);
+      if (!force && (references.providers.length > 0 || references.servers.length > 0)) {
+        throw new WorkbenchError(`Secret ${id} is still referenced`, 409, references);
+      }
+      const deleted = await this.secrets.delete(id);
+      if (!deleted) throw new WorkbenchError(`Secret ${id} not found`, 404);
+      return { id, deleted: true, references, forced: force };
+    });
+  }
+
+  async vaultStatus() {
+    return { ...(await this.vault.status()), keyLocation: displaySecretKeyLocation() };
+  }
+
+  async resetVault(force = false) {
+    const references = this.secretReferences(undefined, 'vault');
+    return this.withConfigMutations([...references.keys, 'vault:*'], async () => {
+      if (references.active.length > 0) throw new WorkbenchError('Vault secrets are currently in use', 409, references);
+      if (!force && (references.providers.length > 0 || references.servers.length > 0)) {
+        throw new WorkbenchError('Vault secrets are still referenced', 409, references);
+      }
+      await this.vault.reset();
+      return { reset: true, references, forced: force };
+    });
   }
 
   async addProvider(input: ProviderConfig) {
     const config = providerConfigSchema.parse(input);
-    await validateHttpEndpoint(config.baseUrl);
-    this.configurations.upsert('provider', config.id, config);
-    this.providers.set(config.id, config);
-    return { id: config.id, name: config.name, type: config.type };
+    return this.withConfigMutations([`provider:${config.id}`, ...this.configSecretLockKeys(config)], async () => {
+      await validateHttpEndpoint(config.baseUrl);
+      await this.assertManagedSecretReferences(config);
+      this.configurations.upsert('provider', config.id, config);
+      this.providers.set(config.id, config);
+      return { id: config.id, name: config.name, type: config.type };
+    });
   }
 
   async seedProvider(input: ProviderConfig) {
@@ -129,21 +211,25 @@ export class WorkbenchRuntime {
     return true;
   }
 
-  async createProvider(input: ProviderConfig) {
+  async createProvider(input: ProviderConfigInput) {
     const config = providerConfigSchema.parse(input);
-    await validateHttpEndpoint(config.baseUrl);
-    if (this.providers.has(config.id)) throw new WorkbenchError(`Model provider ${config.id} already exists`, 409);
-    this.configurations.insert('provider', config.id, config);
-    this.providers.set(config.id, config);
-    return { id: config.id, name: config.name, type: config.type, models: config.models };
+    return this.withConfigMutations([`provider:${config.id}`, ...this.configSecretLockKeys(config)], async () => {
+      await validateHttpEndpoint(config.baseUrl);
+      await this.assertManagedSecretReferences(config);
+      if (this.providers.has(config.id)) throw new WorkbenchError(`Model provider ${config.id} already exists`, 409);
+      this.configurations.insert('provider', config.id, config);
+      this.providers.set(config.id, config);
+      return { id: config.id, name: config.name, type: config.type, models: config.models };
+    });
   }
 
-  async updateProvider(id: string, input: ProviderConfig) {
+  async updateProvider(id: string, input: ProviderConfigInput) {
     const config = providerConfigSchema.parse(input);
     if (config.id !== id) throw new WorkbenchError('Provider ID cannot be changed while editing', 400);
     this.requireProvider(id);
-    return this.withConfigMutation(`provider:${id}`, async () => {
+    return this.withConfigMutations([`provider:${id}`, ...this.configSecretLockKeys(config)], async () => {
       await validateHttpEndpoint(config.baseUrl);
+      await this.assertManagedSecretReferences(config);
       const references = this.providerReferences(id);
       const removed = [...new Set(references.conversations.map((entry) => entry.model).concat(references.suiteModels))]
         .filter((alias) => !Object.hasOwn(config.models, alias));
@@ -170,7 +256,7 @@ export class WorkbenchRuntime {
   async testProvider(id: string) {
     const config = this.requireProvider(id);
     return this.withConfigUse([`provider:${id}`], async () => {
-      const adapter = createProviderAdapter(config);
+      const adapter = createProviderAdapter(config, this.secrets.resolve.bind(this.secrets));
       try {
         if (adapter.listModels) return { id, ok: true, models: await adapter.listModels() };
         const model = Object.keys(config.models)[0]!;
@@ -184,9 +270,12 @@ export class WorkbenchRuntime {
 
   async addServer(input: ServerConfig) {
     const config = serverConfigSchema.parse(input);
-    this.configurations.upsert('server', config.id, config);
-    this.servers.set(config.id, config);
-    return { id: config.id, name: config.name, transport: config.transport };
+    return this.withConfigMutations([`server:${config.id}`, ...this.configSecretLockKeys(config)], async () => {
+      await this.assertManagedSecretReferences(config);
+      this.configurations.upsert('server', config.id, config);
+      this.servers.set(config.id, config);
+      return { id: config.id, name: config.name, transport: config.transport };
+    });
   }
 
   async seedServer(input: ServerConfig) {
@@ -196,21 +285,25 @@ export class WorkbenchRuntime {
     return true;
   }
 
-  async createServer(input: ServerConfig) {
+  async createServer(input: ServerConfigInput) {
     const config = serverConfigSchema.parse(input);
-    if (this.servers.has(config.id)) throw new WorkbenchError(`MCP server ${config.id} already exists`, 409);
-    this.configurations.insert('server', config.id, config);
-    this.servers.set(config.id, config);
-    return { id: config.id, name: config.name, transport: config.transport };
+    return this.withConfigMutations([`server:${config.id}`, ...this.configSecretLockKeys(config)], async () => {
+      await this.assertManagedSecretReferences(config);
+      if (this.servers.has(config.id)) throw new WorkbenchError(`MCP server ${config.id} already exists`, 409);
+      this.configurations.insert('server', config.id, config);
+      this.servers.set(config.id, config);
+      return { id: config.id, name: config.name, transport: config.transport };
+    });
   }
 
-  async updateServer(id: string, input: ServerConfig) {
+  async updateServer(id: string, input: ServerConfigInput) {
     const config = serverConfigSchema.parse(input);
     if (config.id !== id) throw new WorkbenchError('Server ID cannot be changed while editing', 400);
     this.requireServer(id);
-    return this.withConfigMutation(`server:${id}`, async () => {
+    return this.withConfigMutations([`server:${id}`, ...this.configSecretLockKeys(config)], async () => {
       await this.mcp.disconnect(id);
       this.oauth.forget(id);
+      await this.assertManagedSecretReferences(config);
       if (!this.configurations.update('server', id, config)) throw new WorkbenchError(`MCP server ${id} not found`, 404);
       this.servers.set(id, config);
       return { id, name: config.name, transport: config.transport, reconnectRequired: true };
@@ -236,7 +329,9 @@ export class WorkbenchRuntime {
     const config = this.requireServer(id);
     return this.withConfigUse([`server:${id}`], async () => {
       let provider;
-      try { provider = this.oauth.getProvider(id); } catch { provider = undefined; }
+      if (config.transport === 'http' && config.oauth !== undefined) {
+        try { provider = this.oauth.getProvider(id); } catch { provider = undefined; }
+      }
       return this.mcp.connect(config, provider);
     });
   }
@@ -261,7 +356,7 @@ export class WorkbenchRuntime {
       model,
       serverId,
       limits: input.limits ?? { maxTurns: 8, maxToolCalls: 16, timeoutMs: 60_000 },
-    }, { provider: createProviderAdapter(config), mcp: this.mcp }));
+    }, { provider: createProviderAdapter(config, this.secrets.resolve.bind(this.secrets)), mcp: this.mcp }));
   }
 
   async createConversation(input: { serverId: string; providerId: string; model: string; systemPrompt?: string }) {
@@ -319,7 +414,7 @@ export class WorkbenchRuntime {
       serverId: resolved.serverId,
       limits: input.limits ?? { maxTurns: 8, maxToolCalls: 16, timeoutMs: 60_000 },
       history: providerHistory,
-    }, { provider: createProviderAdapter(resolved.config), mcp: this.mcp }, { signal, onUpdate }));
+    }, { provider: createProviderAdapter(resolved.config, this.secrets.resolve.bind(this.secrets)), mcp: this.mcp }, { signal, onUpdate }));
     this.conversations.appendTurn(
       conversation.id,
       { role: 'user', content: input.prompt },
@@ -438,7 +533,7 @@ export class WorkbenchRuntime {
     const task = runSuite(stored.suite, {
       direct: (entry, signal) => this.directObservation(entry.server, entry.call.tool, entry.call.arguments, entry.call.dangerous ?? false, signal),
       agent: (entry) => runAgent({ prompt: entry.prompt, model: entry.model, serverId: entry.server, limits: entry.limits }, {
-        provider: createProviderAdapter(this.requireProvider(entry.provider)), mcp: this.mcp,
+        provider: createProviderAdapter(this.requireProvider(entry.provider), this.secrets.resolve.bind(this.secrets)), mcp: this.mcp,
       }, { signal: controller.signal }),
     }, { signal: controller.signal, id })
       .then((result) => this.runs.complete(result))
@@ -466,8 +561,8 @@ export class WorkbenchRuntime {
   async startConformance(input: { serverId: string; selection: ConformanceSelection; timeoutMs: number }) {
     const config = this.requireServer(input.serverId);
     if (config.transport !== 'http') throw new WorkbenchError('Official conformance MVP supports Streamable HTTP servers only; stdio is unsupported', 400);
-    if (Object.keys(config.headerEnv).length > 0 || config.oauth) {
-      throw new WorkbenchError('Pinned official conformance runner does not support workbench header or OAuth injection', 400);
+    if (Object.keys(config.headerEnv).length > 0 || Object.keys(config.headers).length > 0 || config.staticAuth || config.oauth) {
+      throw new WorkbenchError('Pinned official conformance runner does not support workbench header, static authorization, or OAuth injection', 400);
     }
     const endpoint = await validateHttpEndpoint(config.url, false);
     const hostname = endpoint.hostname.toLowerCase().replace(/^\[|\]$/g, '');
@@ -522,14 +617,18 @@ export class WorkbenchRuntime {
   async beginOAuth(id: string) {
     const config = this.requireServer(id);
     if (config.transport !== 'http') throw new WorkbenchError('OAuth is available only for Streamable HTTP servers', 400);
+    if (config.staticAuth !== undefined) throw new WorkbenchError('OAuth and static authorization are mutually exclusive', 400);
+    if (config.oauth === undefined) throw new WorkbenchError('OAuth is not configured for this server', 400);
+    const oauth = config.oauth;
     return this.withConfigUse([`server:${id}`], () => this.oauth.begin({
       id,
       serverUrl: config.url,
       callbackUrl: this.options.callbackUrl,
-      scopes: config.oauth?.scopes ?? [],
-      timeoutMs: config.oauth?.timeoutMs ?? 120_000,
-      ...(config.oauth?.clientId === undefined ? {} : { clientId: config.oauth.clientId }),
-      ...(config.oauth?.clientSecretEnv === undefined ? {} : { clientSecretEnv: config.oauth.clientSecretEnv }),
+      scopes: oauth.scopes,
+      timeoutMs: oauth.timeoutMs,
+      ...(oauth.clientId === undefined ? {} : { clientId: oauth.clientId }),
+      ...(oauth.clientSecretEnv === undefined ? {} : { clientSecretEnv: oauth.clientSecretEnv }),
+      ...(oauth.clientSecret === undefined ? {} : { clientSecret: oauth.clientSecret }),
     }));
   }
 
@@ -546,10 +645,12 @@ export class WorkbenchRuntime {
   }
 
   async close(): Promise<void> {
+    this.closing = true;
     for (const controller of this.activeRuns.values()) controller.abort(new Error('Runtime closing'));
     for (const controller of this.activeConformance.values()) controller.abort(new Error('Runtime closing'));
     await Promise.allSettled([...this.activeRunTasks.values(), ...this.activeConformanceTasks.values()]);
-    const cleanups = await Promise.allSettled([this.mcp.closeAll(), this.oauth.close()]);
+    await Promise.allSettled([...this.activeConfigTasks]);
+    const cleanups = await Promise.allSettled([this.mcp.closeAll(), this.oauth.close(), this.secrets.close()]);
     this.database.close();
     const failure = cleanups.find((result): result is PromiseRejectedResult => result.status === 'rejected');
     if (failure) throw failure.reason;
@@ -596,6 +697,58 @@ export class WorkbenchRuntime {
     };
   }
 
+  private secretReferences(id?: string, source?: 'vault' | 'session') {
+    const matches = (reference: SecretReference | undefined): boolean => reference !== undefined
+      && reference.source !== 'env'
+      && (id === undefined || reference.id === id)
+      && (source === undefined || reference.source === source);
+    const providers = [...this.providers.values()].filter((config) => (
+      matches(config.apiKey) || Object.values(config.headers).some(matches)
+    )).map((config) => config.id);
+    const servers = [...this.servers.values()].filter((config) => config.transport === 'stdio'
+      ? Object.values(config.env).some(matches)
+      : Object.values(config.headers).some(matches)
+        || matches(config.staticAuth?.credential)
+        || matches(config.oauth?.clientSecret)).map((config) => config.id);
+    const keys = [
+      ...providers.map((provider) => `provider:${provider}`),
+      ...servers.map((server) => `server:${server}`),
+    ];
+    return {
+      providers,
+      servers,
+      keys,
+      active: keys.filter((key) => (this.activeConfigUses.get(key) ?? 0) > 0
+        || (key.startsWith('server:') && this.mcp.isConnected(key.slice('server:'.length)))),
+    };
+  }
+
+  private configSecretReferences(config: ProviderConfig | ServerConfig): Array<Extract<SecretReference, { source: 'vault' | 'session' }>> {
+    const references: Array<SecretReference | undefined> = 'type' in config
+      ? [config.apiKey, ...Object.values(config.headers)]
+      : config.transport === 'stdio'
+        ? Object.values(config.env)
+        : [...Object.values(config.headers), config.staticAuth?.credential, config.oauth?.clientSecret];
+    return references.filter((reference): reference is Extract<SecretReference, { source: 'vault' | 'session' }> =>
+      reference !== undefined && reference.source !== 'env');
+  }
+
+  private configSecretLockKeys(config: ProviderConfig | ServerConfig): string[] {
+    const references = this.configSecretReferences(config);
+    return [...new Set(references.flatMap((reference) => [
+      `secret:${reference.id}`,
+      ...(reference.source === 'vault' ? ['vault:*'] : []),
+    ]))];
+  }
+
+  private async assertManagedSecretReferences(config: ProviderConfig | ServerConfig): Promise<void> {
+    for (const reference of this.configSecretReferences(config)) {
+      if (!(await this.secrets.isConfigured(reference))) {
+        throw new WorkbenchError(`Referenced ${reference.source} secret ${reference.id} is not configured`, 409);
+      }
+    }
+  }
+
   private beginConfigUse(keys: string[]): void {
     const blocked = keys.find((key) => this.mutatingConfigs.has(key));
     if (blocked) throw new WorkbenchError(`Configuration ${blocked.replace(':', ' ')} is being changed`, 409);
@@ -610,14 +763,37 @@ export class WorkbenchRuntime {
   }
 
   private async withConfigUse<T>(keys: string[], operation: () => Promise<T>): Promise<T> {
+    if (this.closing) throw new WorkbenchError('Runtime is closing', 409);
     this.beginConfigUse(keys);
-    try { return await operation(); } finally { this.endConfigUse(keys); }
+    const task = (async () => {
+      try { return await operation(); } finally { this.endConfigUse(keys); }
+    })();
+    this.activeConfigTasks.add(task);
+    try { return await task; } finally { this.activeConfigTasks.delete(task); }
   }
 
   private async withConfigMutation<T>(key: string, operation: () => Promise<T>): Promise<T> {
+    if (this.closing) throw new WorkbenchError('Runtime is closing', 409);
     if (this.mutatingConfigs.has(key) || (this.activeConfigUses.get(key) ?? 0) > 0) throw new WorkbenchError('Configuration is currently in use', 409);
     this.mutatingConfigs.add(key);
-    try { return await operation(); } finally { this.mutatingConfigs.delete(key); }
+    const task = (async () => {
+      try { return await operation(); } finally { this.mutatingConfigs.delete(key); }
+    })();
+    this.activeConfigTasks.add(task);
+    try { return await task; } finally { this.activeConfigTasks.delete(task); }
+  }
+
+  private async withConfigMutations<T>(keys: string[], operation: () => Promise<T>): Promise<T> {
+    if (this.closing) throw new WorkbenchError('Runtime is closing', 409);
+    if (keys.some((key) => this.mutatingConfigs.has(key) || (this.activeConfigUses.get(key) ?? 0) > 0)) {
+      throw new WorkbenchError('Configuration is currently in use', 409);
+    }
+    for (const key of keys) this.mutatingConfigs.add(key);
+    const task = (async () => {
+      try { return await operation(); } finally { for (const key of keys) this.mutatingConfigs.delete(key); }
+    })();
+    this.activeConfigTasks.add(task);
+    try { return await task; } finally { this.activeConfigTasks.delete(task); }
   }
 
   private requireProvider(id: string): ProviderConfig {
@@ -631,4 +807,18 @@ export class WorkbenchRuntime {
     if (!config) throw new WorkbenchError(`MCP server ${id} not found`, 404);
     return config;
   }
+}
+
+function defaultSecretConfigDirectory(): string {
+  if (process.env.MCP_RIKSA_CONFIG_HOME) return process.env.MCP_RIKSA_CONFIG_HOME;
+  if (process.platform === 'win32' && process.env.APPDATA) return process.env.APPDATA;
+  if (process.env.XDG_CONFIG_HOME) return process.env.XDG_CONFIG_HOME;
+  return join(homedir(), '.config');
+}
+
+function displaySecretKeyLocation(): string {
+  if (process.env.MCP_RIKSA_CONFIG_HOME) return '$MCP_RIKSA_CONFIG_HOME/mcp-riksa/vault.key';
+  if (process.platform === 'win32') return '%APPDATA%/mcp-riksa/vault.key';
+  if (process.env.XDG_CONFIG_HOME) return '$XDG_CONFIG_HOME/mcp-riksa/vault.key';
+  return '~/.config/mcp-riksa/vault.key';
 }
