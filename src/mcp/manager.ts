@@ -6,12 +6,13 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { Agent, fetch as undiciFetch } from 'undici';
 import { z } from 'zod';
 import { environmentVariableNameSchema } from '../core/environment.js';
+import { httpHeaderNameSchema } from '../core/http.js';
 import { redact, registerSecretValue } from '../core/redaction.js';
 import { secretReferenceSchema, type SecretPurpose, type SecretResolver } from '../secrets/types.js';
 import { createSafeLookup, validateHttpEndpoint } from './validation.js';
 
 const baseConfig = { id: z.string().min(1), name: z.string().min(1) };
-const httpHeaderNameSchema = z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/, 'Invalid HTTP header name');
+
 const stdioConfigSchema = z.strictObject({
   ...baseConfig,
   transport: z.literal('stdio'),

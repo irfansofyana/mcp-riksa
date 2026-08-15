@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { environmentVariableNameSchema } from '../core/environment.js';
+import { httpHeaderNameSchema } from '../core/http.js';
 import { registerSecretValue } from '../core/redaction.js';
 import { secretReferenceSchema, type SecretResolver } from '../secrets/types.js';
 
@@ -16,9 +17,9 @@ export const providerConfigSchema = z.strictObject({
     }).default({ inputPerMillion: 0, outputPerMillion: 0 }),
   })).refine((models) => Object.keys(models).length > 0, 'At least one model alias is required'),
   apiKeyEnv: environmentVariableNameSchema.optional(),
-  headerEnv: z.record(z.string(), environmentVariableNameSchema).optional().default({}),
+  headerEnv: z.record(httpHeaderNameSchema, environmentVariableNameSchema).optional().default({}),
   apiKey: secretReferenceSchema.optional(),
-  headers: z.record(z.string().min(1), secretReferenceSchema).optional().default({}),
+  headers: z.record(httpHeaderNameSchema, secretReferenceSchema).optional().default({}),
 });
 
 export type ProviderConfig = z.infer<typeof providerConfigSchema>;

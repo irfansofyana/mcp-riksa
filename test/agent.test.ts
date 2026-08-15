@@ -30,6 +30,18 @@ test.each(['raw-secret-value', 'Bearer secret', '123_INVALID'])('rejects non-env
   })).toThrow(/environment variable name/i);
 });
 
+test('rejects invalid provider HTTP header names before saving', () => {
+  for (const input of [
+    { headers: { 'X Bad': { source: 'env' as const, name: 'TEST_PROVIDER_SECRET' } } },
+    { headerEnv: { 'X Bad': 'TEST_PROVIDER_SECRET' } },
+  ]) {
+    expect(() => providerConfigSchema.parse({
+      id: 'safe', name: 'Safe', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1',
+      models: { default: { id: 'test' } }, ...input,
+    })).toThrow(/invalid http header name/i);
+  }
+});
+
 test('rejects inline secrets in provider header references', () => {
   expect(() => providerConfigSchema.parse({
     id: 'safe', name: 'Safe', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1',
