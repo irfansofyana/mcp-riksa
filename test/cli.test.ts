@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { afterEach, describe, expect, test } from 'vitest';
+import { EncryptedFileSecretBackend } from '../src/secrets/encrypted-file.js';
+import { SecretStore } from '../src/secrets/store.js';
 
 const directories: string[] = [];
 const tsxCli = resolve('node_modules/tsx/dist/cli.mjs');
@@ -12,9 +14,9 @@ afterEach(() => {
   for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
-function execute(args: string[]) {
+function execute(args: string[], environment: NodeJS.ProcessEnv = process.env) {
   return new Promise<{ code: number | null; stdout: string; stderr: string }>((resolveRun, reject) => {
-    const child = spawn(process.execPath, [tsxCli, workbenchCli, ...args], { cwd: resolve('.'), env: process.env });
+    const child = spawn(process.execPath, [tsxCli, workbenchCli, ...args], { cwd: resolve('.'), env: environment });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (chunk) => { stdout += String(chunk); });
@@ -43,6 +45,27 @@ describe('headless CLI', () => {
       identity: { name: 'mcp-riksa-sample' },
       tools: expect.arrayContaining([expect.objectContaining({ name: 'add' })]),
     });
+  });
+
+  test('inspects a configured server with a vault-backed stdio value', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'mcp-cli-vault-'));
+    directories.push(directory);
+    const dataDirectory = join(directory, 'data');
+    const configDirectory = join(directory, 'config-home');
+    const store = new SecretStore({ vaultBackend: new EncryptedFileSecretBackend({ dataDirectory, configDirectory }) });
+    const secret = await store.create({ backend: 'vault', label: 'CLI token', purposes: ['stdio-env'], value: 'cli-vault-secret' });
+    await store.close();
+    const config = join(directory, 'config.yaml');
+    writeFileSync(config, `version: 2\nservers:\n  - id: sample\n    name: Sample\n    transport: stdio\n    command: ${JSON.stringify(process.execPath)}\n    args:\n      - ${JSON.stringify(tsxCli)}\n      - ${JSON.stringify(resolve('examples/sample-mcp-server.ts'))}\n    env:\n      TEST_TOKEN:\n        source: vault\n        id: ${secret.id}\nproviders: []\n`);
+
+    const result = await execute(
+      ['inspect', '--config', config, '--server', 'sample', '--data-dir', dataDirectory, '--json'],
+      { ...process.env, MCP_RIKSA_CONFIG_HOME: configDirectory },
+    );
+
+    expect(result.code, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ identity: { name: 'mcp-riksa-sample' } });
+    expect(result.stdout).not.toContain('cli-vault-secret');
   });
 
   test('runs the portable sample suite and emits JSON, HTML and JUnit reports', async () => {

@@ -64,6 +64,7 @@ describe('EncryptedFileSecretBackend', () => {
       purposes: ['mcp-header'],
       value,
     });
+    const beforeResolve = readFileSync(join(dataDirectory, 'secrets.vault'));
     await store.close();
 
     const restarted = new SecretStore({
@@ -73,6 +74,7 @@ describe('EncryptedFileSecretBackend', () => {
     await expect(
       restarted.resolve({ source: 'vault', id: metadata.id }, 'mcp-header'),
     ).resolves.toBe(value);
+    expect(readFileSync(join(dataDirectory, 'secrets.vault'))).toEqual(beforeResolve);
   });
 
   test('fails closed without overwriting a vault whose key is missing', async () => {

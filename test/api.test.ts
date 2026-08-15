@@ -66,6 +66,7 @@ function runtime(): ApiRuntime {
     updateServer: async (id, value) => { calls.push({ method: 'updateServer', value: { id, value } }); return { id }; },
     deleteServer: async (id, force) => { calls.push({ method: 'deleteServer', value: { id, force } }); return { id, deleted: true }; },
     connectServer: async (id) => ({ id, identity: { name: 'sample' }, tools: [{ name: 'add' }] }),
+    disconnectServer: async (id) => ({ id, connected: false }),
     inspectServer: async (id) => ({ id, identity: { name: 'sample' }, tools: [{ name: 'add' }] }),
     callTool: async (id, tool, args, options) => ({ id, tool, args, options, structuredContent: { sum: 5 } }),
     playground: async () => ({ output: '5', toolCalls: [{ name: 'add' }], events: [] }),
@@ -241,6 +242,7 @@ describe('API workbench flow', () => {
 
     const tool = await request('/api/servers/sample/call', mutation({ tool: 'add', arguments: { a: 2, b: 3 }, confirmDangerous: false }));
     expect(await tool.json()).toMatchObject({ structuredContent: { sum: 5 } });
+    expect(await (await request('/api/servers/sample/disconnect', mutation({}))).json()).toEqual({ id: 'sample', connected: false });
     expect((await request('/api/playground', mutation({ prompt: 'add' }))).status).toBe(200);
     expect((await request('/api/playground/conversations', mutation({ serverId: 'sample', providerId: 'local', model: 'default', systemPrompt: 'Use tools accurately.' }))).status).toBe(201);
     expect((await request('/api/playground/conversations')).status).toBe(200);

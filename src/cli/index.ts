@@ -7,7 +7,9 @@ import type { RequestHandler } from 'express';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { createApp } from '../server/app.js';
-import { WorkbenchRuntime } from '../server/runtime.js';
+import { WorkbenchRuntime, defaultSecretConfigDirectory } from '../server/runtime.js';
+import { EncryptedFileSecretBackend } from '../secrets/encrypted-file.js';
+import { SecretStore } from '../secrets/store.js';
 import { McpManager, serverConfigSchema, type ServerConfig } from '../mcp/manager.js';
 import { providerConfigSchema, type ProviderConfig } from '../agent/types.js';
 import { reportJson } from '../reporters/json.js';
@@ -67,17 +69,25 @@ program.command('inspect')
   .option('--sample', 'inspect the deterministic sample stdio server')
   .option('--config <path>', 'workbench YAML configuration')
   .option('--server <id>', 'server alias from configuration')
+  .option('--data-dir <path>', 'runtime data directory', '.mcp-riksa')
   .option('--json', 'emit JSON')
-  .action(async (options: { sample?: boolean; config?: string; server?: string; json?: boolean }) => {
+  .action(async (options: { sample?: boolean; config?: string; server?: string; dataDir: string; json?: boolean }) => {
     const config = loadConfiguration(options.config);
     const selected = options.sample ? sampleConfiguration() : config.servers.find((entry) => entry.id === options.server);
     if (!selected) throw new Error('Choose --sample or provide --config and --server');
-    const manager = new McpManager();
+    const secrets = new SecretStore({
+      vaultBackend: new EncryptedFileSecretBackend({
+        dataDirectory: resolve(options.dataDir),
+        configDirectory: defaultSecretConfigDirectory(),
+      }),
+    });
+    const manager = new McpManager((reference, purpose) => secrets.resolve(reference, purpose));
     try {
       const inspection = await manager.connect(selected);
       process.stdout.write(options.json ? `${JSON.stringify(inspection, null, 2)}\n` : `${selected.name}: ${inspection.tools.length} tools\n`);
     } finally {
       await manager.closeAll();
+      await secrets.close();
     }
   });
 

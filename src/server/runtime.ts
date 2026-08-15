@@ -343,6 +343,14 @@ export class WorkbenchRuntime {
     });
   }
 
+  async disconnectServer(id: string) {
+    this.requireServer(id);
+    return this.withConfigMutation(`server:${id}`, async () => {
+      await this.mcp.disconnect(id);
+      return { id, connected: false };
+    });
+  }
+
   async inspectServer(id: string) {
     this.requireServer(id);
     if (!this.mcp.isConnected(id)) throw new WorkbenchError(`MCP server ${id} is not connected`, 409);
@@ -831,7 +839,7 @@ export class WorkbenchRuntime {
   }
 }
 
-function defaultSecretConfigDirectory(): string {
+export function defaultSecretConfigDirectory(): string {
   if (process.env.MCP_RIKSA_CONFIG_HOME) return process.env.MCP_RIKSA_CONFIG_HOME;
   if (process.platform === 'win32' && process.env.APPDATA) return process.env.APPDATA;
   if (process.env.XDG_CONFIG_HOME) return process.env.XDG_CONFIG_HOME;

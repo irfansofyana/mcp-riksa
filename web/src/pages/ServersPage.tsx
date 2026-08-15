@@ -133,6 +133,7 @@ export function ServersPage({ servers, conformanceReports, onRefresh, onConforma
       </div>
       <div className="button-row">
         <Button variant="primary" disabled={!selected} data-testid="connect-server" onClick={() => void act(async () => { await api.connectServer(selected); await inspect(selected); await onRefresh(); setMessage('Connected and inspected.'); })}>Connect & inspect</Button>
+        <Button disabled={!selectedServer?.connected} data-testid="disconnect-server" onClick={() => void act(async () => { await api.disconnectServer(selected); clearInspection(); await onRefresh(); setMessage('Server disconnected. Secrets can now be rotated safely.'); })}>Disconnect</Button>
         <Button disabled={!selected} onClick={() => void act(async () => inspect(selected))}>Inspect</Button>
         <Button disabled={selectedServer?.transport !== 'http'} title={selectedServer?.transport === 'stdio' ? 'Official conformance MVP does not support stdio' : undefined} onClick={() => void act(async () => {
           const report = await api.startConformance({ serverId: selected, selection: { kind: 'suite', suite: 'active' }, timeoutMs: 120_000 });

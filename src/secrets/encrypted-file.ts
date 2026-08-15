@@ -124,8 +124,6 @@ export class EncryptedFileSecretBackend implements ManagedSecretBackend {
     if (!entry.metadata.purposes.includes(purpose)) {
       throw new SecretStoreError('SECRET_PURPOSE_DENIED', `Secret ${id} cannot be used for ${purpose}`);
     }
-    entry.metadata.lastUsedAt = new Date().toISOString();
-    this.writeEntries(entries);
     if (!this.registeredValues.has(id)) {
       registerSecretValue(entry.value);
       this.registeredValues.set(id, entry.value);

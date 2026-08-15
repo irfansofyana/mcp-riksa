@@ -136,10 +136,9 @@ describe('concrete workbench runtime', () => {
     await expect(runtime.inspectServer('secret-server')).resolves.toMatchObject({ id: 'secret-server' });
     await expect(runtime.replaceSecret(connectedSecret.id, 'rotated-connected-value')).rejects.toMatchObject({ status: 409 });
     await expect(runtime.deleteSecret(connectedSecret.id, true)).rejects.toMatchObject({ status: 409 });
-    await runtime.updateServer('secret-server', {
-      id: 'secret-server', name: 'Secret server', transport: 'stdio', command: process.execPath,
-      args: [tsxCli, sampleServer], envRefs: {}, env: { API_TOKEN: { source: 'session', id: connectedSecret.id } },
-    });
+    await expect(runtime.disconnectServer('secret-server')).resolves.toEqual({ id: 'secret-server', connected: false });
+    await expect(runtime.inspectServer('secret-server')).rejects.toMatchObject({ status: 409 });
+    await expect(runtime.replaceSecret(connectedSecret.id, 'rotated-connected-value')).resolves.toMatchObject({ id: connectedSecret.id });
     await expect(runtime.deleteSecret(connectedSecret.id, true)).resolves.toMatchObject({ deleted: true });
     await runtime.close();
   });

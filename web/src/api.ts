@@ -108,6 +108,7 @@ export const api = {
   updateServer: (id: string, value: unknown) => put(`/api/servers/${encodeURIComponent(id)}`, value),
   deleteServer: (id: string, force = false) => remove(`/api/servers/${encodeURIComponent(id)}?force=${force}`),
   connectServer: (id: string) => post(`/api/servers/${encodeURIComponent(id)}/connect`, {}),
+  disconnectServer: (id: string) => post(`/api/servers/${encodeURIComponent(id)}/disconnect`, {}),
   inspectServer: (id: string) => get<{ id: string; identity: unknown; capabilities: unknown; tools: import('./types.js').Tool[] }>(`/api/servers/${encodeURIComponent(id)}`),
   callTool: (id: string, body: unknown) => post(`/api/servers/${encodeURIComponent(id)}/call`, body),
   beginOAuth: (id: string) => post<{ id: string; authorizationUrl?: string; state: string; scopes: string[]; timeline: unknown[]; expiresAt?: string }>(`/api/servers/${encodeURIComponent(id)}/oauth/begin`, {}),

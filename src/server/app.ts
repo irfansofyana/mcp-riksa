@@ -25,6 +25,7 @@ export type ApiRuntime = {
   updateServer(id: string, value: z.infer<typeof serverConfigSchema>): Promise<unknown> | unknown;
   deleteServer(id: string, force: boolean): Promise<unknown> | unknown;
   connectServer(id: string): Promise<unknown> | unknown;
+  disconnectServer(id: string): Promise<unknown> | unknown;
   inspectServer(id: string): Promise<unknown> | unknown;
   callTool(id: string, tool: string, args: Record<string, unknown>, options: { confirmDangerous: boolean }): Promise<unknown> | unknown;
   playground(value: unknown): Promise<unknown> | unknown;
@@ -197,6 +198,7 @@ export function createApp(runtime: ApiRuntime, options: { sessionToken?: string;
     send(response, await runtime.deleteServer(request.params.id!, force === 'true'));
   });
   app.post('/api/servers/:id/connect', async (request, response) => send(response, await runtime.connectServer(request.params.id!)));
+  app.post('/api/servers/:id/disconnect', async (request, response) => send(response, await runtime.disconnectServer(request.params.id!)));
   app.get('/api/servers/:id', async (request, response) => send(response, await runtime.inspectServer(request.params.id!)));
   app.post('/api/servers/:id/call', async (request, response) => {
     const input = toolCallSchema.parse(request.body);
