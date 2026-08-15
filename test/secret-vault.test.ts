@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { EncryptedFileSecretBackend } from '../src/secrets/encrypted-file.js';
 import { SecretStore } from '../src/secrets/store.js';
+import { redact } from '../src/core/redaction.js';
 
 const roots: string[] = [];
 const execFileAsync = promisify(execFile);
@@ -82,14 +83,29 @@ describe('EncryptedFileSecretBackend', () => {
     expect(readFileSync(join(dataDirectory, 'secrets.vault'))).toEqual(beforeResolve);
   });
 
+  test('refreshes redaction registration after another process rotates a secret', async () => {
+    const fixture = harness();
+    const original = 'cross-process-original-secret';
+    const rotated = 'cross-process-rotated-secret';
+    const metadata = await fixture.store.create({ backend: 'vault', label: 'Rotated key', purposes: ['provider-api-key'], value: original });
+    await expect(fixture.store.resolve({ source: 'vault', id: metadata.id }, 'provider-api-key')).resolves.toBe(original);
+
+    const external = new SecretStore({
+      vaultBackend: new EncryptedFileSecretBackend({ dataDirectory: fixture.dataDirectory, configDirectory: fixture.configDirectory }),
+    });
+    await external.replace(metadata.id, rotated);
+    await expect(fixture.store.resolve({ source: 'vault', id: metadata.id }, 'provider-api-key')).resolves.toBe(rotated);
+
+    expect(JSON.stringify(redact({ reflected: rotated }))).not.toContain(rotated);
+    expect(JSON.stringify(redact({ reflected: original }))).toContain(original);
+    await external.close();
+    await fixture.store.close();
+  });
+
   test('serializes vault mutations across processes', async () => {
     const fixture = harness();
     const writers = 4;
     const entriesPerWriter = 6;
-    mkdirSync(fixture.dataDirectory, { recursive: true });
-    mkdirSync(fixture.backend.lockPath);
-    const staleTime = new Date(Date.now() - 30_000);
-    utimesSync(fixture.backend.lockPath, staleTime, staleTime);
     await Promise.all(Array.from({ length: writers }, (_, index) => execFileAsync(
       process.execPath,
       [tsxCli, vaultWriter, fixture.dataDirectory, fixture.configDirectory, `writer-${index}`, String(entriesPerWriter)],

@@ -14,7 +14,7 @@ import {
 } from 'node:fs';
 import { createCipheriv, createDecipheriv, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { dirname, join } from 'node:path';
-import lockfile from 'proper-lockfile';
+import Database from 'better-sqlite3';
 import { z } from 'zod';
 import { registerSecretValue, unregisterSecretValue } from '../core/redaction.js';
 import { SecretStoreError } from './store-error.js';
@@ -133,7 +133,9 @@ export class EncryptedFileSecretBackend implements ManagedSecretBackend {
     if (!entry.metadata.purposes.includes(purpose)) {
       throw new SecretStoreError('SECRET_PURPOSE_DENIED', `Secret ${id} cannot be used for ${purpose}`);
     }
-    if (!this.registeredValues.has(id)) {
+    const registered = this.registeredValues.get(id);
+    if (registered !== entry.value) {
+      if (registered !== undefined) unregisterSecretValue(registered);
       registerSecretValue(entry.value);
       this.registeredValues.set(id, entry.value);
     }
@@ -196,23 +198,28 @@ export class EncryptedFileSecretBackend implements ManagedSecretBackend {
 
   private async withVaultLock<T>(operation: () => T): Promise<T> {
     this.ensureSecureDirectory(this.options.dataDirectory);
-    let release: (() => Promise<void>) | undefined;
+    let database: Database.Database | undefined;
+    let transactionOpen = false;
     try {
-      release = await lockfile.lock(this.options.dataDirectory, {
-        lockfilePath: this.lockPath,
-        realpath: false,
-        stale: 10_000,
-        update: 2_000,
-        retries: { retries: 100, factor: 1.2, minTimeout: 10, maxTimeout: 100 },
-      });
-      return operation();
+      database = new Database(this.lockPath, { timeout: 10_000 });
+      if (process.platform !== 'win32') chmodSync(this.lockPath, 0o600);
+      this.assertRegularSecureFile(this.lockPath, 'lock database');
+      database.exec('BEGIN IMMEDIATE');
+      transactionOpen = true;
+      const result = operation();
+      database.exec('COMMIT');
+      transactionOpen = false;
+      return result;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ELOCKED') {
+      if (transactionOpen) {
+        try { database?.exec('ROLLBACK'); } catch { /* The connection may already have rolled back. */ }
+      }
+      if ((error as { code?: string }).code === 'SQLITE_BUSY') {
         throw new SecretStoreError('SECRET_BACKEND_UNAVAILABLE', 'The encrypted MCP Riksa vault is busy in another process', { cause: error });
       }
       throw error;
     } finally {
-      await release?.();
+      database?.close();
     }
   }
 
@@ -352,7 +359,7 @@ export class EncryptedFileSecretBackend implements ManagedSecretBackend {
     }
   }
 
-  private assertRegularSecureFile(path: string, label: 'key' | 'vault'): void {
+  private assertRegularSecureFile(path: string, label: 'key' | 'vault' | 'lock database'): void {
     const stat = lstatSync(path);
     if (stat.isSymbolicLink() || !stat.isFile()) {
       throw new SecretStoreError('SECRET_VAULT_INSECURE_PERMISSIONS', `The MCP Riksa vault ${label} is not a regular file`);

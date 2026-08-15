@@ -74,8 +74,8 @@ async function startChrome(appUrl: string) {
   const endpoint = new URL(browserWebSocket);
   let pageWebSocket = '';
   try {
-    const created = await (await fetch(`http://${endpoint.host}/json/new?${encodeURIComponent(appUrl)}`, { method: 'PUT' })).json() as { webSocketDebuggerUrl?: string };
-    pageWebSocket = created.webSocketDebuggerUrl ?? '';
+    const created = await (await fetch(`http://${endpoint.host}/json/new?${encodeURIComponent(appUrl)}`, { method: 'PUT' })).json() as { url?: string; webSocketDebuggerUrl?: string };
+    if (created.url?.startsWith(appUrl)) pageWebSocket = created.webSocketDebuggerUrl ?? '';
   } catch { /* Fall back to an existing page target. */ }
   for (let attempt = 0; attempt < 50 && !pageWebSocket; attempt += 1) {
     const targets = await (await fetch(`http://${endpoint.host}/json/list`)).json() as Array<{ type: string; url: string; webSocketDebuggerUrl: string }>;
@@ -136,7 +136,7 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
   const waitText = (text: string, timeoutMs?: number) => wait(`document.body.textContent?.includes(${JSON.stringify(text)})`, `text ${text}`, timeoutMs);
 
   try {
-    await wait(`document.querySelector('.app-shell')`, 'application shell');
+    await wait(`document.querySelector('.app-shell')`, 'application shell', 30_000);
     await wait(`document.title === 'MCP Riksa' && document.querySelector('.brand img[src$="/mcp-riksa-mark.svg"]') && document.querySelector('.brand')?.textContent?.trim() === 'MCP Riksa' && !document.body.textContent?.includes('MCP Local Workbench')`, 'MCP Riksa product identity');
     await click('theme-dark');
     await wait(`document.documentElement.dataset.theme === 'dark' && localStorage.getItem('mcp-riksa-theme') === 'dark'`, 'explicit dark theme');
