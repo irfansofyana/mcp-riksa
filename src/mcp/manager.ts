@@ -58,6 +58,9 @@ export const serverConfigSchema = z.discriminatedUnion('transport', [stdioConfig
   if (config.oauth !== undefined && config.staticAuth !== undefined) {
     context.addIssue({ code: 'custom', message: 'OAuth and static authorization are mutually exclusive', path: ['staticAuth'] });
   }
+  if (config.oauth !== undefined && config.oauth.clientSecret !== undefined && config.oauth.clientSecretEnv !== undefined) {
+    context.addIssue({ code: 'custom', path: ['oauth', 'clientSecret'], message: 'clientSecret and clientSecretEnv are mutually exclusive' });
+  }
   if (config.staticAuth !== undefined) {
     const staticHeader = config.staticAuth.header.toLowerCase();
     const configuredHeaders = [...Object.keys(config.headerEnv), ...Object.keys(config.headers)];
