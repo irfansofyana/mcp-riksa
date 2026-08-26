@@ -20,6 +20,16 @@ const assertionSchema = z.discriminatedUnion('type', [
   z.strictObject({ type: z.literal('tool_count'), tool: z.string().min(1).optional(), count: z.number().int().nonnegative() }),
   z.strictObject({ type: z.literal('tool_order'), tools: z.array(z.string().min(1)).min(1) }),
   z.strictObject({ type: z.literal('args'), tool: z.string().min(1), path: z.string().min(1).optional(), equals: jsonValueSchema }),
+  z.strictObject({
+    type: z.literal('tool'),
+    tool: z.string().min(1),
+    occurrence: z.number().int().positive().optional(),
+    arguments: z.strictObject({ path: z.string().min(1).optional(), equals: jsonValueSchema }).optional(),
+    result: z.strictObject({ path: z.string().min(1).optional(), equals: jsonValueSchema.optional(), exists: z.boolean().optional() })
+      .refine((value) => value.equals !== undefined || value.exists !== undefined, 'tool result needs equals or exists')
+      .optional(),
+    success: z.boolean().optional(),
+  }),
   z.strictObject({ type: z.literal('jsonpath'), path: z.string().min(1), equals: jsonValueSchema.optional(), exists: z.boolean().optional() })
     .refine((value) => value.equals !== undefined || value.exists !== undefined, 'jsonpath needs equals or exists'),
   z.strictObject({ type: z.literal('contains'), path: z.string().min(1).optional(), value: z.string() }),
@@ -52,7 +62,7 @@ const limitsSchema = z.strictObject({
   maxCostUsd: z.number().nonnegative().max(1_000).optional(),
 });
 
-const agentCaseSchema = z.strictObject({
+const v1AgentCaseSchema = z.strictObject({
   ...baseCase,
   kind: z.literal('agent'),
   provider: z.string().min(1),
@@ -61,12 +71,47 @@ const agentCaseSchema = z.strictObject({
   limits: limitsSchema.default({ maxTurns: 8, maxToolCalls: 16, timeoutMs: 60_000 }),
 });
 
-const suiteSchema = z.strictObject({
+const turnSchema = z.strictObject({
+  id: z.string().min(1),
+  user: z.string().min(1),
+  assertions: z.array(assertionSchema),
+});
+
+const iterationsSchema = z.strictObject({
+  count: z.number().int().positive(),
+  minPasses: z.number().int().positive(),
+}).refine((value) => value.minPasses <= value.count, 'iterations.minPasses must not exceed iterations.count');
+
+const v2AgentCaseSchema = z.strictObject({
+  ...baseCase,
+  kind: z.literal('agent'),
+  provider: z.string().min(1),
+  model: z.string().min(1),
+  turns: z.array(turnSchema).min(1),
+  iterations: iterationsSchema.default({ count: 1, minPasses: 1 }),
+  limits: limitsSchema.default({ maxTurns: 8, maxToolCalls: 16, timeoutMs: 60_000 }),
+}).superRefine((entry, context) => {
+  const ids = entry.turns.map((turn) => turn.id);
+  if (new Set(ids).size !== ids.length) {
+    context.addIssue({ code: 'custom', path: ['turns'], message: 'Agent turn IDs must be unique' });
+  }
+});
+
+const v1SuiteSchema = z.strictObject({
   version: z.literal(1),
   name: z.string().min(1),
   description: z.string().optional(),
-  cases: z.array(z.discriminatedUnion('kind', [directCaseSchema, agentCaseSchema])).min(1),
+  cases: z.array(z.discriminatedUnion('kind', [directCaseSchema, v1AgentCaseSchema])).min(1),
 });
+
+const v2SuiteSchema = z.strictObject({
+  version: z.literal(2),
+  name: z.string().min(1),
+  description: z.string().optional(),
+  cases: z.array(z.discriminatedUnion('kind', [directCaseSchema, v2AgentCaseSchema])).min(1),
+});
+
+const suiteSchema = z.discriminatedUnion('version', [v1SuiteSchema, v2SuiteSchema]);
 
 export function parseSuite(source: string): Suite {
   const input: unknown = parseYaml(source);

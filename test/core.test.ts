@@ -112,11 +112,61 @@ cases:
         value: "5"
 `;
 
+const validV2Suite = `
+version: 2
+name: scripted-suite
+cases:
+  - id: direct-add
+    kind: direct
+    server: sample
+    call:
+      tool: add
+      arguments:
+        a: 2
+        b: 3
+    assertions: []
+  - id: scripted-agent
+    kind: agent
+    server: sample
+    provider: local-openai
+    model: test-model
+    limits:
+      maxTurns: 4
+      maxToolCalls: 2
+      timeoutMs: 5000
+    assertions:
+      - type: tool
+        tool: lookup
+        arguments:
+          path: $.city
+          equals: Jakarta
+        result:
+          path: $.temperature
+          equals: 31
+        success: true
+    turns:
+      - id: ask-weather
+        user: What is weather in Jakarta?
+        assertions:
+          - type: tool_called
+            tool: lookup
+`;
+
 describe('suite parsing', () => {
-  test('parses a versioned direct and agent suite', () => {
+  test('preserves version 1 direct and agent suites', () => {
     const suite = parseSuite(validSuite);
-    expect(suite.name).toBe('sample-suite');
+    expect(suite).toMatchObject({ version: 1, name: 'sample-suite' });
     expect(suite.cases.map((entry) => entry.kind)).toEqual(['direct', 'agent']);
+  });
+
+  test('parses version 2 scripted agent cases with iteration defaults', () => {
+    const suite = parseSuite(validV2Suite);
+    const agent = suite.cases.find((entry) => entry.kind === 'agent');
+    expect(suite).toMatchObject({ version: 2, name: 'scripted-suite' });
+    expect(agent).toMatchObject({
+      turns: [{ id: 'ask-weather', user: 'What is weather in Jakarta?' }],
+      iterations: { count: 1, minPasses: 1 },
+    });
   });
 
   test.each([
@@ -126,6 +176,12 @@ describe('suite parsing', () => {
     ['duplicate case IDs', validSuite.replace('id: agent-add', 'id: direct-add')],
     ['inline secrets', validSuite.replace('provider: local-openai', 'provider: local-openai\n    apiKey: raw-secret')],
     ['nested inline secrets', validSuite.replace('a: 2', 'a: 2\n        authorization: Bearer secret')],
+    ['v2 prompt', validV2Suite.replace('    turns:', '    prompt: legacy prompt\n    turns:')],
+    ['v2 empty turn ID', validV2Suite.replace('id: ask-weather', 'id: ""')],
+    ['v2 duplicate turn IDs', validV2Suite.replace('        assertions:\n          - type: tool_called', '        assertions: []\n      - id: ask-weather\n        user: Repeat weather\n        assertions:\n          - type: tool_called')],
+    ['v2 invalid iteration threshold', validV2Suite.replace('      timeoutMs: 5000\n    assertions:', '      timeoutMs: 5000\n    iterations:\n      count: 1\n      minPasses: 2\n    assertions:')],
+    ['v2 unknown keys', validV2Suite.replace('      timeoutMs: 5000\n    assertions:', '      timeoutMs: 5000\n    unexpected: true\n    assertions:')],
+    ['v2 inline secrets', validV2Suite.replace('        user:', '        apiKey: raw-secret\n        user:')],
   ])('rejects %s', (_label, source) => {
     expect(() => parseSuite(source)).toThrow();
   });
