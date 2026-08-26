@@ -55,6 +55,37 @@ function evaluate(assertion: Assertion, observation: Observation): AssertionResu
       const actual = assertion.path === undefined ? call?.arguments : jsonPath(call?.arguments, assertion.path);
       return result(assertion, isDeepStrictEqual(actual, assertion.equals), assertion.equals, actual, 'Tool arguments');
     }
+    case 'tool': {
+      const occurrence = assertion.occurrence ?? 1;
+      const call = observation.toolCalls.filter((entry) => entry.name === assertion.tool)[occurrence - 1];
+      if (call === undefined) {
+        return result(assertion, false, { tool: assertion.tool, occurrence }, undefined, 'Selected tool call');
+      }
+      if (assertion.arguments !== undefined) {
+        const actual = assertion.arguments.path === undefined
+          ? call.arguments
+          : jsonPath(call.arguments, assertion.arguments.path);
+        if (!isDeepStrictEqual(actual, assertion.arguments.equals)) {
+          return result(assertion, false, assertion.arguments.equals, actual, 'Tool arguments');
+        }
+      }
+      if (assertion.result !== undefined) {
+        const actual = assertion.result.path === undefined
+          ? call.result
+          : jsonPath(call.result, assertion.result.path);
+        const passed = assertion.result.equals !== undefined
+          ? isDeepStrictEqual(actual, assertion.result.equals)
+          : (actual !== undefined) === assertion.result.exists;
+        if (!passed) {
+          return result(assertion, false, assertion.result.equals ?? assertion.result.exists, actual, 'Tool result');
+        }
+      }
+      if (assertion.success !== undefined) {
+        const actual = call.outcome === undefined ? call.error === undefined : call.outcome === 'success';
+        return result(assertion, actual === assertion.success, assertion.success, actual, 'Tool success');
+      }
+      return result(assertion, true, assertion.tool, call.name, 'Selected tool call');
+    }
     case 'jsonpath': {
       const actual = jsonPath(observation.output, assertion.path);
       const expected = assertion.equals ?? assertion.exists;

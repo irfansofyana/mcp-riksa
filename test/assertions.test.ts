@@ -7,9 +7,9 @@ import type { Assertion, Suite } from '../src/core/types.js';
 const observation = {
   output: { message: 'Weather is Sunny', nested: { value: 42 } },
   toolCalls: [
-    { name: 'lookup', arguments: { city: 'Jakarta', unit: 'c' }, result: { temperature: 31 } },
-    { name: 'format', arguments: { style: 'short' }, result: 'Sunny' },
-    { name: 'lookup', arguments: { city: 'Bandung', unit: 'c' }, result: { temperature: 24 } },
+    { name: 'lookup', arguments: { city: 'Jakarta', unit: 'c' }, result: { temperature: 31 }, outcome: 'success' as const },
+    { name: 'format', arguments: { style: 'short' }, result: 'Sunny', outcome: 'success' as const },
+    { name: 'lookup', arguments: { city: 'Bandung', unit: 'c' }, result: { temperature: 24 }, outcome: 'error' as const, error: 'upstream rejected request' },
   ],
   durationMs: 920,
   tokens: { input: 30, output: 20, total: 50 },
@@ -32,6 +32,25 @@ describe('assertion evaluator', () => {
     ['cost', { type: 'cost', maxUsd: 0.01 }],
   ])('passes %s assertions', (_label, assertion) => {
     expect(evaluateAssertions([assertion], observation)[0]).toMatchObject({ passed: true });
+  });
+
+  test('matches selected named tool arguments, result, and outcome', () => {
+    const [result] = evaluateAssertions([{
+      type: 'tool',
+      tool: 'lookup',
+      occurrence: 2,
+      arguments: { path: '$.city', equals: 'Bandung' },
+      result: { path: '$.temperature', equals: 24 },
+      success: false,
+    }], observation);
+    expect(result).toMatchObject({ passed: true });
+  });
+
+  test('fails tool assertion when selected call does not meet expected outcome', () => {
+    const [result] = evaluateAssertions([{
+      type: 'tool', tool: 'lookup', occurrence: 2, success: true,
+    }], observation);
+    expect(result).toMatchObject({ passed: false, expected: true, actual: false });
   });
 
   test('returns useful expected and actual values for failures', () => {
