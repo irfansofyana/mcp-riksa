@@ -18,6 +18,7 @@ import { reportJunit } from '../reporters/junit.js';
 import { redact } from '../core/redaction.js';
 import { packageRoot, packageVersion } from '../core/package-info.js';
 import type { RunResult } from '../core/types.js';
+import { dataDirectoryOptionDescription, dataDirectoryStartupMessage, resolveDataDirectory } from './data-dir.js';
 
 const configurationSchema = z.strictObject({
   version: z.literal(2),
@@ -70,15 +71,16 @@ program.command('inspect')
   .option('--sample', 'inspect the deterministic sample stdio server')
   .option('--config <path>', 'workbench YAML configuration')
   .option('--server <id>', 'server alias from configuration')
-  .option('--data-dir <path>', 'runtime data directory', '.mcp-riksa')
+  .option('--data-dir <path>', dataDirectoryOptionDescription)
   .option('--json', 'emit JSON')
-  .action(async (options: { sample?: boolean; config?: string; server?: string; dataDir: string; json?: boolean }) => {
+  .action(async (options: { sample?: boolean; config?: string; server?: string; dataDir?: string; json?: boolean }) => {
+    const dataDirectory = resolveDataDirectory(options.dataDir);
     const config = loadConfiguration(options.config);
     const selected = options.sample ? sampleConfiguration() : config.servers.find((entry) => entry.id === options.server);
     if (!selected) throw new Error('Choose --sample or provide --config and --server');
     const secrets = new SecretStore({
       vaultBackend: new EncryptedFileSecretBackend({
-        dataDirectory: resolve(options.dataDir),
+        dataDirectory,
         configDirectory: defaultSecretConfigDirectory(),
       }),
     });
@@ -97,10 +99,10 @@ program.command('run')
   .argument('<suite>', 'suite YAML path')
   .option('--config <path>', 'workbench YAML configuration')
   .option('--sample', 'register the deterministic sample stdio server')
-  .option('--data-dir <path>', 'runtime data directory', '.mcp-riksa/cli')
+  .option('--data-dir <path>', dataDirectoryOptionDescription)
   .option('--output <path>', 'report output directory', 'reports')
-  .action(async (suitePath: string, options: { config?: string; sample?: boolean; dataDir: string; output: string }) => {
-    const dataDirectory = resolve(options.dataDir);
+  .action(async (suitePath: string, options: { config?: string; sample?: boolean; dataDir?: string; output: string }) => {
+    const dataDirectory = resolveDataDirectory(options.dataDir);
     mkdirSync(dataDirectory, { recursive: true });
     const runtime = new WorkbenchRuntime({
       databasePath: join(dataDirectory, 'workbench.db'),
@@ -132,14 +134,14 @@ program.command('serve')
   .description('Start the loopback browser workbench')
   .option('--host <host>', 'bind host', '127.0.0.1')
   .option('--port <port>', 'bind port', (value) => Number.parseInt(value, 10), 4317)
-  .option('--data-dir <path>', 'runtime data directory', '.mcp-riksa')
+  .option('--data-dir <path>', dataDirectoryOptionDescription)
   .option('--config <path>', 'workbench YAML configuration')
   .option('--allow-external', 'explicitly permit a non-loopback bind')
   .option('--dev', 'serve the Vite development UI')
-  .action(async (options: { host: string; port: number; dataDir: string; config?: string; allowExternal?: boolean; dev?: boolean }) => {
+  .action(async (options: { host: string; port: number; dataDir?: string; config?: string; allowExternal?: boolean; dev?: boolean }) => {
     const loopback = ['127.0.0.1', 'localhost', '::1'].includes(options.host);
     if (!loopback && !options.allowExternal) throw new Error('External bind requires --allow-external');
-    const dataDirectory = resolve(options.dataDir);
+    const dataDirectory = resolveDataDirectory(options.dataDir);
     mkdirSync(dataDirectory, { recursive: true });
     const runtime = new WorkbenchRuntime({
       databasePath: join(dataDirectory, 'workbench.db'),
@@ -162,7 +164,7 @@ program.command('serve')
     });
     const address = server.address();
     const port = address && typeof address !== 'string' ? address.port : options.port;
-    process.stdout.write(`MCP Riksa listening at http://${options.host}:${port}\n`);
+    process.stdout.write(`MCP Riksa listening at http://${options.host}:${port}\n${dataDirectoryStartupMessage(dataDirectory)}\n`);
     const shutdown = async () => {
       const serverClose = new Promise<void>((resolveClose, rejectClose) => server.close((error) => error ? rejectClose(error) : resolveClose()));
       const results = await Promise.allSettled([serverClose, vite?.close(), runtime.close()]);

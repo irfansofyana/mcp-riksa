@@ -17,7 +17,7 @@ Or run it without installing:
 npx mcp-riksa serve --config ./mcp-riksa.config.yaml
 ```
 
-Open `http://127.0.0.1:4317`.
+Open `http://127.0.0.1:4317`. By default, runtime state is stored in `.mcp-riksa` relative to current directory. Set `MCP_RIKSA_DATA_HOME` or pass `--data-dir` for a personal shared workbench; see [Headless CLI](docs/CLI.md#runtime-data-directory).
 
 ## Try it against the bundled sample
 

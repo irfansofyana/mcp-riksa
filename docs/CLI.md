@@ -37,6 +37,36 @@ npx tsx src/cli/index.ts run examples/sample-agent-suite.yaml \
   --output agent-reports
 ```
 
+## Runtime data directory
+
+`serve`, `inspect`, and `run` use one runtime-data resolution order:
+
+1. Explicit `--data-dir <path>`
+2. `MCP_RIKSA_DATA_HOME`
+3. `.mcp-riksa` relative to current working directory
+
+The directory contains local SQLite history, saved suite-library files, and encrypted vault data. `serve` prints its resolved absolute path at startup.
+
+### Project mode
+
+Best for repository-local work and CI. State stays isolated and `.mcp-riksa/` is ignored by Git:
+
+```bash
+mcp-riksa serve --data-dir .mcp-riksa --config ./mcp-riksa.config.yaml
+```
+
+### Personal mode
+
+Use one persistent workbench from any directory:
+
+```bash
+export MCP_RIKSA_DATA_HOME="$HOME/.local/state/mcp-riksa"
+# Or choose another absolute directory, such as "$HOME/.mcp-riksa".
+mcp-riksa serve --config ./mcp-riksa.config.yaml
+```
+
+`--data-dir` always overrides `MCP_RIKSA_DATA_HOME`.
+
 ## Output
 
 Each run writes three report formats into `--output`:
