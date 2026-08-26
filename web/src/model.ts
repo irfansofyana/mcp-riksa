@@ -442,7 +442,7 @@ function isSuiteAssertion(value: unknown): value is SuiteAssertion {
       const argumentsValue = entry.arguments === undefined ? undefined : objectValue(entry.arguments);
       const result = entry.result === undefined ? undefined : objectValue(entry.result);
       return typeof entry.tool === 'string'
-        && (entry.occurrence === undefined || (Number.isInteger(entry.occurrence) && entry.occurrence > 0))
+        && (entry.occurrence === undefined || (typeof entry.occurrence === 'number' && Number.isInteger(entry.occurrence) && entry.occurrence > 0))
         && (entry.arguments === undefined || (argumentsValue !== undefined && optionalString(argumentsValue.path) && isJsonValue(argumentsValue.equals)))
         && (entry.result === undefined || (result !== undefined && optionalString(result.path) && ((Object.hasOwn(result, 'equals') && isJsonValue(result.equals)) || typeof result.exists === 'boolean')))
         && (entry.success === undefined || typeof entry.success === 'boolean');
@@ -485,8 +485,8 @@ function hasOnlyKeys(value: Record<string, unknown>, keys: string[]): boolean {
 function validIterations(value: unknown): value is { count: number; minPasses: number } {
   const iterations = objectValue(value);
   return !!iterations && hasOnlyKeys(iterations, ['count', 'minPasses'])
-    && Number.isInteger(iterations.count) && iterations.count > 0
-    && Number.isInteger(iterations.minPasses) && iterations.minPasses > 0 && iterations.minPasses <= iterations.count;
+    && typeof iterations.count === 'number' && Number.isInteger(iterations.count) && iterations.count > 0
+    && typeof iterations.minPasses === 'number' && Number.isInteger(iterations.minPasses) && iterations.minPasses > 0 && iterations.minPasses <= iterations.count;
 }
 
 function validV2Turns(value: unknown, label: string): value is Array<{ id: string; user: string; assertions: SuiteAssertion[] }> {

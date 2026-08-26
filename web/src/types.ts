@@ -66,7 +66,8 @@ export type ProviderSummary = {
 };
 
 export type EventRecord = {
-  id: string; caseId: string; type: string; timestamp: string; durationMs?: number; data: unknown; sanitized: true;
+  id: string; caseId: string; type: string; timestamp: string; durationMs?: number;
+  iteration?: number; userTurn?: string; modelTurn?: number; data: unknown; sanitized: true;
 };
 
 export type TurnObservation = { id?: string; user?: string; observation?: unknown; [key: string]: unknown };
@@ -79,7 +80,7 @@ export type CaseResult = {
     events: EventRecord[]; stopReason?: string; turns?: TurnObservation[];
   };
   assertions: Array<{ passed: boolean; message: string; expected?: unknown; actual?: unknown; assertion: { type: string; [key: string]: unknown } }>;
-  evaluation?: { passed?: boolean; count?: number; minPasses?: number; iterations?: { count?: number; minPasses?: number; passes?: number } | IterationObservation[]; [key: string]: unknown };
+  evaluation?: { count: number; minPasses: number; passed: number; failed: number; passRate: number };
   iterations?: IterationObservation[];
 };
 

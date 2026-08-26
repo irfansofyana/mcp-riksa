@@ -128,12 +128,32 @@ export type AssertionResult = {
   actual?: unknown;
 };
 
+export type TurnResult = {
+  id: string;
+  user: string;
+  status: 'passed' | 'failed';
+  observation: Observation;
+  assertions: AssertionResult[];
+  error?: string;
+};
+
+export type IterationResult = {
+  index: number;
+  status: 'passed' | 'failed' | 'cancelled';
+  observation: Observation;
+  assertions: AssertionResult[];
+  turns: TurnResult[];
+  error?: string;
+};
+
 export type CaseResult = {
   id: string;
   kind: 'direct' | 'agent';
   status: 'passed' | 'failed' | 'cancelled';
   observation: Observation;
   assertions: AssertionResult[];
+  evaluation?: { count: number; minPasses: number; passed: number; failed: number; passRate: number };
+  iterations?: IterationResult[];
   error?: string;
 };
 

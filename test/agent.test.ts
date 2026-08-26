@@ -1,9 +1,9 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
-import { providerConfigSchema, type ProviderAdapter, type ProviderConfig } from '../src/agent/types.js';
+import { providerConfigSchema, type ProviderAdapter, type ProviderConfig, type ProviderMessage } from '../src/agent/types.js';
 import { createProviderAdapter } from '../src/agent/providers.js';
-import { runAgent } from '../src/agent/loop.js';
+import { runAgent, runScriptedConversation } from '../src/agent/loop.js';
 import { REDACTED, registerSecretValue } from '../src/core/redaction.js';
 import { McpManager } from '../src/mcp/manager.js';
 
@@ -451,6 +451,7 @@ describe('agent stop boundaries', () => {
       { provider, mcp: manager },
     );
     expect(result.stopReason).toBe('max_turns');
+    expect(result.toolCalls).toHaveLength(1);
   });
 
   test('stops before exceeding max tool calls', async () => {
@@ -649,5 +650,23 @@ describe('agent stop boundaries', () => {
       { provider, mcp: failingMcp },
       { signal: controller.signal },
     )).rejects.toThrow('inspection backend failed');
+  });
+
+  test('continues scripted user turns with preserved provider history and cumulative trace scope', async () => {
+    const messages: ProviderMessage[][] = [];
+    const provider = scriptedAdapter(async (request) => {
+      messages.push(request.messages);
+      return { text: `answer:${request.messages.at(-1)?.content ?? ''}`, toolCalls: [], usage: { input: 2, output: 1, total: 3 }, stopReason: 'complete', raw: {} };
+    });
+    const result = await runScriptedConversation(
+      { turns: [{ id: 'request', user: 'Book meeting' }, { id: 'time', user: 'Tomorrow at 3 PM' }], model: 'x', serverId: 'sample', limits: { maxTurns: 3, maxToolCalls: 2, timeoutMs: 5000 } },
+      { provider, mcp: manager },
+    );
+    expect(messages).toHaveLength(2);
+    expect(messages[1]?.map((message) => message.role)).toEqual(['user', 'assistant', 'user']);
+    expect(result).toMatchObject({ output: 'answer:Tomorrow at 3 PM', stopReason: 'complete', tokens: { total: 6 } });
+    expect(result.turns.map((turn) => turn.id)).toEqual(['request', 'time']);
+    expect(result.events.filter((entry) => entry.type === 'user_turn').map((entry) => entry.userTurn)).toEqual([undefined, undefined]);
+    expect(result.events.filter((entry) => entry.type === 'model_turn').map((entry) => entry.userTurn)).toEqual(['request', 'time']);
   });
 });

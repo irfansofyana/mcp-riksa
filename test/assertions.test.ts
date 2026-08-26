@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { evaluateAssertions } from '../src/core/assertions.js';
 import { event } from '../src/core/events.js';
 import { runSuite } from '../src/core/runner.js';
-import type { Assertion, Suite } from '../src/core/types.js';
+import type { Assertion, Suite, ToolCallObservation } from '../src/core/types.js';
 
 const observation = {
   output: { message: 'Weather is Sunny', nested: { value: 42 } },
@@ -117,5 +117,49 @@ describe('suite runner', () => {
     expect(run.cases.map((entry) => entry.status)).toEqual(['passed', 'failed']);
     expect(run.events.every((event) => event.sanitized)).toBe(true);
     expect(run.events.map((entry) => entry.caseId)).not.toContain('server-correlation-id');
+  });
+
+  test('runs all scripted iterations and applies the minimum-pass threshold', async () => {
+    const suite: Suite = {
+      version: 2,
+      name: 'scripted',
+      cases: [{
+        id: 'follow-up', kind: 'agent', server: 'sample', provider: 'local', model: 'test',
+        turns: [
+          { id: 'request', user: 'Book a meeting', assertions: [{ type: 'tool_count', count: 0 }] },
+          { id: 'details', user: 'Tomorrow at 3 PM', assertions: [{ type: 'tool', tool: 'create', arguments: { path: '$.time', equals: '15:00' } }] },
+        ],
+        iterations: { count: 3, minPasses: 2 },
+        limits: { maxTurns: 4, maxToolCalls: 2, timeoutMs: 1000 },
+        assertions: [{ type: 'tool_count', tool: 'create', count: 1 }],
+      }],
+    };
+    let calls = 0;
+    const turn = (id: string, output: unknown, toolCalls: ToolCallObservation[], stopReason = 'complete') => ({
+      id, user: id, observation: { ...observation, output, toolCalls, stopReason, events: [event('server', 'model_turn', { turn: 1 })] },
+    });
+    const run = await runSuite(suite, {
+      direct: async () => observation,
+      agent: async () => {
+        calls += 1;
+        const valid = calls !== 2;
+        return {
+          ...observation,
+          output: 'scheduled',
+          toolCalls: valid ? [{ name: 'create', arguments: { time: '15:00' }, outcome: 'success' as const }] : [],
+          stopReason: 'complete',
+          events: [event('server', 'model_turn', { turn: 2 })],
+          turns: [
+            turn('request', 'What time?', []),
+            turn('details', 'scheduled', valid ? [{ name: 'create', arguments: { time: '15:00' }, outcome: 'success' as const }] : []),
+          ],
+        };
+      },
+    });
+
+    expect(calls).toBe(3);
+    expect(run).toMatchObject({ status: 'passed', summary: { passed: 1 } });
+    expect(run.cases[0]?.evaluation).toMatchObject({ count: 3, minPasses: 2, passed: 2, failed: 1 });
+    expect(run.cases[0]?.iterations).toHaveLength(3);
   });
 });

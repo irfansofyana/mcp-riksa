@@ -19,6 +19,22 @@ function userTurns(value: unknown): UserTurnTrace[] {
   });
 }
 
+function aggregateMetrics(value: CaseResult) {
+  const observations = value.iterations?.flatMap((iteration) => {
+    const observation = record(iteration.observation);
+    if (!observation) return [];
+    const tokens = record(observation.tokens);
+    return [{
+      durationMs: typeof observation.durationMs === 'number' ? observation.durationMs : 0,
+      toolCalls: Array.isArray(observation.toolCalls) ? observation.toolCalls.length : 0,
+      tokens: typeof tokens?.total === 'number' ? tokens.total : 0,
+      costUsd: typeof observation.costUsd === 'number' ? observation.costUsd : 0,
+    }];
+  }) ?? [];
+  return (observations.length > 0 ? observations : [{ durationMs: value.observation.durationMs, toolCalls: value.observation.toolCalls.length, tokens: value.observation.tokens.total, costUsd: value.observation.costUsd }])
+    .reduce((total, observation) => ({ durationMs: total.durationMs + observation.durationMs, toolCalls: total.toolCalls + observation.toolCalls, tokens: total.tokens + observation.tokens, costUsd: total.costUsd + observation.costUsd }), { durationMs: 0, toolCalls: 0, tokens: 0, costUsd: 0 });
+}
+
 function evaluationTrace(value: CaseResult): { threshold?: string; iterations: IterationTrace[] } {
   const evaluation = record(value.evaluation);
   const configured = record(evaluation?.iterations);
@@ -45,10 +61,11 @@ function CaseDetail({ value }: { value: CaseResult }) {
   const expectedTools = value.assertions.flatMap((entry) => entry.assertion.type === 'tool_called' && typeof entry.assertion.tool === 'string' ? [entry.assertion.tool] : []);
   const actualTools = value.observation.toolCalls.map((call) => call.name);
   const events: EventRecord[] = value.observation.events;
+  const metrics = aggregateMetrics(value);
   const evaluation = evaluationTrace(value);
   return <div className="case-detail">
     <div className="metric-strip">
-      <div><span>Result</span><Status value={value.status} /></div><div><span>Latency</span><b>{value.observation.durationMs} ms</b></div><div><span>Tool calls</span><b>{actualTools.length}</b></div><div><span>Tokens</span><b>{value.observation.tokens.total}</b></div><div><span>Estimated cost</span><b>${value.observation.costUsd.toFixed(6)}</b></div>
+      <div><span>Result</span><Status value={value.status} /></div><div><span>Latency</span><b>{metrics.durationMs} ms</b></div><div><span>Tool calls</span><b>{metrics.toolCalls}</b></div><div><span>Tokens</span><b>{metrics.tokens}</b></div><div><span>Estimated cost</span><b>${metrics.costUsd.toFixed(6)}</b></div>
     </div>
     <div className="expected-actual"><div><span>Expected tools</span><code>{expectedTools.join(' → ') || 'none specified'}</code></div><div><span>Actual tools</span><code>{actualTools.join(' → ') || 'none'}</code></div></div>
     {evaluation.threshold || evaluation.iterations.length > 0 ? <Section title="Iteration & user-turn trace" action={evaluation.threshold ? <span className="hint">{evaluation.threshold}</span> : undefined}>{evaluation.iterations.length === 0 ? <Empty>No iteration observations were recorded.</Empty> : <div className="assertion-list">{evaluation.iterations.map((iteration) => <div className="expected-actual" key={iteration.label}><div><span>{iteration.label}</span><code>{iteration.turns.length ? iteration.turns.map((turn) => `${turn.id}: ${turn.user}`).join('\n') : 'No user turns recorded'}</code></div></div>)}</div>}</Section> : null}

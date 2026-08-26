@@ -55,7 +55,7 @@ async function awaitWithAbort<T>(operation: Promise<T>, signal: AbortSignal): Pr
 export async function runAgent(
   input: AgentInput,
   dependencies: { provider: ProviderAdapter; mcp: McpForAgent },
-  options: { signal?: AbortSignal; onUpdate?(update: AgentUpdate): void } = {},
+  options: { signal?: AbortSignal; onUpdate?(update: AgentUpdate): void; closeProvider?: boolean } = {},
 ): Promise<AgentResult> {
   const started = Date.now();
   const controller = new AbortController();
@@ -151,10 +151,6 @@ export async function runAgent(
         stopReason = 'max_cost';
         break;
       }
-      if (turn + 1 >= input.limits.maxTurns) {
-        stopReason = 'max_turns';
-        break;
-      }
       if (calls.length + response.toolCalls.length > input.limits.maxToolCalls) {
         stopReason = 'max_tool_calls';
         break;
@@ -187,6 +183,7 @@ export async function runAgent(
           arguments: redact(toolCall.arguments),
           result: redact(result),
           durationMs: Date.now() - toolStarted,
+          outcome: result !== null && typeof result === 'object' && (result as { isError?: unknown }).isError === true ? 'error' as const : 'success' as const,
         };
         calls.push(observed);
         events.push(event(input.serverId, 'tool_call', observed, observed.durationMs));
@@ -196,12 +193,16 @@ export async function runAgent(
         completedTurn.push(toolMessage);
       }
       transcript.push(...completedTurn);
+      if (turn + 1 >= input.limits.maxTurns) {
+        stopReason = 'max_turns';
+        break;
+      }
     }
     }
   } finally {
     clearTimeout(timeout);
     options.signal?.removeEventListener('abort', onAbort);
-    await dependencies.provider.close?.();
+    if (options.closeProvider !== false) await dependencies.provider.close?.();
   }
 
   const redactedStream = redact(streamedText);
@@ -240,4 +241,83 @@ export async function runAgent(
     events: safeEvents,
     stopReason,
   });
+}
+
+export type ScriptedUserTurn = { id: string; user: string };
+
+export type ConversationAgentResult = AgentResult & {
+  turns: Array<{ id: string; user: string; observation: AgentResult }>;
+};
+
+function aggregateConversation(turns: ConversationAgentResult['turns'], started: number): ConversationAgentResult {
+  const last = turns.at(-1)?.observation;
+  return {
+    output: last?.output ?? '',
+    transcript: turns.flatMap((turn) => turn.observation.transcript),
+    toolCalls: turns.flatMap((turn) => turn.observation.toolCalls),
+    durationMs: Date.now() - started,
+    tokens: turns.reduce((total, turn) => ({
+      input: total.input + turn.observation.tokens.input,
+      output: total.output + turn.observation.tokens.output,
+      total: total.total + turn.observation.tokens.total,
+    }), { input: 0, output: 0, total: 0 }),
+    costUsd: turns.reduce((total, turn) => total + turn.observation.costUsd, 0),
+    events: turns.flatMap((turn, index) => [
+      event(turn.observation.events[0]?.caseId ?? 'conversation', 'user_turn', { id: turn.id, user: turn.user, index: index + 1 }),
+      ...turn.observation.events.map((entry) => ({
+        ...entry,
+        userTurn: turn.id,
+        ...(entry.type === 'model_turn' && entry.data !== null && typeof entry.data === 'object' && typeof (entry.data as { turn?: unknown }).turn === 'number'
+          ? { modelTurn: (entry.data as { turn: number }).turn }
+          : {}),
+      })),
+    ]),
+    stopReason: last?.stopReason ?? 'complete',
+    turns,
+  };
+}
+
+export async function runScriptedConversation(
+  input: Omit<AgentInput, 'prompt' | 'history'> & { turns: ScriptedUserTurn[] },
+  dependencies: { provider: ProviderAdapter; mcp: McpForAgent },
+  options: { signal?: AbortSignal; onUpdate?(update: AgentUpdate): void } = {},
+): Promise<ConversationAgentResult> {
+  const started = Date.now();
+  const history: ProviderMessage[] = [];
+  const turns: ConversationAgentResult['turns'] = [];
+  let usedModelTurns = 0;
+  let usedToolCalls = 0;
+  let usedCostUsd = 0;
+  let stopReason: AgentResult['stopReason'] = 'complete';
+
+  try {
+    for (const step of input.turns) {
+      const elapsed = Date.now() - started;
+      const maxTurns = input.limits.maxTurns - usedModelTurns;
+      const maxToolCalls = input.limits.maxToolCalls - usedToolCalls;
+      const timeoutMs = input.limits.timeoutMs - elapsed;
+      if (maxTurns < 1) { stopReason = 'max_turns'; break; }
+      if (maxToolCalls < 0) { stopReason = 'max_tool_calls'; break; }
+      if (timeoutMs < 1) { stopReason = 'max_time'; break; }
+      if (input.limits.maxCostUsd !== undefined && usedCostUsd >= input.limits.maxCostUsd) { stopReason = 'max_cost'; break; }
+      const remainingCostUsd = input.limits.maxCostUsd === undefined ? undefined : input.limits.maxCostUsd - usedCostUsd;
+      const result = await runAgent({
+        ...input,
+        prompt: step.user,
+        history,
+        limits: { ...input.limits, maxTurns, maxToolCalls, timeoutMs, ...(remainingCostUsd === undefined ? {} : { maxCostUsd: remainingCostUsd }) },
+      }, dependencies, { ...options, closeProvider: false });
+      turns.push({ id: step.id, user: step.user, observation: result });
+      history.push({ role: 'user', content: step.user }, ...result.transcript);
+      usedModelTurns += result.events.filter((entry) => entry.type === 'model_turn').length;
+      usedToolCalls += result.toolCalls.length;
+      usedCostUsd += result.costUsd;
+      stopReason = result.stopReason;
+      if (stopReason !== 'complete') break;
+    }
+  } finally {
+    await dependencies.provider.close?.();
+  }
+
+  return { ...aggregateConversation(turns, started), stopReason };
 }
