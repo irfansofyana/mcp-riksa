@@ -1,6 +1,7 @@
 import { parse as parseYaml, stringify } from 'yaml';
 import type {
-  AgentSuiteCase,
+  AgentSuiteCaseV1,
+  AgentSuiteCaseV2,
   DirectSuiteCase,
   JsonValue,
   ProviderSummary,
@@ -437,6 +438,15 @@ function isSuiteAssertion(value: unknown): value is SuiteAssertion {
     case 'duration': return typeof entry.maxMs === 'number';
     case 'tokens': return typeof entry.max === 'number';
     case 'cost': return typeof entry.maxUsd === 'number';
+    case 'tool': {
+      const argumentsValue = entry.arguments === undefined ? undefined : objectValue(entry.arguments);
+      const result = entry.result === undefined ? undefined : objectValue(entry.result);
+      return typeof entry.tool === 'string'
+        && (entry.occurrence === undefined || (Number.isInteger(entry.occurrence) && entry.occurrence > 0))
+        && (entry.arguments === undefined || (argumentsValue !== undefined && optionalString(argumentsValue.path) && isJsonValue(argumentsValue.equals)))
+        && (entry.result === undefined || (result !== undefined && optionalString(result.path) && ((Object.hasOwn(result, 'equals') && isJsonValue(result.equals)) || typeof result.exists === 'boolean')))
+        && (entry.success === undefined || typeof entry.success === 'boolean');
+    }
     default: return false;
   }
 }
@@ -445,9 +455,17 @@ export function createDirectSuiteCase(id: string, server = ''): DirectSuiteCase 
   return { id, kind: 'direct', server, call: { tool: '', arguments: {} }, assertions: [] };
 }
 
-export function createAgentSuiteCase(id: string, server = '', provider = '', model = ''): AgentSuiteCase {
+export function createAgentSuiteCase(id: string, server = '', provider = '', model = ''): AgentSuiteCaseV1 {
   return {
     id, kind: 'agent', server, provider, model, prompt: '',
+    limits: { maxTurns: 8, maxToolCalls: 16, timeoutMs: 60_000 }, assertions: [],
+  };
+}
+
+export function createAgentSuiteCaseV2(id: string, server = '', provider = '', model = ''): AgentSuiteCaseV2 {
+  return {
+    id, kind: 'agent', server, provider, model,
+    turns: [{ id: 'turn-1', user: '', assertions: [] }], iterations: { count: 1, minPasses: 1 },
     limits: { maxTurns: 8, maxToolCalls: 16, timeoutMs: 60_000 }, assertions: [],
   };
 }
@@ -460,12 +478,38 @@ export function serializeSuiteDraft(draft: SuiteDraft): string {
   return stringify(draft, { lineWidth: 0 });
 }
 
+function hasOnlyKeys(value: Record<string, unknown>, keys: string[]): boolean {
+  return Object.keys(value).every((key) => keys.includes(key));
+}
+
+function validIterations(value: unknown): value is { count: number; minPasses: number } {
+  const iterations = objectValue(value);
+  return !!iterations && hasOnlyKeys(iterations, ['count', 'minPasses'])
+    && Number.isInteger(iterations.count) && iterations.count > 0
+    && Number.isInteger(iterations.minPasses) && iterations.minPasses > 0 && iterations.minPasses <= iterations.count;
+}
+
+function validV2Turns(value: unknown, label: string): value is Array<{ id: string; user: string; assertions: SuiteAssertion[] }> {
+  if (!Array.isArray(value) || value.length === 0) return false;
+  const ids = new Set<string>();
+  return value.every((raw, index) => {
+    const turn = objectValue(raw);
+    if (!turn || !hasOnlyKeys(turn, ['id', 'user', 'assertions']) || typeof turn.id !== 'string' || !turn.id
+      || typeof turn.user !== 'string' || !Array.isArray(turn.assertions) || !turn.assertions.every(isSuiteAssertion)) {
+      throw new Error(`${label} turn ${index + 1} needs an ID, user text, and valid assertions`);
+    }
+    if (ids.has(turn.id)) throw new Error(`${label} turn IDs must be unique`);
+    ids.add(turn.id);
+    return true;
+  });
+}
+
 export function parseSuiteDraft(source: string): SuiteDraft {
   const value: unknown = parseYaml(source);
   const root = objectValue(value);
   if (!root) throw new Error('Suite YAML must contain an object');
-  if (root.version !== 1 || typeof root.name !== 'string' || !root.name || !Array.isArray(root.cases) || root.cases.length === 0) {
-    throw new Error('Suite YAML needs version: 1, a name, and at least one case');
+  if ((root.version !== 1 && root.version !== 2) || typeof root.name !== 'string' || !root.name || !Array.isArray(root.cases) || root.cases.length === 0) {
+    throw new Error('Suite YAML needs version: 1 or 2, a name, and at least one case');
   }
   if (root.description !== undefined && typeof root.description !== 'string') throw new Error('Suite description must be text');
   const caseIds = new Set<string>();
@@ -478,20 +522,27 @@ export function parseSuiteDraft(source: string): SuiteDraft {
     if (caseIds.has(entry.id)) throw new Error('Suite case IDs must be unique');
     caseIds.add(entry.id);
     if (!entry.assertions.every(isSuiteAssertion)) throw new Error(`${label} has an invalid assertion`);
+    if (root.version === 1 && entry.assertions.some((assertion) => objectValue(assertion)?.type === 'tool')) throw new Error(`${label} version 1 case cannot use tool assertions`);
     if (entry.kind === 'direct') {
       const call = objectValue(entry.call);
       if (!call || typeof call.tool !== 'string' || !objectValue(call.arguments)) throw new Error(`${label} direct case needs a tool and arguments object`);
       return;
     }
-    if (entry.kind === 'agent') {
-      const limits = objectValue(entry.limits);
-      if (typeof entry.provider !== 'string' || typeof entry.model !== 'string' || typeof entry.prompt !== 'string' || !limits
-        || typeof limits.maxTurns !== 'number' || typeof limits.maxToolCalls !== 'number' || typeof limits.timeoutMs !== 'number') {
-        throw new Error(`${label} agent case needs provider, model, prompt, and limits`);
+    if (entry.kind !== 'agent') throw new Error(`${label} kind must be direct or agent`);
+    const limits = objectValue(entry.limits);
+    if (typeof entry.provider !== 'string' || typeof entry.model !== 'string' || !limits
+      || typeof limits.maxTurns !== 'number' || typeof limits.maxToolCalls !== 'number' || typeof limits.timeoutMs !== 'number') {
+      throw new Error(`${label} agent case needs provider, model, and limits`);
+    }
+    if (root.version === 1) {
+      if (typeof entry.prompt !== 'string' || Object.hasOwn(entry, 'turns') || Object.hasOwn(entry, 'iterations')) {
+        throw new Error(`${label} version 1 agent case needs prompt and cannot define turns or iterations`);
       }
       return;
     }
-    throw new Error(`${label} kind must be direct or agent`);
+    if (Object.hasOwn(entry, 'prompt') || !validV2Turns(entry.turns, label) || !validIterations(entry.iterations)) {
+      throw new Error(`${label} version 2 agent case needs turns, valid iterations, and no prompt`);
+    }
   });
   return clone(root as SuiteDraft);
 }
@@ -527,6 +578,7 @@ export function createSuiteAssertion(type: SuiteAssertion['type']): SuiteAsserti
     case 'duration': return { type, maxMs: 1_000 };
     case 'tokens': return { type, max: 1_000 };
     case 'cost': return { type, maxUsd: 0.1 };
+    case 'tool': return { type, tool: '' };
   }
 }
 
