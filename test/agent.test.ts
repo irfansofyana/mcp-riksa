@@ -670,6 +670,43 @@ describe('agent stop boundaries', () => {
     expect(result.events.filter((entry) => entry.type === 'model_turn').map((entry) => entry.userTurn)).toEqual(['request', 'time']);
   });
 
+  test('redacts registered secrets split across scripted user-turn boundaries', async () => {
+    const secret = 'scripted-user-turn-secret';
+    registerSecretValue(secret);
+    const requests: ProviderMessage[][] = [];
+    const updates: Array<{ type: string; delta?: string }> = [];
+    let invocation = 0;
+    const provider = scriptedAdapter(async (request) => {
+      requests.push(request.messages);
+      invocation += 1;
+      return {
+        text: invocation === 1 ? 'before scripted-user-' : invocation === 2 ? 'turn-secret after' : 'safe final',
+        toolCalls: [], usage: { input: 1, output: 1, total: 2 }, stopReason: 'complete', raw: { invocation },
+      };
+    });
+    const result = await runScriptedConversation(
+      { turns: [{ id: 'one', user: 'First' }, { id: 'two', user: 'Second' }, { id: 'three', user: 'Third' }], model: 'x', serverId: 'sample', limits: { maxTurns: 3, maxToolCalls: 1, timeoutMs: 5000 } },
+      { provider, mcp: manager },
+      { onUpdate: (update) => updates.push(update) },
+    );
+
+    expect(result.output).toBe('safe final');
+    expect(result.turns.map((turn) => turn.observation.output)).toEqual([`before ${REDACTED}`, ' after', 'safe final']);
+    expect(result.transcript.filter((message) => message.role === 'assistant').map((message) => message.content)).toEqual([`before ${REDACTED}`, ' after', 'safe final']);
+    expect(result.events.filter((entry) => entry.type === 'model_turn').slice(0, 2).map((entry) => (entry.data as { response: unknown }).response)).toEqual([REDACTED, REDACTED]);
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(JSON.stringify(result)).not.toContain('scripted-user-');
+    expect(JSON.stringify(result)).not.toContain('turn-secret');
+    expect(JSON.stringify(requests[2])).not.toContain(secret);
+    expect(JSON.stringify(requests[2])).not.toContain('scripted-user-');
+    expect(JSON.stringify(requests[2])).not.toContain('turn-secret');
+    const streamed = updates.filter((update) => update.type === 'text_delta').map((update) => update.delta).join('');
+    expect(streamed).toBe(`before ${REDACTED} aftersafe final`);
+    expect(streamed).not.toContain(secret);
+    expect(streamed).not.toContain('scripted-user-');
+    expect(streamed).not.toContain('turn-secret');
+  });
+
   test('allows zero-cost scripted turns under a zero max-cost budget', async () => {
     const provider: ProviderAdapter = {
       id: 'free',

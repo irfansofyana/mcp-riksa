@@ -522,7 +522,6 @@ export function parseSuiteDraft(source: string): SuiteDraft {
     if (caseIds.has(entry.id)) throw new Error('Suite case IDs must be unique');
     caseIds.add(entry.id);
     if (!entry.assertions.every(isSuiteAssertion)) throw new Error(`${label} has an invalid assertion`);
-    if (root.version === 1 && entry.assertions.some((assertion) => objectValue(assertion)?.type === 'tool')) throw new Error(`${label} version 1 case cannot use tool assertions`);
     if (entry.kind === 'direct') {
       const call = objectValue(entry.call);
       if (!call || typeof call.tool !== 'string' || !objectValue(call.arguments)) throw new Error(`${label} direct case needs a tool and arguments object`);
@@ -540,6 +539,7 @@ export function parseSuiteDraft(source: string): SuiteDraft {
       }
       return;
     }
+    if (!Object.hasOwn(entry, 'iterations')) entry.iterations = { count: 1, minPasses: 1 };
     if (Object.hasOwn(entry, 'prompt') || !validV2Turns(entry.turns, label) || !validIterations(entry.iterations)) {
       throw new Error(`${label} version 2 agent case needs turns, valid iterations, and no prompt`);
     }

@@ -59,6 +59,69 @@ function redactString(value: string): string {
   }
 }
 
+type TextRange = { start: number; end: number };
+
+function crossingRanges(combined: string, boundaries: number[]): TextRange[] {
+  const crossesBoundary = (range: TextRange) => boundaries.some((boundary) => range.start < boundary && boundary < range.end);
+  const registered = [...KNOWN_SECRET_VALUES.keys()].flatMap((secret) => {
+    const matches: TextRange[] = [];
+    for (let start = combined.indexOf(secret); start >= 0; start = combined.indexOf(secret, start + Math.max(secret.length, 1))) {
+      matches.push({ start, end: start + secret.length });
+    }
+    return matches;
+  });
+  const credentialPatterns = [
+    { pattern: AUTHORIZATION_VALUE, prefixLength: (match: RegExpExecArray) => match[1]?.length ?? 0 },
+    { pattern: BEARER_VALUE, prefixLength: (match: RegExpExecArray) => (match[1]?.length ?? 0) + (match[2]?.length ?? 0) },
+  ].flatMap(({ pattern, prefixLength }) => {
+    const matcher = new RegExp(pattern.source, pattern.flags);
+    const matches: TextRange[] = [];
+    for (let match = matcher.exec(combined); match !== null; match = matcher.exec(combined)) {
+      const fullMatch = { start: match.index, end: match.index + match[0].length };
+      if (crossesBoundary(fullMatch)) matches.push({ start: match.index + prefixLength(match), end: fullMatch.end });
+    }
+    return matches;
+  });
+  return [...registered.filter(crossesBoundary), ...credentialPatterns]
+    .sort((left, right) => left.start - right.start || right.end - left.end)
+    .reduce<TextRange[]>((accepted, range) => {
+      const previous = accepted.at(-1);
+      if (previous && range.start < previous.end) previous.end = Math.max(previous.end, range.end);
+      else accepted.push({ ...range });
+      return accepted;
+    }, []);
+}
+
+export function redactTextSequence(parts: readonly string[]): { parts: string[]; crossesBoundary: boolean } {
+  const combined = parts.join('');
+  const individuallyRedacted = parts.map(redactString);
+  const fullyRedacted = redactString(combined);
+  const boundaries = parts.reduce<number[]>((ends, part) => [...ends, (ends.at(-1) ?? 0) + part.length], []);
+  const ranges = crossingRanges(combined, boundaries);
+
+  if (ranges.length === 0) {
+    const crossesBoundary = fullyRedacted !== individuallyRedacted.join('');
+    return crossesBoundary
+      ? { parts: parts.map((_, index) => index === parts.length - 1 ? fullyRedacted : ''), crossesBoundary }
+      : { parts: individuallyRedacted, crossesBoundary: false };
+  }
+
+  const projected = parts.map((part, index) => {
+    const start = index === 0 ? 0 : boundaries[index - 1]!;
+    const end = boundaries[index]!;
+    let cursor = start;
+    let output = '';
+    for (const range of ranges) {
+      if (range.end <= start || range.start >= end) continue;
+      output += combined.slice(cursor, Math.max(cursor, range.start));
+      if (range.start >= start && range.start < end) output += REDACTED;
+      cursor = Math.max(cursor, range.end);
+    }
+    return redactString(output + combined.slice(cursor, end));
+  });
+  return { parts: projected, crossesBoundary: true };
+}
+
 function isSecretReference(value: unknown): boolean {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;

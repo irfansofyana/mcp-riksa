@@ -1,8 +1,20 @@
 import { describe, expect, test } from 'vitest';
-import { redact, REDACTED, registerProtocolSecretValue, registerSecretValue, unregisterProtocolSecretValue, unregisterSecretValue } from '../src/core/redaction.js';
+import { redact, REDACTED, redactTextSequence, registerProtocolSecretValue, registerSecretValue, unregisterProtocolSecretValue, unregisterSecretValue } from '../src/core/redaction.js';
 import { parseSuite } from '../src/core/suite.js';
 
 describe('redaction', () => {
+  test('projects cross-boundary secrets onto their original text parts', () => {
+    registerSecretValue('aaaabbbbcccc');
+    registerSecretValue('bbbbccccddddEEEEFFFF');
+    expect(redactTextSequence(['aaaabbbb', 'ccccddddEEEEFFFF'])).toEqual({ parts: [REDACTED, ''], crossesBoundary: true });
+    unregisterSecretValue('aaaabbbbcccc');
+    unregisterSecretValue('bbbbccccddddEEEEFFFF');
+
+    expect(redactTextSequence(['prefix Authorization: Bear', 'er token suffix'])).toEqual({
+      parts: ['prefix Authorization: Bear', `er ${REDACTED} suffix`], crossesBoundary: true,
+    });
+  });
+
   test('redacts short credentials and releases scoped registrations', () => {
     registerSecretValue('q7');
     expect(redact({ arbitrary: 'echo q7' })).toEqual({ arbitrary: `echo ${REDACTED}` });

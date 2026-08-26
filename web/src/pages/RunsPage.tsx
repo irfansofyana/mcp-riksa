@@ -6,6 +6,10 @@ import type { CaseResult, EventRecord, Run } from '../types.js';
 type UserTurnTrace = { id: string; user: string };
 type IterationTrace = { label: string; turns: UserTurnTrace[] };
 
+export function expectedToolNames(assertions: CaseResult['assertions']): string[] {
+  return assertions.flatMap((entry) => (entry.assertion.type === 'tool_called' || entry.assertion.type === 'tool') && typeof entry.assertion.tool === 'string' ? [entry.assertion.tool] : []);
+}
+
 function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
@@ -58,7 +62,7 @@ function evaluationTrace(value: CaseResult): { threshold?: string; iterations: I
 }
 
 function CaseDetail({ value }: { value: CaseResult }) {
-  const expectedTools = value.assertions.flatMap((entry) => entry.assertion.type === 'tool_called' && typeof entry.assertion.tool === 'string' ? [entry.assertion.tool] : []);
+  const expectedTools = expectedToolNames(value.assertions);
   const actualTools = value.observation.toolCalls.map((call) => call.name);
   const events: EventRecord[] = value.observation.events;
   const metrics = aggregateMetrics(value);

@@ -1,5 +1,5 @@
 import { event } from '../core/events.js';
-import { REDACTED, redact } from '../core/redaction.js';
+import { REDACTED, redact, redactTextSequence } from '../core/redaction.js';
 import type { Limits, NormalizedEvent, Observation, ToolCallObservation } from '../core/types.js';
 import type { ProviderAdapter, ProviderMessage, ProviderTool } from './types.js';
 
@@ -249,6 +249,40 @@ export type ConversationAgentResult = AgentResult & {
   turns: Array<{ id: string; user: string; observation: AgentResult }>;
 };
 
+function redactScriptedTurns(turns: ConversationAgentResult['turns']): ConversationAgentResult['turns'] {
+  const assistantMessages = turns.flatMap((turn) => turn.observation.transcript.filter((message) => message.role === 'assistant'));
+  const sequence = redactTextSequence(assistantMessages.map((message) => message.content));
+  if (!sequence.crossesBoundary) return turns;
+
+  let assistantIndex = 0;
+  return turns.map((turn) => {
+    let output = turn.observation.output;
+    const transcript = turn.observation.transcript.map((message) => {
+      if (message.role !== 'assistant') return message;
+      const content = sequence.parts[assistantIndex++]!;
+      output = content;
+      return { ...message, content };
+    });
+    return {
+      ...turn,
+      observation: {
+        ...turn.observation,
+        output,
+        transcript,
+        events: turn.observation.events.map((entry) => entry.type === 'model_turn'
+          ? {
+            ...entry,
+            data: {
+              ...(entry.data !== null && typeof entry.data === 'object' ? entry.data : {}),
+              response: REDACTED,
+            },
+          }
+          : entry),
+      },
+    };
+  });
+}
+
 function aggregateConversation(turns: ConversationAgentResult['turns'], started: number): ConversationAgentResult {
   const last = turns.at(-1)?.observation;
   return {
@@ -289,6 +323,9 @@ export async function runScriptedConversation(
   let usedToolCalls = 0;
   let usedCostUsd = 0;
   let stopReason: AgentResult['stopReason'] = 'complete';
+  const onUpdate = options.onUpdate === undefined ? undefined : (update: AgentUpdate) => {
+    if (update.type !== 'text_delta') options.onUpdate!(update);
+  };
 
   try {
     for (const step of input.turns) {
@@ -306,18 +343,24 @@ export async function runScriptedConversation(
         prompt: step.user,
         history,
         limits: { ...input.limits, maxTurns, maxToolCalls, timeoutMs, ...(remainingCostUsd === undefined ? {} : { maxCostUsd: remainingCostUsd }) },
-      }, dependencies, { ...options, closeProvider: false });
+      }, dependencies, { signal: options.signal, onUpdate, closeProvider: false });
       turns.push({ id: step.id, user: step.user, observation: result });
-      history.push({ role: 'user', content: step.user }, ...result.transcript);
-      usedModelTurns += result.events.filter((entry) => entry.type === 'model_turn').length;
-      usedToolCalls += result.toolCalls.length;
-      usedCostUsd += result.costUsd;
-      stopReason = result.stopReason;
+      turns.splice(0, turns.length, ...redactScriptedTurns(turns));
+      history.length = 0;
+      for (const completed of turns) history.push({ role: 'user', content: completed.user }, ...completed.observation.transcript);
+      const observation = turns.at(-1)!.observation;
+      usedModelTurns += observation.events.filter((entry) => entry.type === 'model_turn').length;
+      usedToolCalls += observation.toolCalls.length;
+      usedCostUsd += observation.costUsd;
+      stopReason = observation.stopReason;
       if (stopReason !== 'complete') break;
     }
   } finally {
     await dependencies.provider.close?.();
   }
 
-  return { ...aggregateConversation(turns, started), stopReason };
+  const conversation = { ...aggregateConversation(turns, started), stopReason };
+  const text = conversation.transcript.filter((message) => message.role === 'assistant').map((message) => message.content).join('');
+  if (text && stopReason !== 'cancelled' && stopReason !== 'max_time') options.onUpdate?.({ type: 'text_delta', delta: text });
+  return conversation;
 }
