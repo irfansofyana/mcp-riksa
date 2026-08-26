@@ -669,4 +669,17 @@ describe('agent stop boundaries', () => {
     expect(result.events.filter((entry) => entry.type === 'user_turn').map((entry) => entry.userTurn)).toEqual([undefined, undefined]);
     expect(result.events.filter((entry) => entry.type === 'model_turn').map((entry) => entry.userTurn)).toEqual(['request', 'time']);
   });
+
+  test('allows zero-cost scripted turns under a zero max-cost budget', async () => {
+    const provider: ProviderAdapter = {
+      id: 'free',
+      pricingFor: () => ({ inputPerMillion: 0, outputPerMillion: 0 }),
+      complete: async () => ({ text: 'done', toolCalls: [], usage: { input: 0, output: 0, total: 0 }, stopReason: 'complete', raw: {} }),
+    };
+    const result = await runScriptedConversation(
+      { turns: [{ id: 'free', user: 'Run free' }], model: 'x', serverId: 'sample', limits: { maxTurns: 1, maxToolCalls: 1, timeoutMs: 5000, maxCostUsd: 0 } },
+      { provider, mcp: manager },
+    );
+    expect(result).toMatchObject({ output: 'done', stopReason: 'complete', tokens: { total: 0 } });
+  });
 });

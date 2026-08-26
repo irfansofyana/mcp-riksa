@@ -81,7 +81,9 @@ function evaluate(assertion: Assertion, observation: Observation): AssertionResu
         }
       }
       if (assertion.success !== undefined) {
-        const actual = call.outcome === undefined ? call.error === undefined : call.outcome === 'success';
+        const actual = call.outcome === undefined
+          ? call.error === undefined && !(call.result !== null && typeof call.result === 'object' && (call.result as { isError?: unknown }).isError === true)
+          : call.outcome === 'success';
         return result(assertion, actual === assertion.success, assertion.success, actual, 'Tool success');
       }
       return result(assertion, true, assertion.tool, call.name, 'Selected tool call');

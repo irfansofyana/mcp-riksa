@@ -53,6 +53,12 @@ describe('assertion evaluator', () => {
     expect(result).toMatchObject({ passed: false, expected: true, actual: false });
   });
 
+  test('derives direct tool outcome from an MCP isError result when outcome is absent', () => {
+    const direct = { ...observation, toolCalls: [{ name: 'lookup', arguments: {}, result: { isError: true } }] };
+    expect(evaluateAssertions([{ type: 'tool', tool: 'lookup', success: false }], direct)[0]).toMatchObject({ passed: true });
+    expect(evaluateAssertions([{ type: 'tool', tool: 'lookup', success: true }], direct)[0]).toMatchObject({ passed: false });
+  });
+
   test('returns useful expected and actual values for failures', () => {
     const [result] = evaluateAssertions([{ type: 'tool_called', tool: 'missing' }], observation);
     expect(result).toMatchObject({
@@ -142,7 +148,7 @@ describe('suite runner', () => {
       direct: async () => observation,
       agent: async () => {
         calls += 1;
-        const valid = calls !== 2;
+        const valid = calls !== 3;
         return {
           ...observation,
           output: 'scheduled',
@@ -161,5 +167,6 @@ describe('suite runner', () => {
     expect(run).toMatchObject({ status: 'passed', summary: { passed: 1 } });
     expect(run.cases[0]?.evaluation).toMatchObject({ count: 3, minPasses: 2, passed: 2, failed: 1 });
     expect(run.cases[0]?.iterations).toHaveLength(3);
+    expect(run.cases[0]?.assertions.every((assertion) => assertion.passed)).toBe(true);
   });
 });

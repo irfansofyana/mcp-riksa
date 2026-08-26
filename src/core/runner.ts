@@ -113,13 +113,14 @@ async function runScriptedCase(
   const failed = iterations.length - passed;
   const latest = iterations.at(-1);
   const status = signal.aborted ? 'cancelled' : passed >= entry.iterations.minPasses ? 'passed' : 'failed';
+  const representative = status === 'passed' ? iterations.findLast((iteration) => iteration.status === 'passed') : latest;
   const latestFailure = latest?.error ?? latest?.turns.find((turn) => turn.error !== undefined)?.error;
   return {
     id: entry.id,
     kind: entry.kind,
     status,
-    observation: latest?.observation ?? emptyObservation(),
-    assertions: latest?.assertions ?? [],
+    observation: representative?.observation ?? emptyObservation(),
+    assertions: representative?.assertions ?? [],
     evaluation: {
       count: entry.iterations.count,
       minPasses: entry.iterations.minPasses,

@@ -299,7 +299,7 @@ export async function runScriptedConversation(
       if (maxTurns < 1) { stopReason = 'max_turns'; break; }
       if (maxToolCalls < 0) { stopReason = 'max_tool_calls'; break; }
       if (timeoutMs < 1) { stopReason = 'max_time'; break; }
-      if (input.limits.maxCostUsd !== undefined && usedCostUsd >= input.limits.maxCostUsd) { stopReason = 'max_cost'; break; }
+      if (input.limits.maxCostUsd !== undefined && usedCostUsd > input.limits.maxCostUsd) { stopReason = 'max_cost'; break; }
       const remainingCostUsd = input.limits.maxCostUsd === undefined ? undefined : input.limits.maxCostUsd - usedCostUsd;
       const result = await runAgent({
         ...input,

@@ -685,13 +685,14 @@ export class WorkbenchRuntime {
     const response = await this.mcp.call(server, tool, args, { confirmDangerous: dangerous, signal });
     const output = 'structuredContent' in response && response.structuredContent !== undefined ? response.structuredContent : response.content;
     const durationMs = Date.now() - started;
+    const outcome = response.isError === true ? 'error' as const : 'success' as const;
     return {
       output,
-      toolCalls: [{ name: tool, arguments: args, result: response, durationMs }],
+      toolCalls: [{ name: tool, arguments: args, result: response, outcome, durationMs }],
       durationMs,
       tokens: { input: 0, output: 0, total: 0 },
       costUsd: 0,
-      events: [event(server, 'tool_call', { tool, arguments: args, result: response }, durationMs)],
+      events: [event(server, 'tool_call', { tool, arguments: args, result: response, outcome }, durationMs)],
     };
   }
 
