@@ -1,6 +1,6 @@
 {
   "name": "mcp-riksa",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Local-first MCP server and agent evaluation workbench",
   "type": "module",
   "license": "MIT",
