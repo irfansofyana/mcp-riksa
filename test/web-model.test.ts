@@ -20,6 +20,7 @@ import {
   signedDelta,
   traceWindowMs,
 } from '../web/src/model.js';
+import { expectedToolNames } from '../web/src/pages/RunsPage.js';
 import {
   THEME_STORAGE_KEY,
   persistThemePreference,
@@ -233,6 +234,59 @@ describe('workbench browser view model', () => {
     expect(source).toContain('name: checkout-regression');
     expect(source).toContain('tool: quote');
     expect(parseSuiteDraft(source)).toEqual(draft);
+  });
+
+  test('accepts core-compatible v1 tool assertions and defaults omitted v2 iterations', () => {
+    const v1 = parseSuiteDraft(`version: 1
+name: v1-tool
+cases:
+  - id: direct
+    kind: direct
+    server: sample
+    call: { tool: add, arguments: {} }
+    assertions:
+      - { type: tool, tool: add, success: true }
+`);
+    expect(v1.cases[0]?.assertions).toEqual([{ type: 'tool', tool: 'add', success: true }]);
+
+    const v2 = parseSuiteDraft(`version: 2
+name: v2-defaults
+cases:
+  - id: agent
+    kind: agent
+    server: sample
+    provider: local
+    model: default
+    turns:
+      - id: request
+        user: Add 2 and 3
+        assertions: []
+    limits: { maxTurns: 2, maxToolCalls: 2, timeoutMs: 5000 }
+    assertions: []
+`);
+    expect(v2.cases[0]).toMatchObject({ iterations: { count: 1, minPasses: 1 } });
+    expect(() => parseSuiteDraft(`version: 2
+name: bad-iterations
+cases:
+  - id: agent
+    kind: agent
+    server: sample
+    provider: local
+    model: default
+    turns: [{ id: request, user: Add, assertions: [] }]
+    iterations: { count: 1, minPasses: 2 }
+    limits: { maxTurns: 2, maxToolCalls: 2, timeoutMs: 5000 }
+    assertions: []
+`)).toThrow(/valid iterations/i);
+  });
+
+  test('includes tool invocation assertions in expected-tool summaries', () => {
+    expect(expectedToolNames([
+      { assertion: { type: 'tool_called', tool: 'add' }, passed: true, message: '' },
+      { assertion: { type: 'tool', tool: 'lookup' }, passed: true, message: '' },
+      { assertion: { type: 'tool_count', tool: 'ignored' }, passed: true, message: '' },
+      { assertion: { type: 'tool_not_called', tool: 'delete' }, passed: true, message: '' },
+    ])).toEqual(['add', 'lookup']);
   });
 
   test('rejects malformed YAML before opening it in the visual composer', () => {

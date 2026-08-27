@@ -56,4 +56,19 @@ describe('reporters', () => {
     expect(output).toContain('<failure');
     expect(output).not.toContain('export-secret');
   });
+
+  test('aggregates scripted iteration metrics in HTML and JUnit reports', () => {
+    const first = { ...run.cases[0]!.observation, durationMs: 20, tokens: { input: 2, output: 3, total: 5 }, costUsd: 0.01 };
+    const second = { ...run.cases[0]!.observation, durationMs: 80, tokens: { input: 8, output: 12, total: 20 }, costUsd: 0.04 };
+    const scripted: RunResult = {
+      ...run,
+      cases: [{ ...run.cases[0]!, observation: second, evaluation: { count: 2, minPasses: 1, passed: 1, failed: 1, passRate: 0.5 }, iterations: [
+        { index: 1, status: 'failed', observation: first, assertions: [], turns: [] },
+        { index: 2, status: 'passed', observation: second, assertions: [], turns: [] },
+      ] }],
+    };
+    expect(reportHtml(scripted)).toContain('<dd>100 ms</dd>');
+    expect(reportHtml(scripted)).toContain('<dd>25</dd>');
+    expect(reportJunit(scripted)).toContain('time="0.100"');
+  });
 });

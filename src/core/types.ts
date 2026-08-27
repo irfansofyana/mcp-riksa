@@ -8,12 +8,22 @@ export type Limits = {
   maxCostUsd?: number;
 };
 
+export type ToolAssertion = {
+  type: 'tool';
+  tool: string;
+  occurrence?: number;
+  arguments?: { path?: string; equals: JsonValue };
+  result?: { path?: string; equals?: JsonValue; exists?: boolean };
+  success?: boolean;
+};
+
 export type Assertion =
   | { type: 'tool_called'; tool: string }
   | { type: 'tool_not_called'; tool: string }
   | { type: 'tool_count'; tool?: string; count: number }
   | { type: 'tool_order'; tools: string[] }
   | { type: 'args'; tool: string; path?: string; equals: JsonValue }
+  | ToolAssertion
   | { type: 'jsonpath'; path: string; equals?: JsonValue; exists?: boolean }
   | { type: 'contains'; path?: string; value: string }
   | { type: 'regex'; path?: string; pattern: string; flags?: string }
@@ -32,7 +42,7 @@ export type DirectCase = BaseCase & {
   call: { tool: string; arguments: Record<string, JsonValue>; dangerous?: boolean };
 };
 
-export type AgentCase = BaseCase & {
+export type V1AgentCase = BaseCase & {
   kind: 'agent';
   provider: string;
   model: string;
@@ -40,25 +50,61 @@ export type AgentCase = BaseCase & {
   limits: Limits;
 };
 
-export type Suite = {
+export type AgentTurn = {
+  id: string;
+  user: string;
+  assertions: Assertion[];
+};
+
+export type AgentIterations = {
+  count: number;
+  minPasses: number;
+};
+
+export type V2AgentCase = BaseCase & {
+  kind: 'agent';
+  provider: string;
+  model: string;
+  turns: AgentTurn[];
+  iterations: AgentIterations;
+  limits: Limits;
+};
+
+export type AgentCase = V1AgentCase | V2AgentCase;
+
+export type V1Suite = {
   version: 1;
   name: string;
   description?: string;
-  cases: Array<DirectCase | AgentCase>;
+  cases: Array<DirectCase | V1AgentCase>;
 };
+
+export type V2Suite = {
+  version: 2;
+  name: string;
+  description?: string;
+  cases: Array<DirectCase | V2AgentCase>;
+};
+
+export type Suite = V1Suite | V2Suite;
 
 export type ToolCallObservation = {
   name: string;
   arguments: Record<string, unknown>;
   result?: unknown;
+  outcome?: 'success' | 'error';
+  error?: string;
   durationMs?: number;
 };
 
 export type NormalizedEvent = {
   id: string;
   caseId: string;
-  type: 'case_started' | 'model_turn' | 'tool_call' | 'tool_result' | 'assertion' | 'stop' | 'case_completed' | 'error' | 'oauth';
+  type: 'case_started' | 'user_turn' | 'model_turn' | 'tool_call' | 'tool_result' | 'assertion' | 'stop' | 'case_completed' | 'error' | 'oauth';
   timestamp: string;
+  iteration?: number;
+  userTurn?: string;
+  modelTurn?: number;
   durationMs?: number;
   data: unknown;
   sanitized: true;
@@ -82,12 +128,32 @@ export type AssertionResult = {
   actual?: unknown;
 };
 
+export type TurnResult = {
+  id: string;
+  user: string;
+  status: 'passed' | 'failed';
+  observation: Observation;
+  assertions: AssertionResult[];
+  error?: string;
+};
+
+export type IterationResult = {
+  index: number;
+  status: 'passed' | 'failed' | 'cancelled';
+  observation: Observation;
+  assertions: AssertionResult[];
+  turns: TurnResult[];
+  error?: string;
+};
+
 export type CaseResult = {
   id: string;
   kind: 'direct' | 'agent';
   status: 'passed' | 'failed' | 'cancelled';
   observation: Observation;
   assertions: AssertionResult[];
+  evaluation?: { count: number; minPasses: number; passed: number; failed: number; passRate: number };
+  iterations?: IterationResult[];
   error?: string;
 };
 

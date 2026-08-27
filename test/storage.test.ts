@@ -52,7 +52,7 @@ describe('SQLite run repository', () => {
   test('runs migrations in WAL mode', () => {
     const { database } = createRepository();
     expect(database.pragma('journal_mode', { simple: true })).toBe('wal');
-    expect(database.prepare('select max(version) as version from migrations').get()).toEqual({ version: 7 });
+    expect(database.prepare('select max(version) as version from migrations').get()).toEqual({ version: 8 });
     database.close();
   });
 
@@ -93,6 +93,7 @@ describe('SQLite run repository', () => {
   test('completes runs transactionally, redacts before persistence, and keeps events immutable', () => {
     const { database, repository } = createRepository();
     const value = run('run-a', 1, 1);
+    value.events[0] = { ...value.events[0]!, iteration: 2, userTurn: 'follow-up', modelTurn: 3 };
     repository.start(value.id, value.suite, value.startedAt);
     repository.complete(value);
 
@@ -100,6 +101,7 @@ describe('SQLite run repository', () => {
     expect(JSON.stringify(loaded)).not.toContain('database-secret');
     expect(JSON.stringify(loaded)).not.toContain('event-secret');
     expect(JSON.stringify(loaded)).toContain('[REDACTED]');
+    expect(loaded?.events[0]).toMatchObject({ iteration: 2, userTurn: 'follow-up', modelTurn: 3 });
     expect(() => database.prepare('update events set type = ?').run('error')).toThrow(/immutable/i);
     database.close();
   });

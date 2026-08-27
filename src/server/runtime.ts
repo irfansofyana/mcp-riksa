@@ -7,7 +7,7 @@ import { conformanceStatus } from '../conformance/model.js';
 import { OfficialConformanceRunner } from '../conformance/runner.js';
 import { CONFORMANCE_RUNNER_VERSION, type ConformanceRunner, type ConformanceSelection } from '../conformance/types.js';
 import { providerConfigSchema, type ProviderConfig, type ProviderConfigInput, type ProviderMessage } from '../agent/types.js';
-import { runAgent, type AgentUpdate } from '../agent/loop.js';
+import { runAgent, runScriptedConversation, type AgentUpdate } from '../agent/loop.js';
 import { event } from '../core/events.js';
 import { redact } from '../core/redaction.js';
 import { parseSuite } from '../core/suite.js';
@@ -547,9 +547,13 @@ export class WorkbenchRuntime {
     }
     const task = runSuite(stored.suite, {
       direct: (entry, signal) => this.directObservation(entry.server, entry.call.tool, entry.call.arguments, entry.call.dangerous ?? false, signal),
-      agent: (entry) => runAgent({ prompt: entry.prompt, model: entry.model, serverId: entry.server, limits: entry.limits }, {
-        provider: createProviderAdapter(this.requireProvider(entry.provider), this.secrets.resolve.bind(this.secrets)), mcp: this.mcp,
-      }, { signal: controller.signal }),
+      agent: (entry, signal) => {
+        const provider = createProviderAdapter(this.requireProvider(entry.provider), this.secrets.resolve.bind(this.secrets));
+        const dependencies = { provider, mcp: this.mcp };
+        return 'turns' in entry
+          ? runScriptedConversation({ turns: entry.turns, model: entry.model, serverId: entry.server, limits: entry.limits }, dependencies, { signal })
+          : runAgent({ prompt: entry.prompt, model: entry.model, serverId: entry.server, limits: entry.limits }, dependencies, { signal });
+      },
     }, { signal: controller.signal, id })
       .then((result) => this.runs.complete(result))
       .catch((error: unknown) => this.runs.fail(id, error))
@@ -681,13 +685,14 @@ export class WorkbenchRuntime {
     const response = await this.mcp.call(server, tool, args, { confirmDangerous: dangerous, signal });
     const output = 'structuredContent' in response && response.structuredContent !== undefined ? response.structuredContent : response.content;
     const durationMs = Date.now() - started;
+    const outcome = response.isError === true ? 'error' as const : 'success' as const;
     return {
       output,
-      toolCalls: [{ name: tool, arguments: args, result: response, durationMs }],
+      toolCalls: [{ name: tool, arguments: args, result: response, outcome, durationMs }],
       durationMs,
       tokens: { input: 0, output: 0, total: 0 },
       costUsd: 0,
-      events: [event(server, 'tool_call', { tool, arguments: args, result: response }, durationMs)],
+      events: [event(server, 'tool_call', { tool, arguments: args, result: response, outcome }, durationMs)],
     };
   }
 

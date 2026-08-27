@@ -20,6 +20,9 @@ type EventRow = {
   timestamp: string;
   duration_ms: number | null;
   data_json: string;
+  iteration: number | null;
+  user_turn_id: string | null;
+  model_turn: number | null;
 };
 
 export type StoredRun = Omit<RunResult, 'status'> & { status: RunResult['status'] | 'running' };
@@ -50,8 +53,8 @@ export class RunRepository {
       }
 
       const insertEvent = this.database.prepare(
-        `INSERT INTO events(id, run_id, case_id, type, timestamp, duration_ms, data_json, sanitized)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 1)`,
+        `INSERT INTO events(id, run_id, case_id, type, timestamp, duration_ms, data_json, sanitized, iteration, user_turn_id, model_turn)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
       );
       for (const entry of run.events) {
         insertEvent.run(
@@ -62,6 +65,9 @@ export class RunRepository {
           entry.timestamp,
           entry.durationMs ?? null,
           JSON.stringify(redact(entry.data)),
+          entry.iteration ?? null,
+          entry.userTurn ?? null,
+          entry.modelTurn ?? null,
         );
       }
     })();
@@ -114,6 +120,9 @@ export class RunRepository {
         type: entry.type,
         timestamp: entry.timestamp,
         ...(entry.duration_ms === null ? {} : { durationMs: entry.duration_ms }),
+        ...(entry.iteration === null ? {} : { iteration: entry.iteration }),
+        ...(entry.user_turn_id === null ? {} : { userTurn: entry.user_turn_id }),
+        ...(entry.model_turn === null ? {} : { modelTurn: entry.model_turn }),
         data: JSON.parse(entry.data_json) as unknown,
         sanitized: true,
       })),
@@ -142,13 +151,14 @@ export class RunRepository {
   private metrics(id: string) {
     const run = this.get(id);
     if (!run) throw new Error(`Run ${id} not found`);
-    return run.cases.reduce(
-      (metrics, entry) => ({
+    const observations = run.cases.flatMap((entry) => entry.iterations?.map((iteration) => iteration.observation) ?? [entry.observation]);
+    return observations.reduce(
+      (metrics, observation) => ({
         passRate: run.summary.passRate,
-        latencyMs: metrics.latencyMs + entry.observation.durationMs,
-        toolCalls: metrics.toolCalls + entry.observation.toolCalls.length,
-        tokens: metrics.tokens + entry.observation.tokens.total,
-        costUsd: metrics.costUsd + entry.observation.costUsd,
+        latencyMs: metrics.latencyMs + observation.durationMs,
+        toolCalls: metrics.toolCalls + observation.toolCalls.length,
+        tokens: metrics.tokens + observation.tokens.total,
+        costUsd: metrics.costUsd + observation.costUsd,
       }),
       { passRate: run.summary.passRate, latencyMs: 0, toolCalls: 0, tokens: 0, costUsd: 0 },
     );

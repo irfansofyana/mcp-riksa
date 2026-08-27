@@ -237,6 +237,16 @@ export function openDatabase(path: string): WorkbenchDatabase {
       database.exec(conformanceMigration);
       database.prepare('INSERT INTO migrations(version, applied_at) VALUES (?, ?)').run(7, new Date().toISOString());
     })();
+    version = 7;
+  }
+  if (version < 8) {
+    database.transaction(() => {
+      const columns = database.pragma('table_info(events)') as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === 'iteration')) database.exec('ALTER TABLE events ADD COLUMN iteration INTEGER');
+      if (!columns.some((column) => column.name === 'user_turn_id')) database.exec('ALTER TABLE events ADD COLUMN user_turn_id TEXT');
+      if (!columns.some((column) => column.name === 'model_turn')) database.exec('ALTER TABLE events ADD COLUMN model_turn INTEGER');
+      database.prepare('INSERT INTO migrations(version, applied_at) VALUES (?, ?)').run(8, new Date().toISOString());
+    })();
   }
   return database;
 }

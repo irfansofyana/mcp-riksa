@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import { afterEach, describe, expect, test } from 'vitest';
 import { EncryptedFileSecretBackend } from '../src/secrets/encrypted-file.js';
 import { SecretStore } from '../src/secrets/store.js';
+import { DEFAULT_DATA_DIRECTORY, dataDirectoryStartupMessage, resolveDataDirectory } from '../src/cli/data-dir.js';
 
 const directories: string[] = [];
 const tsxCli = resolve('node_modules/tsx/dist/cli.mjs');
@@ -27,6 +28,13 @@ function execute(args: string[], environment: NodeJS.ProcessEnv = process.env) {
 }
 
 describe('headless CLI', () => {
+  test('resolves explicit, environment, then project-local runtime data directories', () => {
+    expect(resolveDataDirectory('/tmp/explicit', { MCP_RIKSA_DATA_HOME: '/tmp/environment' })).toBe('/tmp/explicit');
+    expect(resolveDataDirectory(undefined, { MCP_RIKSA_DATA_HOME: '/tmp/environment' })).toBe('/tmp/environment');
+    expect(resolveDataDirectory(undefined, {})).toBe(resolve(DEFAULT_DATA_DIRECTORY));
+    expect(dataDirectoryStartupMessage('/tmp/mcp-riksa')).toBe('MCP Riksa data: /tmp/mcp-riksa');
+  });
+
   test('exposes MCP Riksa package and CLI identifiers', async () => {
     const packageMetadata = JSON.parse(readFileSync(resolve('package.json'), 'utf8')) as { name?: string; bin?: Record<string, string> };
     expect(packageMetadata).toMatchObject({
@@ -36,6 +44,8 @@ describe('headless CLI', () => {
     const result = await execute(['--help']);
     expect(result.code).toBe(0);
     expect(result.stdout).toContain('Usage: mcp-riksa');
+    const serveHelp = await execute(['serve', '--help']);
+    expect(serveHelp.stdout).toContain('MCP_RIKSA_DATA_HOME');
   });
 
   test('inspects the real deterministic sample server as JSON', async () => {

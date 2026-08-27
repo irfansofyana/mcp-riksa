@@ -2,14 +2,14 @@ import { describe, expect, test } from 'vitest';
 import { evaluateAssertions } from '../src/core/assertions.js';
 import { event } from '../src/core/events.js';
 import { runSuite } from '../src/core/runner.js';
-import type { Assertion, Suite } from '../src/core/types.js';
+import type { Assertion, Suite, ToolCallObservation } from '../src/core/types.js';
 
 const observation = {
   output: { message: 'Weather is Sunny', nested: { value: 42 } },
   toolCalls: [
-    { name: 'lookup', arguments: { city: 'Jakarta', unit: 'c' }, result: { temperature: 31 } },
-    { name: 'format', arguments: { style: 'short' }, result: 'Sunny' },
-    { name: 'lookup', arguments: { city: 'Bandung', unit: 'c' }, result: { temperature: 24 } },
+    { name: 'lookup', arguments: { city: 'Jakarta', unit: 'c' }, result: { temperature: 31 }, outcome: 'success' as const },
+    { name: 'format', arguments: { style: 'short' }, result: 'Sunny', outcome: 'success' as const },
+    { name: 'lookup', arguments: { city: 'Bandung', unit: 'c' }, result: { temperature: 24 }, outcome: 'error' as const, error: 'upstream rejected request' },
   ],
   durationMs: 920,
   tokens: { input: 30, output: 20, total: 50 },
@@ -32,6 +32,31 @@ describe('assertion evaluator', () => {
     ['cost', { type: 'cost', maxUsd: 0.01 }],
   ])('passes %s assertions', (_label, assertion) => {
     expect(evaluateAssertions([assertion], observation)[0]).toMatchObject({ passed: true });
+  });
+
+  test('matches selected named tool arguments, result, and outcome', () => {
+    const [result] = evaluateAssertions([{
+      type: 'tool',
+      tool: 'lookup',
+      occurrence: 2,
+      arguments: { path: '$.city', equals: 'Bandung' },
+      result: { path: '$.temperature', equals: 24 },
+      success: false,
+    }], observation);
+    expect(result).toMatchObject({ passed: true });
+  });
+
+  test('fails tool assertion when selected call does not meet expected outcome', () => {
+    const [result] = evaluateAssertions([{
+      type: 'tool', tool: 'lookup', occurrence: 2, success: true,
+    }], observation);
+    expect(result).toMatchObject({ passed: false, expected: true, actual: false });
+  });
+
+  test('derives direct tool outcome from an MCP isError result when outcome is absent', () => {
+    const direct = { ...observation, toolCalls: [{ name: 'lookup', arguments: {}, result: { isError: true } }] };
+    expect(evaluateAssertions([{ type: 'tool', tool: 'lookup', success: false }], direct)[0]).toMatchObject({ passed: true });
+    expect(evaluateAssertions([{ type: 'tool', tool: 'lookup', success: true }], direct)[0]).toMatchObject({ passed: false });
   });
 
   test('returns useful expected and actual values for failures', () => {
@@ -98,5 +123,50 @@ describe('suite runner', () => {
     expect(run.cases.map((entry) => entry.status)).toEqual(['passed', 'failed']);
     expect(run.events.every((event) => event.sanitized)).toBe(true);
     expect(run.events.map((entry) => entry.caseId)).not.toContain('server-correlation-id');
+  });
+
+  test('runs all scripted iterations and applies the minimum-pass threshold', async () => {
+    const suite: Suite = {
+      version: 2,
+      name: 'scripted',
+      cases: [{
+        id: 'follow-up', kind: 'agent', server: 'sample', provider: 'local', model: 'test',
+        turns: [
+          { id: 'request', user: 'Book a meeting', assertions: [{ type: 'tool_count', count: 0 }] },
+          { id: 'details', user: 'Tomorrow at 3 PM', assertions: [{ type: 'tool', tool: 'create', arguments: { path: '$.time', equals: '15:00' } }] },
+        ],
+        iterations: { count: 3, minPasses: 2 },
+        limits: { maxTurns: 4, maxToolCalls: 2, timeoutMs: 1000 },
+        assertions: [{ type: 'tool_count', tool: 'create', count: 1 }],
+      }],
+    };
+    let calls = 0;
+    const turn = (id: string, output: unknown, toolCalls: ToolCallObservation[], stopReason = 'complete') => ({
+      id, user: id, observation: { ...observation, output, toolCalls, stopReason, events: [event('server', 'model_turn', { turn: 1 })] },
+    });
+    const run = await runSuite(suite, {
+      direct: async () => observation,
+      agent: async () => {
+        calls += 1;
+        const valid = calls !== 3;
+        return {
+          ...observation,
+          output: 'scheduled',
+          toolCalls: valid ? [{ name: 'create', arguments: { time: '15:00' }, outcome: 'success' as const }] : [],
+          stopReason: 'complete',
+          events: [event('server', 'model_turn', { turn: 2 })],
+          turns: [
+            turn('request', 'What time?', []),
+            turn('details', 'scheduled', valid ? [{ name: 'create', arguments: { time: '15:00' }, outcome: 'success' as const }] : []),
+          ],
+        };
+      },
+    });
+
+    expect(calls).toBe(3);
+    expect(run).toMatchObject({ status: 'passed', summary: { passed: 1 } });
+    expect(run.cases[0]?.evaluation).toMatchObject({ count: 3, minPasses: 2, passed: 2, failed: 1 });
+    expect(run.cases[0]?.iterations).toHaveLength(3);
+    expect(run.cases[0]?.assertions.every((assertion) => assertion.passed)).toBe(true);
   });
 });

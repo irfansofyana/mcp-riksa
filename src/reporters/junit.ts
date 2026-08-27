@@ -16,7 +16,8 @@ export function reportJunit(input: RunResult): string {
   const cases = run.cases.map((entry) => {
     const failures = entry.assertions.filter((assertion) => !assertion.passed);
     const failure = entry.error ?? failures.map((assertion) => `${assertion.message}: expected ${JSON.stringify(assertion.expected)}, actual ${JSON.stringify(assertion.actual)}`).join('\n');
-    return `  <testcase name="${xml(entry.id)}" classname="${xml(run.suite)}" time="${(entry.observation.durationMs / 1000).toFixed(3)}">${failure ? `\n    <failure message="${xml(entry.error ?? `${failures.length} assertion(s) failed`)}">${xml(failure)}</failure>\n  ` : ''}</testcase>`;
+    const durationMs = (entry.iterations?.map((iteration) => iteration.observation.durationMs) ?? [entry.observation.durationMs]).reduce((total, value) => total + value, 0);
+    return `  <testcase name="${xml(entry.id)}" classname="${xml(run.suite)}" time="${(durationMs / 1000).toFixed(3)}">${failure ? `\n    <failure message="${xml(entry.error ?? `${failures.length} assertion(s) failed`)}">${xml(failure)}</failure>\n  ` : ''}</testcase>`;
   }).join('\n');
   return `<?xml version="1.0" encoding="UTF-8"?>
 <testsuite name="${xml(run.suite)}" tests="${run.summary.total}" failures="${run.summary.failed}" errors="0" time="${time.toFixed(3)}">

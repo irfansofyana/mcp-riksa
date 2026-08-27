@@ -7,6 +7,40 @@ There are two kinds of cases:
 - **Direct cases** invoke a named tool on a connected MCP server directly, with fixed arguments.
 - **Agent cases** reference a server alias, a provider alias, and a model alias, and drive a full provider/tool turn loop.
 
+Version 1 agent cases contain one `prompt`. Version 2 agent cases contain explicit scripted `turns`, so a deterministic user answer can follow a model clarification without involving a human or an LLM simulator. Each v2 iteration starts with fresh model history; limits apply across all user turns in that iteration.
+
+```yaml
+version: 2
+name: calendar-follow-up
+cases:
+  - id: book-after-time
+    kind: agent
+    server: calendar
+    provider: local-openai
+    model: default
+    turns:
+      - id: request
+        user: Book a planning meeting tomorrow.
+        assertions:
+          - type: tool_count
+            count: 0
+      - id: time
+        user: At 15:00 Jakarta time.
+        assertions:
+          - type: tool
+            tool: create_meeting
+            arguments: { path: $.time, equals: "15:00" }
+            success: true
+    iterations: { count: 5, minPasses: 4 }
+    limits: { maxTurns: 8, maxToolCalls: 2, timeoutMs: 30000 }
+    assertions:
+      - type: tool_count
+        tool: create_meeting
+        count: 1
+```
+
+`iterations.count` runs independent samples; `minPasses` is required for logical case success. A `tool` assertion selects named tool occurrence (default `1`) and can check exact arguments, result JSONPath, and MCP success/error outcome.
+
 ## Assertions
 
 Supported assertion types:

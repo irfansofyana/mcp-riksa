@@ -1,9 +1,9 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
-import { providerConfigSchema, type ProviderAdapter, type ProviderConfig } from '../src/agent/types.js';
+import { providerConfigSchema, type ProviderAdapter, type ProviderConfig, type ProviderMessage } from '../src/agent/types.js';
 import { createProviderAdapter } from '../src/agent/providers.js';
-import { runAgent } from '../src/agent/loop.js';
+import { runAgent, runScriptedConversation } from '../src/agent/loop.js';
 import { REDACTED, registerSecretValue } from '../src/core/redaction.js';
 import { McpManager } from '../src/mcp/manager.js';
 
@@ -451,6 +451,7 @@ describe('agent stop boundaries', () => {
       { provider, mcp: manager },
     );
     expect(result.stopReason).toBe('max_turns');
+    expect(result.toolCalls).toHaveLength(1);
   });
 
   test('stops before exceeding max tool calls', async () => {
@@ -649,5 +650,73 @@ describe('agent stop boundaries', () => {
       { provider, mcp: failingMcp },
       { signal: controller.signal },
     )).rejects.toThrow('inspection backend failed');
+  });
+
+  test('continues scripted user turns with preserved provider history and cumulative trace scope', async () => {
+    const messages: ProviderMessage[][] = [];
+    const provider = scriptedAdapter(async (request) => {
+      messages.push(request.messages);
+      return { text: `answer:${request.messages.at(-1)?.content ?? ''}`, toolCalls: [], usage: { input: 2, output: 1, total: 3 }, stopReason: 'complete', raw: {} };
+    });
+    const result = await runScriptedConversation(
+      { turns: [{ id: 'request', user: 'Book meeting' }, { id: 'time', user: 'Tomorrow at 3 PM' }], model: 'x', serverId: 'sample', limits: { maxTurns: 3, maxToolCalls: 2, timeoutMs: 5000 } },
+      { provider, mcp: manager },
+    );
+    expect(messages).toHaveLength(2);
+    expect(messages[1]?.map((message) => message.role)).toEqual(['user', 'assistant', 'user']);
+    expect(result).toMatchObject({ output: 'answer:Tomorrow at 3 PM', stopReason: 'complete', tokens: { total: 6 } });
+    expect(result.turns.map((turn) => turn.id)).toEqual(['request', 'time']);
+    expect(result.events.filter((entry) => entry.type === 'user_turn').map((entry) => entry.userTurn)).toEqual([undefined, undefined]);
+    expect(result.events.filter((entry) => entry.type === 'model_turn').map((entry) => entry.userTurn)).toEqual(['request', 'time']);
+  });
+
+  test('redacts registered secrets split across scripted user-turn boundaries', async () => {
+    const secret = 'scripted-user-turn-secret';
+    registerSecretValue(secret);
+    const requests: ProviderMessage[][] = [];
+    const updates: Array<{ type: string; delta?: string }> = [];
+    let invocation = 0;
+    const provider = scriptedAdapter(async (request) => {
+      requests.push(request.messages);
+      invocation += 1;
+      return {
+        text: invocation === 1 ? 'before scripted-user-' : invocation === 2 ? 'turn-secret after' : 'safe final',
+        toolCalls: [], usage: { input: 1, output: 1, total: 2 }, stopReason: 'complete', raw: { invocation },
+      };
+    });
+    const result = await runScriptedConversation(
+      { turns: [{ id: 'one', user: 'First' }, { id: 'two', user: 'Second' }, { id: 'three', user: 'Third' }], model: 'x', serverId: 'sample', limits: { maxTurns: 3, maxToolCalls: 1, timeoutMs: 5000 } },
+      { provider, mcp: manager },
+      { onUpdate: (update) => updates.push(update) },
+    );
+
+    expect(result.output).toBe('safe final');
+    expect(result.turns.map((turn) => turn.observation.output)).toEqual([`before ${REDACTED}`, ' after', 'safe final']);
+    expect(result.transcript.filter((message) => message.role === 'assistant').map((message) => message.content)).toEqual([`before ${REDACTED}`, ' after', 'safe final']);
+    expect(result.events.filter((entry) => entry.type === 'model_turn').slice(0, 2).map((entry) => (entry.data as { response: unknown }).response)).toEqual([REDACTED, REDACTED]);
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(JSON.stringify(result)).not.toContain('scripted-user-');
+    expect(JSON.stringify(result)).not.toContain('turn-secret');
+    expect(JSON.stringify(requests[2])).not.toContain(secret);
+    expect(JSON.stringify(requests[2])).not.toContain('scripted-user-');
+    expect(JSON.stringify(requests[2])).not.toContain('turn-secret');
+    const streamed = updates.filter((update) => update.type === 'text_delta').map((update) => update.delta).join('');
+    expect(streamed).toBe(`before ${REDACTED} aftersafe final`);
+    expect(streamed).not.toContain(secret);
+    expect(streamed).not.toContain('scripted-user-');
+    expect(streamed).not.toContain('turn-secret');
+  });
+
+  test('allows zero-cost scripted turns under a zero max-cost budget', async () => {
+    const provider: ProviderAdapter = {
+      id: 'free',
+      pricingFor: () => ({ inputPerMillion: 0, outputPerMillion: 0 }),
+      complete: async () => ({ text: 'done', toolCalls: [], usage: { input: 0, output: 0, total: 0 }, stopReason: 'complete', raw: {} }),
+    };
+    const result = await runScriptedConversation(
+      { turns: [{ id: 'free', user: 'Run free' }], model: 'x', serverId: 'sample', limits: { maxTurns: 1, maxToolCalls: 1, timeoutMs: 5000, maxCostUsd: 0 } },
+      { provider, mcp: manager },
+    );
+    expect(result).toMatchObject({ output: 'done', stopReason: 'complete', tokens: { total: 0 } });
   });
 });

@@ -3,15 +3,76 @@ import { api } from '../api.js';
 import { Button, Empty, JsonView, Notice, Section, Status } from '../components.js';
 import type { CaseResult, EventRecord, Run } from '../types.js';
 
+type UserTurnTrace = { id: string; user: string };
+type IterationTrace = { label: string; turns: UserTurnTrace[] };
+
+export function expectedToolNames(assertions: CaseResult['assertions']): string[] {
+  return assertions.flatMap((entry) => (entry.assertion.type === 'tool_called' || entry.assertion.type === 'tool') && typeof entry.assertion.tool === 'string' ? [entry.assertion.tool] : []);
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function userTurns(value: unknown): UserTurnTrace[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((raw, index) => {
+    const turn = record(raw);
+    if (!turn || typeof turn.user !== 'string') return [];
+    return [{ id: typeof turn.id === 'string' ? turn.id : `turn-${index + 1}`, user: turn.user }];
+  });
+}
+
+function aggregateMetrics(value: CaseResult) {
+  const observations = value.iterations?.flatMap((iteration) => {
+    const observation = record(iteration.observation);
+    if (!observation) return [];
+    const tokens = record(observation.tokens);
+    return [{
+      durationMs: typeof observation.durationMs === 'number' ? observation.durationMs : 0,
+      toolCalls: Array.isArray(observation.toolCalls) ? observation.toolCalls.length : 0,
+      tokens: typeof tokens?.total === 'number' ? tokens.total : 0,
+      costUsd: typeof observation.costUsd === 'number' ? observation.costUsd : 0,
+    }];
+  }) ?? [];
+  return (observations.length > 0 ? observations : [{ durationMs: value.observation.durationMs, toolCalls: value.observation.toolCalls.length, tokens: value.observation.tokens.total, costUsd: value.observation.costUsd }])
+    .reduce((total, observation) => ({ durationMs: total.durationMs + observation.durationMs, toolCalls: total.toolCalls + observation.toolCalls, tokens: total.tokens + observation.tokens, costUsd: total.costUsd + observation.costUsd }), { durationMs: 0, toolCalls: 0, tokens: 0, costUsd: 0 });
+}
+
+function evaluationTrace(value: CaseResult): { threshold?: string; iterations: IterationTrace[] } {
+  const evaluation = record(value.evaluation);
+  const configured = record(evaluation?.iterations);
+  const count = typeof configured?.count === 'number' ? configured.count : typeof evaluation?.count === 'number' ? evaluation.count : undefined;
+  const minPasses = typeof configured?.minPasses === 'number' ? configured.minPasses : typeof evaluation?.minPasses === 'number' ? evaluation.minPasses : undefined;
+  const threshold = count !== undefined && minPasses !== undefined ? `${minPasses} of ${count} iteration passes required` : undefined;
+  const source = Array.isArray(value.iterations) ? value.iterations : Array.isArray(evaluation?.iterations) ? evaluation.iterations : [];
+  const iterations = source.flatMap((raw, index) => {
+    const iteration = record(raw);
+    if (!iteration) return [];
+    const observation = record(iteration.observation);
+    const turns = userTurns(iteration.turns).length ? userTurns(iteration.turns) : userTurns(observation?.turns);
+    const state = typeof iteration.status === 'string' ? iteration.status : typeof iteration.passed === 'boolean' ? iteration.passed ? 'passed' : 'failed' : 'recorded';
+    return [{ label: `Iteration ${index + 1} · ${state}`, turns }];
+  });
+  if (iterations.length === 0) {
+    const turns = userTurns(value.observation.turns);
+    if (turns.length > 0) iterations.push({ label: 'User-turn trace', turns });
+  }
+  return { threshold, iterations };
+}
+
 function CaseDetail({ value }: { value: CaseResult }) {
-  const expectedTools = value.assertions.flatMap((entry) => entry.assertion.type === 'tool_called' && typeof entry.assertion.tool === 'string' ? [entry.assertion.tool] : []);
+  const expectedTools = expectedToolNames(value.assertions);
   const actualTools = value.observation.toolCalls.map((call) => call.name);
   const events: EventRecord[] = value.observation.events;
+  const metrics = aggregateMetrics(value);
+  const evaluation = evaluationTrace(value);
   return <div className="case-detail">
     <div className="metric-strip">
-      <div><span>Result</span><Status value={value.status} /></div><div><span>Latency</span><b>{value.observation.durationMs} ms</b></div><div><span>Tool calls</span><b>{actualTools.length}</b></div><div><span>Tokens</span><b>{value.observation.tokens.total}</b></div><div><span>Estimated cost</span><b>${value.observation.costUsd.toFixed(6)}</b></div>
+      <div><span>Result</span><Status value={value.status} /></div><div><span>Latency</span><b>{metrics.durationMs} ms</b></div><div><span>Tool calls</span><b>{metrics.toolCalls}</b></div><div><span>Tokens</span><b>{metrics.tokens}</b></div><div><span>Estimated cost</span><b>${metrics.costUsd.toFixed(6)}</b></div>
     </div>
     <div className="expected-actual"><div><span>Expected tools</span><code>{expectedTools.join(' → ') || 'none specified'}</code></div><div><span>Actual tools</span><code>{actualTools.join(' → ') || 'none'}</code></div></div>
+    {evaluation.threshold || evaluation.iterations.length > 0 ? <Section title="Iteration & user-turn trace" action={evaluation.threshold ? <span className="hint">{evaluation.threshold}</span> : undefined}>{evaluation.iterations.length === 0 ? <Empty>No iteration observations were recorded.</Empty> : <div className="assertion-list">{evaluation.iterations.map((iteration) => <div className="expected-actual" key={iteration.label}><div><span>{iteration.label}</span><code>{iteration.turns.length ? iteration.turns.map((turn) => `${turn.id}: ${turn.user}`).join('\n') : 'No user turns recorded'}</code></div></div>)}</div>}</Section> : null}
     <Section title="Model turns & MCP timeline" action={<span className="hint">latency waterfall</span>}>
       {events.length === 0 && value.observation.toolCalls.length === 0 ? <Empty>No normalized events were recorded.</Empty> : <div className="event-trace">
         {(events.length > 0 ? events : value.observation.toolCalls.map((call, index) => ({ id: `${index}`, caseId: value.id, type: 'tool_call', timestamp: '', durationMs: call.durationMs, data: call, sanitized: true as const }))).map((entry, index) => <article className="trace-event" key={entry.id}>
@@ -25,7 +86,7 @@ function CaseDetail({ value }: { value: CaseResult }) {
     <Section title="Assertion results">
       {value.assertions.length === 0 ? <Empty>No assertions were configured.</Empty> : <div className="assertion-list">{value.assertions.map((entry, index) => <div key={index} className={entry.passed ? 'assert-pass' : 'assert-fail'}><Status value={entry.passed ? 'pass' : 'fail'} /><span><b>{entry.message}</b><small>expected {JSON.stringify(entry.expected)} · actual {JSON.stringify(entry.actual)}</small></span></div>)}</div>}
     </Section>
-    <JsonView value={{ observation: value.observation, assertions: value.assertions }} label="Sanitized raw case JSON" />
+    <JsonView value={{ observation: value.observation, assertions: value.assertions, ...(value.evaluation ? { evaluation: value.evaluation } : {}), ...(value.iterations ? { iterations: value.iterations } : {}) }} label="Sanitized raw case JSON" />
   </div>;
 }
 
