@@ -3,6 +3,7 @@ import { basename, dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { createProviderAdapter } from '../agent/providers.js';
+import { createAgentSuiteDraft, SuiteGenerationError, type SuiteGenerationInput } from '../agent/suite-generation.js';
 import { conformanceStatus } from '../conformance/model.js';
 import { OfficialConformanceRunner } from '../conformance/runner.js';
 import { CONFORMANCE_RUNNER_VERSION, type ConformanceRunner, type ConformanceSelection } from '../conformance/types.js';
@@ -32,6 +33,7 @@ type RuntimeOptions = {
   callbackUrl: string;
   secretConfigDirectory?: string;
   conformanceRunner?: ConformanceRunner;
+  providerAdapterFactory?: typeof createProviderAdapter;
 };
 
 type PlaygroundInput = {
@@ -355,6 +357,37 @@ export class WorkbenchRuntime {
     this.requireServer(id);
     if (!this.mcp.isConnected(id)) throw new WorkbenchError(`MCP server ${id} is not connected`, 409);
     return this.withConfigUse([`server:${id}`], () => this.mcp.inspect(id));
+  }
+
+  async generateSuiteDraft(input: SuiteGenerationInput) {
+    this.requireServer(input.serverId);
+    if (!this.mcp.isConnected(input.serverId)) throw new WorkbenchError(`MCP server ${input.serverId} is not connected`, 409);
+    const generator = this.requireProvider(input.generatorProviderId);
+    const target = this.requireProvider(input.targetProviderId);
+    if (!Object.hasOwn(generator.models, input.generatorModel)) {
+      throw new WorkbenchError(`Unknown model alias ${input.generatorModel} for provider ${input.generatorProviderId}`, 400);
+    }
+    if (!Object.hasOwn(target.models, input.targetModel)) {
+      throw new WorkbenchError(`Unknown model alias ${input.targetModel} for provider ${input.targetProviderId}`, 400);
+    }
+    const keys = [...new Set([
+      `server:${input.serverId}`,
+      `provider:${input.generatorProviderId}`,
+      `provider:${input.targetProviderId}`,
+    ])];
+    return this.withConfigUse(keys, async () => {
+      const inspection = await this.mcp.inspect(input.serverId);
+      const createAdapter = this.options.providerAdapterFactory ?? createProviderAdapter;
+      const adapter = createAdapter(generator, this.secrets.resolve.bind(this.secrets));
+      try {
+        return await createAgentSuiteDraft(input, inspection, adapter);
+      } catch (error) {
+        if (error instanceof SuiteGenerationError) throw new WorkbenchError(error.message, 502);
+        throw error;
+      } finally {
+        await adapter.close?.();
+      }
+    });
   }
 
   async callTool(id: string, tool: string, args: Record<string, unknown>, options: { confirmDangerous: boolean }) {

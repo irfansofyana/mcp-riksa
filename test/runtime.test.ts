@@ -3,6 +3,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
+import type { ProviderAdapter } from '../src/agent/types.js';
 import type { ConformanceRunner } from '../src/conformance/types.js';
 import { WorkbenchRuntime } from '../src/server/runtime.js';
 
@@ -15,7 +16,7 @@ const model = (id: string, inputPerMillion = 0, outputPerMillion = 0) => ({
   pricing: { inputPerMillion, outputPerMillion },
 });
 
-function createRuntime(conformanceRunner?: ConformanceRunner) {
+function createRuntime(conformanceRunner?: ConformanceRunner, providerAdapterFactory?: () => ProviderAdapter) {
   const directory = mkdtempSync(join(tmpdir(), 'mcp-runtime-'));
   directories.push(directory);
   const databasePath = join(directory, 'workbench.db');
@@ -24,6 +25,7 @@ function createRuntime(conformanceRunner?: ConformanceRunner) {
     suiteDirectory: join(directory, 'suites'),
     callbackUrl: 'http://127.0.0.1:4317/api/oauth/callback',
     ...(conformanceRunner ? { conformanceRunner } : {}),
+    ...(providerAdapterFactory ? { providerAdapterFactory } : {}),
   });
   return { runtime, databasePath, directory };
 }
@@ -213,6 +215,87 @@ describe('concrete workbench runtime', () => {
     await expect(runtime.seedProvider(invalidSeed)).resolves.toBe(false);
     expect((await runtime.bootstrap() as { providers: unknown[] }).providers).toEqual([]);
     await runtime.close();
+  });
+
+  test('generates an unsaved suite with independent aliases and always closes the generator adapter', async () => {
+    let completeCalls = 0;
+    let closeCalls = 0;
+    let malformed = false;
+    const adapter: ProviderAdapter = {
+      id: 'author',
+      pricingFor: () => ({ inputPerMillion: 0, outputPerMillion: 0 }),
+      complete: async (request) => {
+        completeCalls += 1;
+        expect(request.model).toBe('drafting');
+        return {
+          text: malformed ? '{' : JSON.stringify({
+            cases: [
+              { tool: 'add', prompt: 'Add 2 and 3.' },
+              { tool: 'unannotated_read', prompt: 'Read the deterministic sample data.' },
+              { tool: 'echo', prompt: 'Echo the text hello.' },
+            ],
+            exclusions: [],
+          }),
+          toolCalls: [],
+          usage: { input: 1, output: 1, total: 2 },
+          stopReason: 'stop',
+          raw: {},
+        };
+      },
+      close: async () => { closeCalls += 1; },
+    };
+    const { runtime } = createRuntime(undefined, () => adapter);
+    try {
+      await runtime.addServer({
+        id: 'sample', name: 'Sample', transport: 'stdio', command: process.execPath,
+        args: [tsxCli, sampleServer], envRefs: {}, env: {},
+      });
+      await runtime.addProvider({
+        id: 'author', name: 'Author', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1',
+        models: { drafting: model('upstream-author') }, headerEnv: {}, headers: {},
+      });
+      await runtime.addProvider({
+        id: 'target', name: 'Target', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4001/v1',
+        models: { evaluation: model('upstream-target') }, headerEnv: {}, headers: {},
+      });
+      const generation = {
+        serverId: 'sample', generatorProviderId: 'author', generatorModel: 'drafting',
+        targetProviderId: 'target', targetModel: 'evaluation', name: 'generated-sample',
+      };
+
+      await expect(runtime.generateSuiteDraft(generation)).rejects.toMatchObject({ status: 409 });
+      await runtime.connectServer('sample');
+      await expect(runtime.generateSuiteDraft({ ...generation, generatorProviderId: 'missing' })).rejects.toMatchObject({ status: 404 });
+      await expect(runtime.generateSuiteDraft({ ...generation, targetProviderId: 'missing' })).rejects.toMatchObject({ status: 404 });
+      await expect(runtime.generateSuiteDraft({ ...generation, generatorModel: 'missing' })).rejects.toMatchObject({ status: 400 });
+      await expect(runtime.generateSuiteDraft({ ...generation, targetModel: 'missing' })).rejects.toMatchObject({ status: 400 });
+      expect(completeCalls).toBe(0);
+
+      const draft = await runtime.generateSuiteDraft(generation);
+      expect(draft).toMatchObject({
+        suite: {
+          version: 2,
+          name: 'generated-sample',
+          cases: expect.arrayContaining([
+            expect.objectContaining({ server: 'sample', provider: 'target', model: 'evaluation' }),
+          ]),
+        },
+        coverage: expect.arrayContaining([{ tool: 'unannotated_read', caseId: 'unannotated_read' }]),
+        exclusions: [{ tool: 'dangerous_reset', category: 'destructive' }],
+      });
+      expect(await runtime.listSuites()).toEqual([]);
+      expect(await runtime.listRuns()).toEqual([]);
+      expect(closeCalls).toBe(1);
+
+      malformed = true;
+      await expect(runtime.generateSuiteDraft({ ...generation, name: 'malformed-generation' })).rejects.toMatchObject({ status: 502 });
+      expect(completeCalls).toBe(3);
+      expect(closeCalls).toBe(2);
+      expect(await runtime.listSuites()).toEqual([]);
+      expect(await runtime.listRuns()).toEqual([]);
+    } finally {
+      await runtime.close();
+    }
   });
 
   test('resolves a configured model alias before sending a playground request upstream', async () => {
