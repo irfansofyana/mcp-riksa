@@ -36,6 +36,21 @@ export type SuiteDraftV1 = { version: 1; name: string; description?: string; cas
 export type SuiteDraftV2 = { version: 2; name: string; description?: string; cases: SuiteCase[] };
 export type SuiteDraft = SuiteDraftV1 | SuiteDraftV2;
 export type SuiteDetail = { name: string; source: string; suite: SuiteDraft };
+export type SuiteGenerationRequest = {
+  serverId: string;
+  generatorProviderId: string;
+  generatorModel: string;
+  targetProviderId: string;
+  targetModel: string;
+  name: string;
+  authorInstructions?: string;
+};
+export type SuiteGenerationDraft = {
+  suite: SuiteDraftV2;
+  coverage: Array<{ tool: string; caseId: string }>;
+  exclusions: Array<{ tool: string; reason: string; category: 'destructive' | 'uncertain' }>;
+  usage?: { input: number; output: number; total: number };
+};
 
 export type Tool = {
   name: string;

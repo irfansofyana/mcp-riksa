@@ -1,4 +1,4 @@
-import type { AgentUpdate, Bootstrap, ConformanceReport, ConformanceReportSummary, ConversationDetail, ConversationSummary, PlaygroundResult, Run, SecretMetadata, SecretPurpose, SuiteDetail, VaultStatus } from './types.js';
+import type { AgentUpdate, Bootstrap, ConformanceReport, ConformanceReportSummary, ConversationDetail, ConversationSummary, PlaygroundResult, Run, SecretMetadata, SecretPurpose, SuiteDetail, SuiteGenerationDraft, SuiteGenerationRequest, VaultStatus } from './types.js';
 
 let sessionToken = '';
 
@@ -121,6 +121,7 @@ export const api = {
   deleteConversation: (id: string) => remove<{ id: string; deleted: boolean }>(`/api/playground/conversations/${encodeURIComponent(id)}`),
   invokePlaygroundTool: (id: string, tool: string, body: { arguments: Record<string, unknown>; confirmDangerous: boolean }) => post<{ conversationId: string; prompt: string; result: PlaygroundResult; conversation: ConversationDetail }>(`/api/playground/conversations/${encodeURIComponent(id)}/tools/${encodeURIComponent(tool)}`, body),
   streamPlayground,
+  generateSuiteDraft: (body: SuiteGenerationRequest) => post<SuiteGenerationDraft>('/api/suites/generate', body),
   saveSuite: (source: string) => post<{ name: string; cases: number }>('/api/suites', { source }),
   updateSuite: (name: string, source: string) => put<{ name: string; previousName: string; cases: number; renamed: boolean }>(`/api/suites/${encodeURIComponent(name)}`, { source }),
   deleteSuite: (name: string) => remove<{ name: string; deleted: boolean }>(`/api/suites/${encodeURIComponent(name)}`),

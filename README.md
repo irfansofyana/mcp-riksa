@@ -47,7 +47,7 @@ The API key stays in the process environment — the config only ever stores `{ 
 
 ![Write-only encrypted and session secret management](docs/screenshots/secrets.png)
 
-**Compose portable test suites visually.** Add tool-call expectations, assertions, and cost/duration budgets through a case composer, or hand-author the underlying YAML directly — both stay in sync and both run unchanged through the CLI or CI.
+**Compose portable test suites visually.** Add tool-call expectations, assertions, and cost/duration budgets through a case composer, hand-author the underlying YAML, or use a configured model to generate a reviewable agent-suite draft from live MCP tool metadata. Draft generation never invokes tools, saves files, or starts runs.
 
 **Inspect a completed evaluation.** The browser and CLI share the same suite runner, so a run's trace — provider turns, MCP tool calls, latency, tokens, estimated cost, assertions — looks identical whether it ran interactively or headless.
 

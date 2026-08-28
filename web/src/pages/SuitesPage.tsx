@@ -22,6 +22,8 @@ import type {
   AgentSuiteCaseV2,
   AgentSuiteTurn,
   SuiteDraft,
+  SuiteGenerationDraft,
+  SuiteGenerationRequest,
   Tool,
 } from '../types.js';
 
@@ -109,6 +111,9 @@ export function SuitesPage({ suites, servers, providers, onRefresh, onRunStarted
   onRunStarted(id: string): void;
 }) {
   const defaultServer = servers[0]?.id ?? '';
+  const defaultGenerationServer = servers.find((server) => server.connected)?.id ?? '';
+  const defaultProvider = providers[0];
+  const defaultModel = Object.keys(defaultProvider?.models ?? {})[0] ?? '';
   const initial = useMemo(() => createSuiteDraft('direct-regression', defaultServer), [defaultServer]);
   const [selected, setSelected] = useState(suites[0] ?? '');
   const [draft, setDraft] = useState<SuiteDraft>(initial);
@@ -120,11 +125,55 @@ export function SuitesPage({ suites, servers, providers, onRefresh, onRunStarted
   const [busy, setBusy] = useState(false);
   const [loadedSuiteName, setLoadedSuiteName] = useState('');
   const loadEpoch = useRef(0);
+  const generationEpoch = useRef(0);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const [generatorOpen, setGeneratorOpen] = useState(false);
+  const [generationForm, setGenerationForm] = useState<SuiteGenerationRequest & { authorInstructions: string }>(() => ({
+    serverId: defaultGenerationServer,
+    generatorProviderId: defaultProvider?.id ?? '',
+    generatorModel: defaultModel,
+    targetProviderId: defaultProvider?.id ?? '',
+    targetModel: defaultModel,
+    name: `${defaultGenerationServer || 'mcp'}-agent-regression`,
+    authorInstructions: '',
+  }));
+  const [generationResult, setGenerationResult] = useState<SuiteGenerationDraft>();
 
   const activeCase = draft.cases.find((entry) => entry.id === activeCaseId) ?? draft.cases[0];
   const selectedProvider = activeCase?.kind === 'agent' ? providers.find((entry) => entry.id === activeCase.provider) : undefined;
+  const generationProvider = providers.find((entry) => entry.id === generationForm.generatorProviderId);
+  const generationTargetProvider = providers.find((entry) => entry.id === generationForm.targetProviderId);
+  const generationServer = servers.find((entry) => entry.id === generationForm.serverId);
+  const generationOptionsKey = useMemo(() => JSON.stringify({
+    servers: servers.map((entry) => [entry.id, entry.connected]),
+    providers: providers.map((entry) => [entry.id, Object.keys(entry.models)]),
+  }), [servers, providers]);
+  const canGenerate = Boolean(
+    generationServer?.connected
+    && generationProvider?.models[generationForm.generatorModel]
+    && generationTargetProvider?.models[generationForm.targetModel]
+    && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(generationForm.name),
+  );
+
+  useEffect(() => {
+    generationEpoch.current += 1;
+    setGenerationResult(undefined);
+    setGenerationForm((current) => {
+      const server = servers.find((entry) => entry.id === current.serverId && entry.connected) ?? servers.find((entry) => entry.connected);
+      const generator = providers.find((entry) => entry.id === current.generatorProviderId) ?? providers[0];
+      const target = providers.find((entry) => entry.id === current.targetProviderId) ?? providers[0];
+      const next = {
+        ...current,
+        serverId: server?.id ?? '',
+        generatorProviderId: generator?.id ?? '',
+        generatorModel: generator?.models[current.generatorModel] ? current.generatorModel : Object.keys(generator?.models ?? {})[0] ?? '',
+        targetProviderId: target?.id ?? '',
+        targetModel: target?.models[current.targetModel] ? current.targetModel : Object.keys(target?.models ?? {})[0] ?? '',
+      };
+      return JSON.stringify(next) === JSON.stringify(current) ? current : next;
+    });
+  }, [generationOptionsKey]);
 
   useEffect(() => {
     if (!selected) { setLoadedSuiteName(''); return; }
@@ -160,6 +209,47 @@ export function SuitesPage({ suites, servers, providers, onRefresh, onRunStarted
     setBusy(true); setMessage(''); setError('');
     try { await operation(); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setBusy(false); }
+  };
+
+  const updateGenerationForm = (next: Partial<SuiteGenerationRequest & { authorInstructions: string }>) => {
+    generationEpoch.current += 1;
+    setGenerationForm((current) => ({ ...current, ...next }));
+    setGenerationResult(undefined);
+  };
+
+  const generateDraft = async () => {
+    if (busy) return;
+    const epoch = ++generationEpoch.current;
+    const snapshot = generationForm;
+    setGenerationResult(undefined);
+    setBusy(true); setMessage(''); setError('');
+    try {
+      const { authorInstructions, ...required } = snapshot;
+      const result = await api.generateSuiteDraft({
+        ...required,
+        ...(authorInstructions.trim() ? { authorInstructions: authorInstructions.trim() } : {}),
+      });
+      if (epoch !== generationEpoch.current) return;
+      setGenerationResult(result);
+      setMessage(`Generated ${result.coverage.length} case(s); ${result.exclusions.length} tool(s) excluded. Review before opening the draft.`);
+    } catch (reason) {
+      if (epoch === generationEpoch.current) setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const applyGeneratedDraft = () => {
+    if (!generationResult) return;
+    const next = parseSuiteDraft(serializeSuiteDraft(generationResult.suite));
+    loadEpoch.current += 1;
+    setSelected('');
+    setLoadedSuiteName('');
+    applyDraft(next);
+    setActiveCaseId(next.cases[0]?.id ?? '');
+    setView('builder');
+    setMessage(`Opened generated draft ${next.name}. Nothing is saved or executed until you choose those actions.`);
+    setError('');
   };
 
   const startNew = () => {
@@ -288,13 +378,28 @@ export function SuitesPage({ suites, servers, providers, onRefresh, onRunStarted
 
   return <div className="suite-studio">
     <Section title="Suite library" className="suite-library" action={<span className="count">{suites.length}</span>}>
-      <Button variant="primary" className="new-suite" onClick={startNew}>+ New suite</Button>
+      <div className="suite-create-actions"><Button variant="primary" className="new-suite" onClick={startNew}>+ New suite</Button><Button disabled={busy} data-testid="open-suite-generator" onClick={() => setGeneratorOpen((open) => !open)}>{generatorOpen ? 'Close generator' : 'Generate draft'}</Button></div>
       <div className="row-list">{suites.length === 0 ? <Empty>No saved suites yet.</Empty> : suites.map((suite) => <button key={suite} disabled={busy} className={`row-button ${selected === suite ? 'selected' : ''}`} onClick={() => { setSelected(suite); setMessage(''); setError(''); }}><span><b>{suite}</b><small>portable YAML · editable</small></span></button>)}</div>
       <div className="suite-library-actions"><Button variant="primary" disabled={!selected || loadedSuiteName !== selected || busy} data-testid="run-suite" onClick={() => void act(async () => { const run = await api.runSuite(selected); onRunStarted(run.id); setMessage(`Run ${run.id.slice(0, 8)} started.`); })}>Run selected</Button><div className="config-actions compact"><Button disabled={!selected || loadedSuiteName !== selected || busy} onClick={duplicateSuite}>Duplicate</Button><Button variant="danger" disabled={!selected || loadedSuiteName !== selected || busy} onClick={deleteSuite}>Delete</Button></div><small>{selected ? `Saved suite: ${selected}` : 'Unsaved draft'}</small></div>
     </Section>
 
     <Section title="Suite composer" className="suite-workspace" action={<div className="suite-view-tabs"><button className={view === 'builder' ? 'selected' : ''} onClick={() => switchView('builder')}>Builder</button><button className={view === 'yaml' ? 'selected' : ''} onClick={() => switchView('yaml')}>YAML</button></div>}>
       {loading ? <div className="loading"><i />Loading suite…</div> : <>
+        {generatorOpen ? <div className="suite-generator" data-testid="suite-generator">
+          <header><div><span className="eyebrow">LLM authoring bench</span><h3>Generate safe agent coverage</h3><p>Tool metadata becomes an unsaved Version 2 draft. Generator never invokes MCP tools.</p></div><span className="generation-sequence">metadata → plan → review</span></header>
+          <div className="generation-grid">
+            <section className="generation-step"><header><b>01</b><span>Source</span></header><Field label="Connected MCP server" hint="Live tool descriptions and schemas"><Select disabled={busy} value={generationForm.serverId} onChange={(event) => updateGenerationForm({ serverId: event.target.value })} data-testid="generation-server"><option value="">Choose connected server</option>{servers.map((server) => <option key={server.id} value={server.id} disabled={!server.connected}>{server.name} · {server.connected ? 'connected' : 'connect first'}</option>)}</Select></Field><Field label="Suite name" hint="Unsaved YAML filename"><Input disabled={busy} value={generationForm.name} onChange={(event) => updateGenerationForm({ name: event.target.value })} data-testid="generation-name" /></Field></section>
+            <section className="generation-step"><header><b>02</b><span>Authoring model</span></header><Field label="Generator provider"><Select disabled={busy} value={generationForm.generatorProviderId} onChange={(event) => { const provider = providers.find((entry) => entry.id === event.target.value); updateGenerationForm({ generatorProviderId: event.target.value, generatorModel: Object.keys(provider?.models ?? {})[0] ?? '' }); }} data-testid="generation-provider"><option value="">Choose provider</option>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} · {provider.id}</option>)}</Select></Field><Field label="Generator model"><Select disabled={busy} value={generationForm.generatorModel} onChange={(event) => updateGenerationForm({ generatorModel: event.target.value })}><option value="">Choose model</option>{Object.keys(generationProvider?.models ?? {}).map((model) => <option key={model} value={model}>{model}</option>)}</Select></Field></section>
+            <section className="generation-step"><header><b>03</b><span>Runtime target</span></header><Field label="Target provider"><Select disabled={busy} value={generationForm.targetProviderId} onChange={(event) => { const provider = providers.find((entry) => entry.id === event.target.value); updateGenerationForm({ targetProviderId: event.target.value, targetModel: Object.keys(provider?.models ?? {})[0] ?? '' }); }}><option value="">Choose provider</option>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} · {provider.id}</option>)}</Select></Field><Field label="Target model"><Select disabled={busy} value={generationForm.targetModel} onChange={(event) => updateGenerationForm({ targetModel: event.target.value })}><option value="">Choose model</option>{Object.keys(generationTargetProvider?.models ?? {}).map((model) => <option key={model} value={model}>{model}</option>)}</Select></Field></section>
+            <Field label="Safe fixtures and domain guidance" hint="Optional: known IDs, forbidden actions, realistic values, and domain constraints"><Textarea disabled={busy} rows={4} maxLength={20000} value={generationForm.authorInstructions} onChange={(event) => updateGenerationForm({ authorInstructions: event.target.value })} placeholder="Use tenant demo-acme. Never send messages or modify production records." data-testid="generation-instructions" /></Field>
+          </div>
+          <div className="generation-guardrail"><p><b>Draft boundary.</b> Explicitly destructive tools are excluded. Uncertain tools need a reason. Running any accepted case can still cause real side effects, so inspect every prompt and assertion.</p><Button variant="primary" disabled={!canGenerate || busy} data-testid="generate-suite-draft" onClick={() => void generateDraft()}>{busy ? 'Generating…' : 'Generate review draft'}</Button></div>
+          {generationResult ? <div className="generation-result">
+            <header><div><span className="eyebrow">Coverage ledger</span><h3>{generationResult.coverage.length} generated · {generationResult.exclusions.length} excluded</h3></div>{generationResult.usage ? <span className="metrics">{generationResult.usage.total} tokens</span> : null}</header>
+            <div className="generation-ledger"><section><h4>Generated cases</h4>{generationResult.coverage.map((entry) => <div className="generation-ledger-row" key={entry.tool}><span className="status pass">generated</span><code>{entry.tool}</code><small>{entry.caseId}</small></div>)}</section><section><h4>Excluded tools</h4>{generationResult.exclusions.length === 0 ? <Empty>No exclusions.</Empty> : generationResult.exclusions.map((entry) => <div className="generation-ledger-row exclusion" key={entry.tool}><span className={`status ${entry.category === 'destructive' ? 'fail' : ''}`}>{entry.category}</span><code>{entry.tool}</code><small>{entry.reason}</small></div>)}</section></div>
+            <footer><p>Opening replaces current editor only. Saved suite files and run history stay unchanged.</p><Button variant="primary" data-testid="apply-generated-suite" onClick={applyGeneratedDraft}>Open draft in composer</Button></footer>
+          </div> : null}
+        </div> : null}
         <div className="suite-meta"><Field label="Suite name" hint="Filename-safe ID used by CLI and reports"><Input value={draft.name} onChange={(event) => applyDraft({ ...draft, name: event.target.value })} data-testid="suite-name" /></Field><Field label="Description" hint="Optional intent for reviewers"><Input value={draft.description ?? ''} onChange={(event) => applyDraft({ ...draft, description: event.target.value })} /></Field><Field label="Suite version" hint={draft.version === 2 ? 'Version 2 cannot be downgraded in builder.' : 'Version 2 supports scripted multi-turn agents.'}><Select value={draft.version} onChange={(event) => { if (event.target.value === '2') convertToV2(); }}><option value="1" disabled={draft.version === 2}>Version 1</option><option value="2">Version 2</option></Select></Field></div>
         {view === 'yaml' ? <div className="yaml-workspace"><div className="yaml-note"><span>Canonical artifact</span><b>Version {draft.version} YAML</b><small>Edit directly, commit it, or run with <code>mcp-riksa run</code>.</small></div><Field label="Suite source"><Textarea className="code-editor" rows={28} value={source} onChange={(event) => setSource(event.target.value)} spellCheck={false} data-testid="suite-source" /></Field></div> : <div className="suite-builder">
           <aside className="case-rail"><header><div><span className="eyebrow">Cases</span><b>{draft.cases.length} scenarios</b></div><div><Button onClick={() => addCase('direct')}>+ Direct</Button><Button onClick={() => addCase('agent')}>+ Agent</Button></div></header><div className="case-list">{draft.cases.map((entry, index) => <button key={`${entry.id}-${index}`} className={entry.id === activeCase?.id ? 'selected' : ''} onClick={() => setActiveCaseId(entry.id)}><span>{String(index + 1).padStart(2, '0')}</span><div><b>{entry.id || 'Untitled case'}</b><small>{entry.kind} · {entry.server || 'no server'} · {entry.assertions.length} checks</small></div></button>)}</div></aside>

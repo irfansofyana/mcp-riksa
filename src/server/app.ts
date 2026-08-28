@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import { z, ZodError } from 'zod';
+import { suiteGenerationInputSchema } from '../agent/suite-generation.js';
 import { providerConfigSchema } from '../agent/types.js';
 import { redact } from '../core/redaction.js';
 import { serverConfigSchema } from '../mcp/manager.js';
@@ -27,6 +28,7 @@ export type ApiRuntime = {
   connectServer(id: string): Promise<unknown> | unknown;
   disconnectServer(id: string): Promise<unknown> | unknown;
   inspectServer(id: string): Promise<unknown> | unknown;
+  generateSuiteDraft(value: z.infer<typeof suiteGenerationInputSchema>): Promise<unknown> | unknown;
   callTool(id: string, tool: string, args: Record<string, unknown>, options: { confirmDangerous: boolean }): Promise<unknown> | unknown;
   playground(value: unknown): Promise<unknown> | unknown;
   createConversation(value: { serverId: string; providerId: string; model: string; systemPrompt?: string }): Promise<unknown> | unknown;
@@ -243,6 +245,7 @@ export function createApp(runtime: ApiRuntime, options: { sessionToken?: string;
     }
   });
   app.get('/api/suites', async (_request, response) => send(response, await runtime.listSuites()));
+  app.post('/api/suites/generate', async (request, response) => send(response, await runtime.generateSuiteDraft(suiteGenerationInputSchema.parse(request.body))));
   app.post('/api/suites', async (request, response) => send(response, await runtime.createSuite(suiteBodySchema.parse(request.body).source), 201));
   app.get('/api/suites/:name', async (request, response) => {
     const suite = await runtime.getSuite(request.params.name!);

@@ -1,6 +1,6 @@
 {
   "name": "mcp-riksa",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Local-first MCP server and agent evaluation workbench",
   "type": "module",
   "license": "MIT",
@@ -58,6 +58,7 @@
   "dependencies": {
     "@modelcontextprotocol/conformance": "0.1.10",
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "ajv": "^8.20.0",
     "better-sqlite3": "^13.0.3",
     "commander": "^15.0.0",
     "express": "^5.2.1",

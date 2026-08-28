@@ -68,6 +68,14 @@ function runtime(): ApiRuntime {
     connectServer: async (id) => ({ id, identity: { name: 'sample' }, tools: [{ name: 'add' }] }),
     disconnectServer: async (id) => ({ id, connected: false }),
     inspectServer: async (id) => ({ id, identity: { name: 'sample' }, tools: [{ name: 'add' }] }),
+    generateSuiteDraft: async (value) => {
+      calls.push({ method: 'generateSuiteDraft', value });
+      return {
+        suite: { version: 2, name: value.name, cases: [] },
+        coverage: [],
+        exclusions: [],
+      };
+    },
     callTool: async (id, tool, args, options) => ({ id, tool, args, options, structuredContent: { sum: 5 } }),
     playground: async () => ({ output: '5', toolCalls: [{ name: 'add' }], events: [] }),
     createConversation: async (value) => ({ id: 'conversation-1', title: 'New conversation', messages: [], ...value }),
@@ -205,6 +213,28 @@ describe('API security boundary', () => {
     expect(text).not.toContain('api-response-secret');
     expect(text).toContain('[REDACTED]');
     expect(text).toContain('SAFE_ENV_NAME');
+  });
+
+  test('protects suite generation with mutation security and strict request validation', async () => {
+    const value = {
+      serverId: 'sample',
+      generatorProviderId: 'author',
+      generatorModel: 'drafting',
+      targetProviderId: 'target',
+      targetModel: 'evaluation',
+      name: 'generated-suite',
+      authorInstructions: 'Use realistic requests.',
+    };
+    const external = await request('/api/suites/generate', mutation(value, { origin: 'https://evil.example' }));
+    expect(external.status).toBe(403);
+    const invalid = await request('/api/suites/generate', mutation({ ...value, persist: true }));
+    expect(invalid.status).toBe(400);
+    expect(calls).toHaveLength(0);
+
+    const accepted = await request('/api/suites/generate', mutation(value));
+    expect(accepted.status).toBe(200);
+    expect(await accepted.json()).toMatchObject({ suite: { version: 2, name: 'generated-suite' } });
+    expect(calls).toEqual([{ method: 'generateSuiteDraft', value }]);
   });
 });
 
