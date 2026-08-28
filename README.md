@@ -1,5 +1,7 @@
 # MCP Riksa
 
+[![npm](https://img.shields.io/npm/v/mcp-riksa?logo=npm)](https://www.npmjs.com/package/mcp-riksa)
+
 MCP Riksa is a local-first workbench for testing MCP servers and agents. It connects to stdio or Streamable HTTP MCP servers, drives OpenAI-compatible and Anthropic-compatible model endpoints, stores sanitized run history in SQLite, and runs the same YAML suites from the browser or CLI so you can commit a suite once and run it identically in CI.
 
 It binds to `127.0.0.1` by default and has no login, cloud sync, telemetry, external fonts, or CDN assets.
