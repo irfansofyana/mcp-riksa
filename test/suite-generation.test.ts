@@ -4,12 +4,12 @@ import { createAgentSuiteDraft, SuiteGenerationError, type SuiteGenerationInspec
 import type { ProviderAdapter, ProviderRequest, ProviderResponse } from '../src/agent/types.js';
 import { parseSuite } from '../src/core/suite.js';
 
-function response(text: string, input = 2, output = 3): ProviderResponse {
+function response(text: string, input = 2, output = 3, stopReason = 'stop'): ProviderResponse {
   return {
     text,
     toolCalls: [],
     usage: { input, output, total: input + output },
-    stopReason: 'stop',
+    stopReason,
     raw: {},
   };
 }
@@ -138,6 +138,70 @@ describe('agent-suite generation', () => {
     ]));
     expect(draft.coverage.map((entry) => entry.tool)).toEqual(['lookup', 'opaque_action']);
     expect(draft.usage).toEqual({ input: 5, output: 6, total: 11 });
+  });
+
+  test('batches large tool ledgers and aggregates plans under one deadline', async () => {
+    const tools = Array.from({ length: 13 }, (_value, index) => ({
+      name: `tool-${index}`,
+      description: `Look up record ${index}.`,
+      inputSchema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'], additionalProperties: false },
+    }));
+    const plans = [tools.slice(0, 12), tools.slice(12)].map((batch) => response(JSON.stringify({
+      cases: batch.map((tool) => ({ tool: tool.name, prompt: `Use ${tool.name} to find Ada.`, arguments: { query: 'Ada' } })),
+      exclusions: [],
+    }), batch.length, batch.length + 1));
+    const provider = fakeProvider(plans);
+
+    const draft = await createAgentSuiteDraft(input, { name: 'Large catalog', tools }, provider.adapter);
+
+    expect(provider.requests).toHaveLength(2);
+    expect(provider.requests[1]?.signal).toBe(provider.requests[0]?.signal);
+    const firstPrompt = provider.requests[0]?.messages[1]?.content ?? '';
+    const secondPrompt = provider.requests[1]?.messages[1]?.content ?? '';
+    expect(firstPrompt).toContain('"tool-11"');
+    expect(firstPrompt).not.toContain('"tool-12"');
+    expect(secondPrompt).toContain('"tool-12"');
+    expect(secondPrompt).not.toContain('"tool-0"');
+    expect(draft.coverage).toHaveLength(13);
+    expect(draft.coverage.map((entry) => entry.tool)).toEqual(tools.map((tool) => tool.name));
+    expect(draft.usage).toEqual({ input: 13, output: 15, total: 28 });
+  });
+
+  test.each(['max_tokens', 'length'])('recursively splits a batch after %s truncation', async (stopReason) => {
+    const tools = Array.from({ length: 4 }, (_value, index) => ({
+      name: `adaptive-${index}`,
+      description: `Look up adaptive record ${index}.`,
+      inputSchema: { type: 'object' },
+    }));
+    const planFor = (batch: typeof tools) => JSON.stringify({
+      cases: batch.map((tool) => ({ tool: tool.name, prompt: `Use ${tool.name}.` })),
+      exclusions: [],
+    });
+    const provider = fakeProvider([
+      response('{"cases":[', 10, 20, stopReason),
+      response(planFor(tools.slice(0, 2)), 2, 3),
+      response(planFor(tools.slice(2)), 4, 5),
+    ]);
+
+    const draft = await createAgentSuiteDraft(input, { name: 'Adaptive catalog', tools }, provider.adapter);
+
+    expect(provider.requests).toHaveLength(3);
+    expect(new Set(provider.requests.map((request) => request.signal)).size).toBe(1);
+    expect(provider.requests[1]?.messages[1]?.content).toContain('"adaptive-1"');
+    expect(provider.requests[1]?.messages[1]?.content).not.toContain('"adaptive-2"');
+    expect(provider.requests[2]?.messages[1]?.content).toContain('"adaptive-2"');
+    expect(provider.requests[2]?.messages[1]?.content).not.toContain('"adaptive-1"');
+    expect(draft.coverage.map((entry) => entry.tool)).toEqual(tools.map((tool) => tool.name));
+    expect(draft.usage).toEqual({ input: 16, output: 28, total: 44 });
+  });
+
+  test('rejects single-tool metadata above the UTF-8 batch budget before provider use', async () => {
+    const provider = fakeProvider([]);
+    const tools = [{ name: 'oversized', description: 'é'.repeat(30_000), inputSchema: { type: 'object' } }];
+
+    await expect(createAgentSuiteDraft(input, { name: 'Oversized catalog', tools }, provider.adapter))
+      .rejects.toThrow(/oversized metadata exceeds the 60000-byte generation limit/);
+    expect(provider.requests).toHaveLength(0);
   });
 
   test.each([
