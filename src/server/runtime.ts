@@ -46,6 +46,10 @@ type PlaygroundInput = {
   limits?: { maxTurns: number; maxToolCalls: number; timeoutMs: number; maxCostUsd?: number };
 };
 
+function isGenerationTimeout(error: unknown): boolean {
+  return error instanceof Error && /abort|timeout/i.test(error.name);
+}
+
 export class WorkbenchRuntime {
   private readonly database: WorkbenchDatabase;
   private readonly runs: RunRepository;
@@ -379,14 +383,25 @@ export class WorkbenchRuntime {
       const inspection = await this.mcp.inspect(input.serverId);
       const createAdapter = this.options.providerAdapterFactory ?? createProviderAdapter;
       const adapter = createAdapter(generator, this.secrets.resolve.bind(this.secrets));
+      let result: Awaited<ReturnType<typeof createAgentSuiteDraft>> | undefined;
+      let failure: WorkbenchError | undefined;
       try {
-        return await createAgentSuiteDraft(input, inspection, adapter);
+        result = await createAgentSuiteDraft(input, inspection, adapter);
       } catch (error) {
-        if (error instanceof SuiteGenerationError) throw new WorkbenchError(error.message, 502);
-        throw error;
-      } finally {
-        await adapter.close?.();
+        failure = error instanceof SuiteGenerationError
+          ? new WorkbenchError(error.message, 502)
+          : isGenerationTimeout(error)
+            ? new WorkbenchError('Suite generation timed out', 504)
+            : new WorkbenchError('Suite generation provider request failed', 502);
       }
+      try {
+        await adapter.close?.();
+      } catch {
+        failure ??= new WorkbenchError('Suite generation provider cleanup failed', 502);
+      }
+      if (failure) throw failure;
+      if (result === undefined) throw new WorkbenchError('Suite generation failed', 502);
+      return result;
     });
   }
 

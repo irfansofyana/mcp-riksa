@@ -220,15 +220,18 @@ describe('concrete workbench runtime', () => {
   test('generates an unsaved suite with independent aliases and always closes the generator adapter', async () => {
     let completeCalls = 0;
     let closeCalls = 0;
-    let malformed = false;
+    let closeFailure = false;
+    let failure: 'none' | 'malformed' | 'upstream' | 'timeout' = 'none';
     const adapter: ProviderAdapter = {
       id: 'author',
       pricingFor: () => ({ inputPerMillion: 0, outputPerMillion: 0 }),
       complete: async (request) => {
         completeCalls += 1;
         expect(request.model).toBe('drafting');
+        if (failure === 'upstream') throw new Error('provider unavailable');
+        if (failure === 'timeout') throw Object.assign(new Error('provider timed out'), { name: 'TimeoutError' });
         return {
-          text: malformed ? '{' : JSON.stringify({
+          text: failure === 'malformed' ? '{' : JSON.stringify({
             cases: [
               { tool: 'add', prompt: 'Add 2 and 3.' },
               { tool: 'unannotated_read', prompt: 'Read the deterministic sample data.' },
@@ -242,7 +245,7 @@ describe('concrete workbench runtime', () => {
           raw: {},
         };
       },
-      close: async () => { closeCalls += 1; },
+      close: async () => { closeCalls += 1; if (closeFailure) throw new Error('cleanup unavailable'); },
     };
     const { runtime } = createRuntime(undefined, () => adapter);
     try {
@@ -287,10 +290,30 @@ describe('concrete workbench runtime', () => {
       expect(await runtime.listRuns()).toEqual([]);
       expect(closeCalls).toBe(1);
 
-      malformed = true;
+      failure = 'malformed';
       await expect(runtime.generateSuiteDraft({ ...generation, name: 'malformed-generation' })).rejects.toMatchObject({ status: 502 });
       expect(completeCalls).toBe(3);
       expect(closeCalls).toBe(2);
+
+      failure = 'upstream';
+      await expect(runtime.generateSuiteDraft({ ...generation, name: 'upstream-failure' })).rejects.toMatchObject({ status: 502 });
+      expect(completeCalls).toBe(4);
+      expect(closeCalls).toBe(3);
+
+      failure = 'timeout';
+      await expect(runtime.generateSuiteDraft({ ...generation, name: 'timeout-failure' })).rejects.toMatchObject({ status: 504 });
+      expect(completeCalls).toBe(5);
+      expect(closeCalls).toBe(4);
+
+      closeFailure = true;
+      failure = 'none';
+      await expect(runtime.generateSuiteDraft({ ...generation, name: 'cleanup-failure' })).rejects.toMatchObject({ status: 502, message: 'Suite generation provider cleanup failed' });
+      failure = 'upstream';
+      await expect(runtime.generateSuiteDraft({ ...generation, name: 'upstream-cleanup-failure' })).rejects.toMatchObject({ status: 502, message: 'Suite generation provider request failed' });
+      failure = 'timeout';
+      await expect(runtime.generateSuiteDraft({ ...generation, name: 'timeout-cleanup-failure' })).rejects.toMatchObject({ status: 504, message: 'Suite generation timed out' });
+      expect(completeCalls).toBe(8);
+      expect(closeCalls).toBe(7);
       expect(await runtime.listSuites()).toEqual([]);
       expect(await runtime.listRuns()).toEqual([]);
     } finally {

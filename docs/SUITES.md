@@ -60,9 +60,17 @@ See [`examples/sample-suite.yaml`](../examples/sample-suite.yaml) for a direct-t
 
 ## Composing suites in the browser
 
-The **Suites** workspace has a visual case composer for both direct and agent cases — add expected tool calls, output assertions, JSONPath checks, and budgets without hand-authoring YAML. The YAML tab stays canonical: visual edits serialize to strict version-1 suite YAML that commits and runs unchanged through the CLI or CI.
+The **Suites** workspace has a visual case composer for both direct and agent cases — add expected tool calls, output assertions, JSONPath checks, and budgets without hand-authoring YAML. The YAML tab stays canonical: visual edits serialize to strict versioned suite YAML that commits and runs unchanged through the CLI or CI.
 
 Existing suite files load back into the visual composer, and raw YAML stays editable for anything the composer doesn't cover. The suite library supports full CRUD — create, load/edit, rename, duplicate, delete. Renaming moves the underlying YAML file; deleting removes only the suite definition and keeps historical run evidence intact.
+
+## Generate an agent suite draft
+
+Choose **Generate draft** in the Suites workspace to turn a connected server's live tool names, descriptions, and input schemas into a reviewable Version 2 agent suite. Select the configured provider/model that authors the cases separately from the provider/model the cases will evaluate. Optional guidance can supply safe fixture IDs, realistic domain values, and forbidden actions.
+
+Generation is draft-only. It never invokes MCP tools, saves a suite file, or starts a run. Tools declaring `annotations.destructiveHint: true` are excluded before model generation; the model must either create one case for every remaining tool or exclude it with a concrete uncertainty reason. Missing destructive annotations are not proof that a tool is safe.
+
+Review the coverage ledger, open the result in the composer, inspect every prompt and assertion, then save explicitly. Running the saved suite executes real MCP tools and may cause side effects. Generated exclusion reasons belong to the current review session and are not written into portable suite YAML.
 
 ## Playground → suite
 

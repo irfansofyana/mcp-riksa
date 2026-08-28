@@ -1,3 +1,6 @@
+import { Ajv, type ErrorObject } from 'ajv';
+import { Ajv2019 } from 'ajv/dist/2019.js';
+import { Ajv2020 } from 'ajv/dist/2020.js';
 import { stringify as stringifyYaml } from 'yaml';
 import { z } from 'zod';
 import { parseSuite } from '../core/suite.js';
@@ -6,6 +9,7 @@ import type { ProviderAdapter, ProviderMessage, ProviderResponse } from './types
 
 const GENERATION_TIMEOUT_MS = 60_000;
 const MAX_PROMPT_METADATA_LENGTH = 250_000;
+const schemaValidatorOptions = { allErrors: true, strict: false, validateFormats: false } as const;
 
 export const suiteGenerationInputSchema = z.strictObject({
   serverId: z.string().min(1).max(128),
@@ -114,23 +118,29 @@ function validateLedger(plan: GenerationPlan, safeTools: SuiteGenerationInspecti
   }
 }
 
+function schemaValidator(schema: Record<string, unknown>) {
+  const dialect = typeof schema.$schema === 'string' ? schema.$schema : '';
+  if (dialect.includes('2020-12')) return new Ajv2020(schemaValidatorOptions).compile(schema);
+  if (dialect.includes('2019-09')) return new Ajv2019(schemaValidatorOptions).compile(schema);
+  return new Ajv(schemaValidatorOptions).compile(schema);
+}
+
 function validateArguments(plan: GenerationPlan, safeTools: SuiteGenerationInspection['tools']): void {
   const tools = new Map(safeTools.map((tool) => [tool.name, tool]));
   for (const entry of plan.cases) {
     if (entry.arguments === undefined) continue;
     const schema = tools.get(entry.tool)?.inputSchema;
-    const properties = schema?.properties;
-    if (properties === null || typeof properties !== 'object' || Array.isArray(properties)) {
-      if (Object.keys(entry.arguments).length > 0) throw new Error(`Generator asserted unsupported arguments for ${entry.tool}`);
-      continue;
+    if (schema === undefined) throw new Error(`Generator asserted arguments for unknown tool ${entry.tool}`);
+    let validate;
+    try {
+      validate = schemaValidator(schema);
+    } catch {
+      throw new Error(`Tool ${entry.tool} exposes an unsupported input schema; omit argument assertions`);
     }
-    const defined = properties as Record<string, unknown>;
-    const unknown = Object.keys(entry.arguments).find((key) => !Object.hasOwn(defined, key));
-    if (unknown !== undefined) throw new Error(`Generator asserted unknown argument ${unknown} for ${entry.tool}`);
-    const requiredValue = schema?.required;
-    const required = Array.isArray(requiredValue) ? requiredValue.filter((key): key is string => typeof key === 'string') : [];
-    const missing = required.find((key) => !Object.hasOwn(entry.arguments!, key));
-    if (missing !== undefined) throw new Error(`Generator omitted required asserted argument ${missing} for ${entry.tool}`);
+    if (!validate(entry.arguments)) {
+      const detail = validate.errors?.map((error: ErrorObject) => `${error.instancePath || '$'} ${error.message ?? 'is invalid'}`).join('; ') ?? 'schema validation failed';
+      throw new Error(`Generator asserted schema-invalid arguments for ${entry.tool}: ${detail}`);
+    }
   }
 }
 
@@ -236,6 +246,7 @@ export async function createAgentSuiteDraft(
     },
     { role: 'user', content: metadataPrompt(input, inspection, safeTools) },
   ];
+  const deadline = AbortSignal.timeout(GENERATION_TIMEOUT_MS);
   let usage = { input: 0, output: 0, total: 0 };
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -243,7 +254,7 @@ export async function createAgentSuiteDraft(
       model: input.generatorModel,
       messages,
       tools: [],
-      signal: AbortSignal.timeout(GENERATION_TIMEOUT_MS),
+      signal: deadline,
     });
     usage = {
       input: usage.input + response.usage.input,

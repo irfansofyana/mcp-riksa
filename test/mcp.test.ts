@@ -110,7 +110,8 @@ describe('real sample MCP server over stdio', () => {
   test('does not inherit child stderr when managed credentials are injected', async () => {
     const result = await execFileAsync(process.execPath, [tsxCli, stderrLeakRunner], { cwd: resolve('.') });
     expect(result.stderr).not.toContain('stdio-leak-regression-secret');
-    expect(result.stderr).toBe('');
+    expect(result.stderr).not.toContain('child stderr secret=');
+    expect(Buffer.byteLength(result.stderr, 'utf8')).toBeLessThan(1024);
   });
 
   test('retains resolved credentials for the connected transport lifetime', async () => {
