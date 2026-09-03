@@ -83,6 +83,33 @@ function nextTurnId(turns: AgentSuiteTurn[]): string {
   return `turn-${sequence}`;
 }
 
+function JsonObjectEditor({ editorId, value, onChange, onError }: {
+  editorId: string;
+  value: DirectSuiteCase['call']['arguments'];
+  onChange(value: DirectSuiteCase['call']['arguments']): void;
+  onError(editorId: string, message: string): void;
+}) {
+  const onErrorRef = useRef(onError);
+  onErrorRef.current = onError;
+  useEffect(() => () => onErrorRef.current(editorId, ''), [editorId]);
+  return <Textarea
+    rows={8}
+    defaultValue={JSON.stringify(value, null, 2)}
+    data-testid="direct-arguments-json"
+    onChange={() => onError(editorId, 'Save changes before running')}
+    onBlur={(event) => {
+      try {
+        const parsed = JSON.parse(event.target.value) as DirectSuiteCase['call']['arguments'];
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error();
+        onChange(parsed);
+        onError(editorId, '');
+      } catch {
+        onError(editorId, 'Tool arguments must be a valid JSON object.');
+      }
+    }}
+  />;
+}
+
 function AssertionEditor({ assertion, index, tools, types, onChange, onRemove, onError, editorId, scope }: {
   assertion: SuiteAssertion;
   index: number;
@@ -350,7 +377,7 @@ export function SuitesPage({ suites, servers, providers, onRefresh, onRunStarted
       {activeCase.kind === 'direct' ? <div className="case-section"><span className="eyebrow">Direct invocation</span><div className="form-grid">
         <Field label="Tool" hint={tools.length ? `${tools.length} discovered tools` : 'Type a tool name or connect server to discover'}><ToolInput id={`case-tool-${activeCase.id}`} value={activeCase.call.tool} tools={tools} onChange={(tool) => replaceCase({ ...activeCase, call: { ...activeCase.call, tool } })} /></Field>
         <label className="check suite-danger"><input type="checkbox" checked={activeCase.call.dangerous ?? false} onChange={(event) => replaceCase({ ...activeCase, call: { ...activeCase.call, dangerous: event.target.checked || undefined } })} />Confirm destructive tool when running</label>
-        <Field label="Arguments JSON" hint="Portable JSON object passed to tool"><Textarea key={`${draft.name}-${activeCase.id}-${activeCase.call.tool}`} rows={8} defaultValue={JSON.stringify(activeCase.call.arguments, null, 2)} onChange={() => handleEditorError(`case:${activeCase.id}:arguments`, 'Save changes before running')} onBlur={(event) => { try { const value = JSON.parse(event.target.value) as DirectSuiteCase['call']['arguments']; if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(); replaceCase({ ...activeCase, call: { ...activeCase.call, arguments: value } }); handleEditorError(`case:${activeCase.id}:arguments`, ''); } catch { handleEditorError(`case:${activeCase.id}:arguments`, 'Tool arguments must be a valid JSON object.'); } }} /></Field>
+        <Field label="Arguments JSON" hint="Portable JSON object passed to tool"><JsonObjectEditor key={`${draft.name}-${activeCase.id}-${activeCase.call.tool}`} editorId={`case:${activeCase.id}:arguments`} value={activeCase.call.arguments} onError={handleEditorError} onChange={(argumentsValue) => replaceCase({ ...activeCase, call: { ...activeCase.call, arguments: argumentsValue } })} /></Field>
       </div></div> : <div className="case-section"><span className="eyebrow">Agent scenario</span><div className="form-grid">
         <Field label="Provider"><Select value={activeCase.provider} onChange={(event) => { const provider = providers.find((entry) => entry.id === event.target.value); replaceCase({ ...activeCase, provider: event.target.value, model: Object.keys(provider?.models ?? {})[0] ?? '' }); }}><option value="">Choose provider</option>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} · {provider.id}</option>)}</Select></Field>
         <Field label="Model alias"><Select value={activeCase.model} onChange={(event) => replaceCase({ ...activeCase, model: event.target.value })}><option value="">Choose model</option>{Object.keys(selectedProvider?.models ?? {}).map((model) => <option key={model} value={model}>{model}</option>)}</Select></Field>

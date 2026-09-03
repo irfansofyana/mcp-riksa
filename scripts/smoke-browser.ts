@@ -290,6 +290,16 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     await evaluate(`window.confirm=()=>true`);
     await clickText('button', 'smoke-agent');
     await wait(`document.querySelector('.row-button.selected b')?.textContent === 'smoke-agent' && !document.querySelector('[data-testid="run-suite"]')?.hasAttribute('disabled')`, 'saved suite selected after discard confirmation');
+    await clickText('.suite-view-tabs button', 'Builder');
+    await clickText('.case-rail button', '+ Direct');
+    await setValue('direct-arguments-json', '{');
+    await wait(`document.querySelector('[data-testid="save-suite"]')?.hasAttribute('disabled')`, 'invalid direct arguments block save');
+    await evaluate(`document.querySelector('.case-list button')?.click()`);
+    await wait(`!document.querySelector('[data-testid="save-suite"]')?.hasAttribute('disabled')`, 'discarded direct arguments release save');
+    await evaluate(`([...document.querySelectorAll('.case-list button')].at(-1))?.click()`);
+    await clickText('.case-composer-head button', 'Remove');
+    await wait(`!document.querySelector('[data-testid="run-suite"]')?.hasAttribute('disabled')`, 'clean suite restored after direct editor cleanup');
+    steps.push('direct-editor-cleanup-checked');
 
     const runAndInspect = async (step: string) => {
       await navigate('suites');
