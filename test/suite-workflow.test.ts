@@ -21,6 +21,7 @@ import {
   replaceSuiteDocumentDraft,
   suiteDocumentSaveSnapshot,
   suggestSuiteNameFromServerId,
+  updatePendingEditorIssues,
   updateSuiteDocumentSource,
 } from '../web/src/suite-workflow.js';
 import type { SuiteGenerationDraft } from '../web/src/types.js';
@@ -128,6 +129,14 @@ describe('suite creation workflow', () => {
 });
 
 describe('suite document workflow', () => {
+  test('tracks pending uncontrolled editors independently', () => {
+    let issues = updatePendingEditorIssues({}, 'assertion-a:equals', 'Expected value must be valid JSON.');
+    issues = updatePendingEditorIssues(issues, 'assertion-b:result', 'Save changes before running');
+    issues = updatePendingEditorIssues(issues, 'assertion-a:equals', '');
+    expect(issues).toEqual({ 'assertion-b:result': 'Save changes before running' });
+    expect(updatePendingEditorIssues(issues, 'missing', '')).toBe(issues);
+  });
+
   test('creates manual and generated work as unsaved v2 documents', () => {
     const form = createSuiteCreationForm({ name: 'manual-suite', serverId: 'connected' });
     const manual = createManualSuiteDocument(form);

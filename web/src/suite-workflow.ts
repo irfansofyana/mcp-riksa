@@ -6,6 +6,19 @@ import {
 } from './model.js';
 import type { SuiteDraft, SuiteDraftV2, SuiteGenerationDraft } from './types.js';
 
+export type PendingEditorIssues = Record<string, string>;
+
+export function updatePendingEditorIssues(
+  current: PendingEditorIssues,
+  editorId: string,
+  message: string,
+): PendingEditorIssues {
+  if (!message && !(editorId in current)) return current;
+  const next = { ...current };
+  if (message) next[editorId] = message; else delete next[editorId];
+  return next;
+}
+
 export type SuiteCreationMode = 'manual' | 'generated';
 
 export type SuiteCreationForm = {
