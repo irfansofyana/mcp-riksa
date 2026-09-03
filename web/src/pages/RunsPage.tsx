@@ -137,6 +137,7 @@ export function RunsPage({ runs, initialId, onRefresh }: { runs: Run[]; initialI
         if (!active) return;
         setError(reason instanceof Error ? reason.message : String(reason));
         setLoadingDetail(false);
+        timer = setTimeout(() => void load(), 1_500);
       }
     };
     void load();

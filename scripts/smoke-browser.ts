@@ -320,7 +320,7 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     await wait(`!document.querySelector('[data-testid="run-suite"]')?.hasAttribute('disabled')`, 'removed duplicate turn ID releases run');
     steps.push('turn-id-cleanup-checked');
 
-    const runAndInspect = async (step: string) => {
+    const runAndInspect = async (step: string, injectTransientFailure = false) => {
       await navigate('suites');
       await clickText('button', 'smoke-agent');
       await wait(`!document.querySelector('[data-testid="run-suite"]')?.hasAttribute('disabled')`, 'enabled suite runner');
@@ -328,14 +328,18 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
       await wait(`document.querySelector('.page-heading h1')?.textContent === 'Runs'`, 'Runs page after suite start');
       await wait(`document.querySelector('.run-progress [role="progressbar"]') && document.querySelector('.run-progress-activity > b')?.getAttribute('aria-live') === 'polite' && !document.querySelector('.run-progress-activity')?.hasAttribute('aria-live') && document.body.textContent?.includes('Live execution')`, 'live suite progress');
       steps.push(`${step}-live-progress`);
+      if (injectTransientFailure) {
+        const activeRunId = await evaluate<string>(`document.querySelector('.runs-rail .row-button.selected')?.dataset.runId`);
+        await evaluate(`(() => { const original=window.fetch.bind(window); let failed=false; window.__originalPollFetch=original; window.fetch=(input, init) => { if (!failed && String(input).endsWith('/api/runs/${activeRunId}')) { failed=true; return Promise.reject(new TypeError('transient run poll')); } return original(input, init); }; })()`);
+      }
       for (let attempt = 0; attempt < 80; attempt += 1) {
         await new Promise((resolveWait) => setTimeout(resolveWait, 150));
         const ready = await evaluate<boolean>(`document.body.textContent?.includes('Model turns & MCP timeline') && document.body.textContent?.includes('passed')`);
-        if (ready) { steps.push(step); return; }
+        if (ready) { if (injectTransientFailure) { await evaluate(`window.fetch=window.__originalPollFetch; delete window.__originalPollFetch`); steps.push('run-poll-recovered'); } steps.push(step); return; }
       }
       throw new Error('Suite run did not become inspectable');
     };
-    await runAndInspect('first-run-inspected');
+    await runAndInspect('first-run-inspected', true);
     await runAndInspect('second-run-inspected');
 
     const runIds = await evaluate<string[]>(`[...document.querySelectorAll('.runs-rail [data-run-id]')].map((entry)=>entry.dataset.runId)`);

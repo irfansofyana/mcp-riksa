@@ -6,6 +6,30 @@ import {
 } from './model.js';
 import type { SuiteDraft, SuiteDraftV2, SuiteGenerationDraft } from './types.js';
 
+export type EditorIdentityRegistry<T extends object> = {
+  id(value: T): string;
+  transfer(current: T, next: T): T;
+};
+
+export function createEditorIdentityRegistry<T extends object>(prefix = 'editor'): EditorIdentityRegistry<T> {
+  const identities = new WeakMap<T, string>();
+  let sequence = 0;
+  const id = (value: T) => {
+    const existing = identities.get(value);
+    if (existing) return existing;
+    const created = `${prefix}-${++sequence}`;
+    identities.set(value, created);
+    return created;
+  };
+  return {
+    id,
+    transfer(current, next) {
+      identities.set(next, id(current));
+      return next;
+    },
+  };
+}
+
 export type PendingEditorIssues = Record<string, string>;
 
 export function updatePendingEditorIssues(

@@ -6,6 +6,7 @@ import {
   canAcceptGenerationResult,
   canRunSuiteDocument,
   completeSuiteDocumentLoad,
+  createEditorIdentityRegistry,
   createGeneratedSuiteDocument,
   createManualSuiteDocument,
   createSuiteCreationForm,
@@ -129,6 +130,16 @@ describe('suite creation workflow', () => {
 });
 
 describe('suite document workflow', () => {
+  test('keeps editor identities stable through value replacement and array shifts', () => {
+    const identities = createEditorIdentityRegistry<object>('assertion');
+    const first = {};
+    const second = {};
+    const replacement = {};
+    expect(identities.id(first)).not.toBe(identities.id(second));
+    expect(identities.id(identities.transfer(second, replacement))).toBe(identities.id(second));
+    expect(identities.id(first)).toBe('assertion-1');
+  });
+
   test('tracks pending uncontrolled editors independently', () => {
     let issues = updatePendingEditorIssues({}, 'assertion-a:equals', 'Expected value must be valid JSON.');
     issues = updatePendingEditorIssues(issues, 'assertion-b:result', 'Save changes before running');

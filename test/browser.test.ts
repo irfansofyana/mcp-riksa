@@ -57,7 +57,7 @@ describe('browser success path', () => {
     expect(result.steps).toEqual([
       'theme-checked', 'secret-managed', 'provider-added', 'server-added', 'server-inspected', 'tool-invoked', 'suite-creation-checked',
       'playground-complete', 'suite-saved', 'direct-editor-cleanup-checked', 'case-id-cleanup-checked',
-      'turn-id-cleanup-checked', 'first-run-inspected-live-progress', 'first-run-inspected',
+      'turn-id-cleanup-checked', 'first-run-inspected-live-progress', 'run-poll-recovered', 'first-run-inspected',
       'second-run-inspected-live-progress', 'second-run-inspected', 'run-refresh-race-guarded',
       'active-run-reselection-guarded', 'conformance-page-checked', 'runs-compared', 'mobile-checked',
     ]);
