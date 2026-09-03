@@ -321,6 +321,11 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     await evaluate(`window.fetch=window.__originalRunFetch; delete window.__originalRunFetch`);
     if (!stayedSelected) throw new Error('Stale Refresh response replaced newly selected run');
     steps.push('run-refresh-race-guarded');
+    await evaluate(`document.querySelector('[data-run-id="${runIds[1]}"]').click()`);
+    await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+    const detailStayedOpen = await evaluate<boolean>(`document.querySelector('.run-heading h1 span')?.textContent?.includes('${runIds[1]!.slice(0, 12)}')`);
+    if (!detailStayedOpen) throw new Error('Reselecting active run cleared its detail');
+    steps.push('active-run-reselection-guarded');
 
     const desktopScreenshot = join(options.outputDirectory, 'desktop.png');
     const desktop = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });

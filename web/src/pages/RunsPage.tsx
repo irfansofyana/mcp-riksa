@@ -186,7 +186,7 @@ export function RunsPage({ runs, initialId, onRefresh }: { runs: Run[]; initialI
 
   return <div className="runs-layout">
     <Section title="Runs" className="runs-rail" action={<Button onClick={() => void refresh()}>Refresh</Button>}>
-      <div className="row-list">{runs.length === 0 ? <Empty>Suite runs will appear here.</Empty> : runs.map((run) => { const progress = run.progress; return <button key={run.id} data-run-id={run.id} className={`row-button ${selected === run.id ? 'selected' : ''}`} onClick={() => { setSelected(run.id); setDetail(undefined); setCaseId(''); }}><span><b>{run.suite}</b><small>{progress ? `${progress.completedCases}/${progress.totalCases} cases · live` : `${run.id.slice(0, 10)} · ${new Date(run.startedAt).toLocaleString()}`}</small></span><Status value={run.status} /></button>; })}</div>
+      <div className="row-list">{runs.length === 0 ? <Empty>Suite runs will appear here.</Empty> : runs.map((run) => { const progress = run.progress; return <button key={run.id} data-run-id={run.id} className={`row-button ${selected === run.id ? 'selected' : ''}`} onClick={() => { if (run.id === selected) return; setSelected(run.id); setDetail(undefined); setCaseId(''); }}><span><b>{run.suite}</b><small>{progress ? `${progress.completedCases}/${progress.totalCases} cases · live` : `${run.id.slice(0, 10)} · ${new Date(run.startedAt).toLocaleString()}`}</small></span><Status value={run.status} /></button>; })}</div>
     </Section>
     <main className="run-workspace">
       {!detail ? <Section title="Run detail"><Empty>{loadingDetail ? 'Loading run progress…' : 'Select a run to inspect its full trace.'}</Empty>{error ? <Notice error>{error}</Notice> : null}</Section> : <>

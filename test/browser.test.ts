@@ -58,7 +58,7 @@ describe('browser success path', () => {
       'theme-checked', 'secret-managed', 'provider-added', 'server-added', 'server-inspected', 'tool-invoked', 'suite-creation-checked',
       'playground-complete', 'suite-saved', 'first-run-inspected-live-progress', 'first-run-inspected',
       'second-run-inspected-live-progress', 'second-run-inspected', 'run-refresh-race-guarded',
-      'conformance-page-checked', 'runs-compared', 'mobile-checked',
+      'active-run-reselection-guarded', 'conformance-page-checked', 'runs-compared', 'mobile-checked',
     ]);
     expect(result.consoleErrors).toEqual([]);
     expect(result.lightScreenshot).toMatch(/light-mode\.png$/);
