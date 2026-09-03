@@ -28,7 +28,7 @@ export type ApiRuntime = {
   connectServer(id: string): Promise<unknown> | unknown;
   disconnectServer(id: string): Promise<unknown> | unknown;
   inspectServer(id: string): Promise<unknown> | unknown;
-  generateSuiteDraft(value: z.infer<typeof suiteGenerationInputSchema>): Promise<unknown> | unknown;
+  generateSuiteDraft(value: z.infer<typeof suiteGenerationInputSchema>, signal?: AbortSignal): Promise<unknown> | unknown;
   callTool(id: string, tool: string, args: Record<string, unknown>, options: { confirmDangerous: boolean }): Promise<unknown> | unknown;
   playground(value: unknown): Promise<unknown> | unknown;
   createConversation(value: { serverId: string; providerId: string; model: string; systemPrompt?: string }): Promise<unknown> | unknown;
@@ -245,7 +245,19 @@ export function createApp(runtime: ApiRuntime, options: { sessionToken?: string;
     }
   });
   app.get('/api/suites', async (_request, response) => send(response, await runtime.listSuites()));
-  app.post('/api/suites/generate', async (request, response) => send(response, await runtime.generateSuiteDraft(suiteGenerationInputSchema.parse(request.body))));
+  app.post('/api/suites/generate', async (request, response) => {
+    const controller = new AbortController();
+    const abort = () => { if (!response.writableEnded) controller.abort(new Error('Suite generation client disconnected')); };
+    response.once('close', abort);
+    try {
+      const result = await runtime.generateSuiteDraft(suiteGenerationInputSchema.parse(request.body), controller.signal);
+      if (!response.destroyed) send(response, result);
+    } catch (error) {
+      if (!(controller.signal.aborted && response.destroyed)) throw error;
+    } finally {
+      response.off('close', abort);
+    }
+  });
   app.post('/api/suites', async (request, response) => send(response, await runtime.createSuite(suiteBodySchema.parse(request.body).source), 201));
   app.get('/api/suites/:name', async (request, response) => {
     const suite = await runtime.getSuite(request.params.name!);

@@ -9,7 +9,10 @@ import type {
   ServerSummary,
   SuiteAssertion,
   SuiteCase,
+  SuiteCaseV2,
   SuiteDraft,
+  SuiteDraftV2,
+  VersionedSuiteDraft,
 } from './types.js';
 
 export const pages = ['Servers', 'Playground', 'Suites', 'Runs', 'Conformance', 'Compare', 'Secrets', 'Settings'] as const;
@@ -470,8 +473,28 @@ export function createAgentSuiteCaseV2(id: string, server = '', provider = '', m
   };
 }
 
-export function createSuiteDraft(name = 'new-suite', server = ''): SuiteDraft & { cases: [DirectSuiteCase, ...SuiteCase[]] } {
-  return { version: 1, name, description: '', cases: [createDirectSuiteCase('direct-case', server)] };
+export function createSuiteDraft(name = 'new-suite', server = ''): SuiteDraftV2 & { cases: [DirectSuiteCase, ...SuiteCaseV2[]] } {
+  return { version: 2, name, description: '', cases: [createDirectSuiteCase('direct-case', server)] };
+}
+
+export function upgradeSuiteDraftToV2(draft: SuiteDraft): SuiteDraftV2 {
+  if (draft.version === 2) return clone(draft) as SuiteDraftV2;
+  const cases: SuiteCaseV2[] = draft.cases.map((entry) => {
+    if (entry.kind === 'direct') return clone(entry);
+    if (!('prompt' in entry)) throw new Error('Version 1 agent case needs a prompt before upgrade');
+    const { prompt, ...agent } = entry;
+    return {
+      ...clone(agent),
+      turns: [{ id: 'turn-1', user: prompt, assertions: [] }],
+      iterations: { count: 1, minPasses: 1 },
+    };
+  });
+  return {
+    version: 2,
+    name: draft.name,
+    ...(draft.description !== undefined ? { description: draft.description } : {}),
+    cases,
+  };
 }
 
 export function serializeSuiteDraft(draft: SuiteDraft): string {
@@ -504,7 +527,7 @@ function validV2Turns(value: unknown, label: string): value is Array<{ id: strin
   });
 }
 
-export function parseSuiteDraft(source: string): SuiteDraft {
+export function parseSuiteDraft(source: string): VersionedSuiteDraft {
   const value: unknown = parseYaml(source);
   const root = objectValue(value);
   if (!root) throw new Error('Suite YAML must contain an object');
@@ -516,19 +539,28 @@ export function parseSuiteDraft(source: string): SuiteDraft {
   root.cases.forEach((raw, index) => {
     const entry = objectValue(raw);
     const label = `Case ${index + 1}`;
-    if (!entry || typeof entry.id !== 'string' || !entry.id || typeof entry.server !== 'string' || !Array.isArray(entry.assertions)) {
-      throw new Error(`${label} needs an ID, server, and assertions`);
+    if (!entry || typeof entry.id !== 'string' || !entry.id || typeof entry.server !== 'string') {
+      throw new Error(`${label} needs an ID and server`);
     }
+    if (!Object.hasOwn(entry, 'assertions')) entry.assertions = [];
+    if (!Array.isArray(entry.assertions)) throw new Error(`${label} assertions must be a list`);
     if (caseIds.has(entry.id)) throw new Error('Suite case IDs must be unique');
     caseIds.add(entry.id);
     if (!entry.assertions.every(isSuiteAssertion)) throw new Error(`${label} has an invalid assertion`);
     if (entry.kind === 'direct') {
       const call = objectValue(entry.call);
+      if (call && !Object.hasOwn(call, 'arguments')) call.arguments = {};
       if (!call || typeof call.tool !== 'string' || !objectValue(call.arguments)) throw new Error(`${label} direct case needs a tool and arguments object`);
       return;
     }
     if (entry.kind !== 'agent') throw new Error(`${label} kind must be direct or agent`);
+    if (!Object.hasOwn(entry, 'limits')) entry.limits = {};
     const limits = objectValue(entry.limits);
+    if (limits) {
+      if (!Object.hasOwn(limits, 'maxTurns')) limits.maxTurns = 8;
+      if (!Object.hasOwn(limits, 'maxToolCalls')) limits.maxToolCalls = 16;
+      if (!Object.hasOwn(limits, 'timeoutMs')) limits.timeoutMs = 60_000;
+    }
     if (typeof entry.provider !== 'string' || typeof entry.model !== 'string' || !limits
       || typeof limits.maxTurns !== 'number' || typeof limits.maxToolCalls !== 'number' || typeof limits.timeoutMs !== 'number') {
       throw new Error(`${label} agent case needs provider, model, and limits`);
@@ -544,15 +576,15 @@ export function parseSuiteDraft(source: string): SuiteDraft {
       throw new Error(`${label} version 2 agent case needs turns, valid iterations, and no prompt`);
     }
   });
-  return clone(root as SuiteDraft);
+  return clone(root as VersionedSuiteDraft);
 }
 
 export function duplicateSuiteDraft(draft: SuiteDraft, existingNames: string[]): SuiteDraft {
-  const taken = new Set(existingNames);
+  const taken = new Set(existingNames.map((name) => name.toLocaleLowerCase('en-US')));
   const base = `${draft.name}-copy`;
   let name = base;
   let sequence = 2;
-  while (taken.has(name)) name = `${base}-${sequence++}`;
+  while (taken.has(name.toLocaleLowerCase('en-US'))) name = `${base}-${sequence++}`;
   return { ...clone(draft), name, ...(draft.description ? { description: `${draft.description} (copy)` } : {}) };
 }
 
@@ -586,11 +618,13 @@ export function buildSuiteFromPlayground(input: {
   name: string; server: string; provider: string; model: string; prompt: string; expectedText: string;
 }): string {
   return stringify({
-    version: 1,
+    version: 2,
     name: input.name,
     cases: [{
       id: 'saved-playground-case', kind: 'agent', server: input.server, provider: input.provider,
-      model: input.model, prompt: input.prompt,
+      model: input.model,
+      turns: [{ id: 'turn-1', user: input.prompt, assertions: [] }],
+      iterations: { count: 1, minPasses: 1 },
       limits: { maxTurns: 8, maxToolCalls: 16, timeoutMs: 60_000 },
       assertions: [{ type: 'contains', value: input.expectedText }],
     }],

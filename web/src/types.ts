@@ -31,11 +31,15 @@ export type AgentSuiteCaseV2 = {
   limits: SuiteLimits; assertions: SuiteAssertion[];
 };
 export type AgentSuiteCase = AgentSuiteCaseV1 | AgentSuiteCaseV2;
-export type SuiteCase = DirectSuiteCase | AgentSuiteCase;
-export type SuiteDraftV1 = { version: 1; name: string; description?: string; cases: SuiteCase[] };
-export type SuiteDraftV2 = { version: 2; name: string; description?: string; cases: SuiteCase[] };
-export type SuiteDraft = SuiteDraftV1 | SuiteDraftV2;
-export type SuiteDetail = { name: string; source: string; suite: SuiteDraft };
+export type SuiteCaseV1 = DirectSuiteCase | AgentSuiteCaseV1;
+export type SuiteCaseV2 = DirectSuiteCase | AgentSuiteCaseV2;
+export type SuiteCase = SuiteCaseV1 | SuiteCaseV2;
+export type SuiteDraftV1 = { version: 1; name: string; description?: string; cases: SuiteCaseV1[] };
+export type SuiteDraftV2 = { version: 2; name: string; description?: string; cases: SuiteCaseV2[] };
+export type VersionedSuiteDraft = SuiteDraftV1 | SuiteDraftV2;
+/* Mutable composer compatibility; parsed drafts retain precise version discrimination. */
+export type SuiteDraft = { version: 1 | 2; name: string; description?: string; cases: SuiteCase[] };
+export type SuiteDetail = { name: string; source: string; suite: VersionedSuiteDraft };
 export type SuiteGenerationRequest = {
   serverId: string;
   generatorProviderId: string;

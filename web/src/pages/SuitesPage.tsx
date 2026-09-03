@@ -6,12 +6,27 @@ import {
   createAgentSuiteCaseV2,
   createDirectSuiteCase,
   createSuiteAssertion,
-  createSuiteDraft,
   duplicateSuiteCase,
   duplicateSuiteDraft,
   parseSuiteDraft,
   serializeSuiteDraft,
+  upgradeSuiteDraftToV2,
 } from '../model.js';
+import {
+  applySuiteDocumentSource,
+  beginSuiteDocumentLoad,
+  canRunSuiteDocument,
+  completeSuiteDocumentLoad,
+  createManualSuiteDocument,
+  failSuiteDocumentLoad,
+  isSuiteDocumentDirty,
+  markSuiteDocumentSaved,
+  replaceSuiteDocumentDraft,
+  suiteDocumentSaveSnapshot,
+  updateSuiteDocumentSource,
+  type SuiteDocumentState,
+} from '../suite-workflow.js';
+import { SuiteCreateLaunchpad } from './SuiteCreateLaunchpad.js';
 import type {
   DirectSuiteCase,
   JsonValue,
@@ -22,8 +37,6 @@ import type {
   AgentSuiteCaseV2,
   AgentSuiteTurn,
   SuiteDraft,
-  SuiteGenerationDraft,
-  SuiteGenerationRequest,
   Tool,
 } from '../types.js';
 
@@ -91,14 +104,14 @@ function AssertionEditor({ assertion, index, tools, types, onChange, onRemove, o
       {assertion.type === 'tool_called' || assertion.type === 'tool_not_called' ? <Field label="Tool">{toolInput(assertion.tool, (tool) => onChange({ ...assertion, tool }))}</Field> : null}
       {assertion.type === 'tool_count' ? <><Field label="Tool (optional)">{toolInput(assertion.tool ?? '', (tool) => onChange({ ...assertion, ...(tool ? { tool } : { tool: undefined }) }))}</Field><Field label="Expected count"><Input type="number" min="0" value={assertion.count} onChange={(event) => onChange({ ...assertion, count: Number(event.target.value) })} /></Field></> : null}
       {assertion.type === 'tool_order' ? <Field label="Tools in order" hint="Comma-separated tool names"><Input value={assertion.tools.join(', ')} onChange={(event) => onChange({ ...assertion, tools: event.target.value.split(',').map((entry) => entry.trim()).filter(Boolean) })} /></Field> : null}
-      {assertion.type === 'args' ? <><Field label="Tool">{toolInput(assertion.tool, (tool) => onChange({ ...assertion, tool }))}</Field><Field label="Argument path (optional)"><Input value={assertion.path ?? ''} placeholder="$.customer.id" onChange={(event) => onChange({ ...assertion, ...(event.target.value ? { path: event.target.value } : { path: undefined }) })} /></Field><Field label="Expected JSON"><Input defaultValue={JSON.stringify(assertion.equals)} onBlur={(event) => jsonBlur(event.target.value, (equals) => onChange({ ...assertion, equals }))} /></Field></> : null}
-      {assertion.type === 'jsonpath' ? <><Field label="JSONPath"><Input value={assertion.path} onChange={(event) => onChange({ ...assertion, path: event.target.value })} /></Field><Field label="Check"><Select value={assertion.equals === undefined ? 'exists' : 'equals'} onChange={(event) => onChange(event.target.value === 'exists' ? { type: 'jsonpath', path: assertion.path, exists: true } : { type: 'jsonpath', path: assertion.path, equals: null })}><option value="exists">Path exists</option><option value="equals">Equals value</option></Select></Field>{assertion.equals !== undefined ? <Field label="Expected JSON"><Input defaultValue={JSON.stringify(assertion.equals)} onBlur={(event) => jsonBlur(event.target.value, (equals) => onChange({ type: 'jsonpath', path: assertion.path, equals }))} /></Field> : null}</> : null}
+      {assertion.type === 'args' ? <><Field label="Tool">{toolInput(assertion.tool, (tool) => onChange({ ...assertion, tool }))}</Field><Field label="Argument path (optional)"><Input value={assertion.path ?? ''} placeholder="$.customer.id" onChange={(event) => onChange({ ...assertion, ...(event.target.value ? { path: event.target.value } : { path: undefined }) })} /></Field><Field label="Expected JSON"><Input defaultValue={JSON.stringify(assertion.equals)} onChange={() => onError('Save changes before running')} onBlur={(event) => jsonBlur(event.target.value, (equals) => onChange({ ...assertion, equals }))} /></Field></> : null}
+      {assertion.type === 'jsonpath' ? <><Field label="JSONPath"><Input value={assertion.path} onChange={(event) => onChange({ ...assertion, path: event.target.value })} /></Field><Field label="Check"><Select value={assertion.equals === undefined ? 'exists' : 'equals'} onChange={(event) => onChange(event.target.value === 'exists' ? { type: 'jsonpath', path: assertion.path, exists: true } : { type: 'jsonpath', path: assertion.path, equals: null })}><option value="exists">Path exists</option><option value="equals">Equals value</option></Select></Field>{assertion.equals !== undefined ? <Field label="Expected JSON"><Input defaultValue={JSON.stringify(assertion.equals)} onChange={() => onError('Save changes before running')} onBlur={(event) => jsonBlur(event.target.value, (equals) => onChange({ type: 'jsonpath', path: assertion.path, equals }))} /></Field> : null}</> : null}
       {assertion.type === 'contains' ? <><Field label="Output path (optional)"><Input value={assertion.path ?? ''} placeholder="$.content" onChange={(event) => onChange({ ...assertion, ...(event.target.value ? { path: event.target.value } : { path: undefined }) })} /></Field><Field label="Expected text"><Input value={assertion.value} onChange={(event) => onChange({ ...assertion, value: event.target.value })} /></Field></> : null}
       {assertion.type === 'regex' ? <><Field label="Output path (optional)"><Input value={assertion.path ?? ''} placeholder="$.content" onChange={(event) => onChange({ ...assertion, ...(event.target.value ? { path: event.target.value } : { path: undefined }) })} /></Field><Field label="Pattern"><Input value={assertion.pattern} onChange={(event) => onChange({ ...assertion, pattern: event.target.value })} /></Field><Field label="Flags"><Input value={assertion.flags ?? ''} placeholder="i" onChange={(event) => onChange({ ...assertion, ...(event.target.value ? { flags: event.target.value } : { flags: undefined }) })} /></Field></> : null}
       {assertion.type === 'duration' ? <Field label="Maximum milliseconds"><Input type="number" min="0" value={assertion.maxMs} onChange={(event) => onChange({ ...assertion, maxMs: Number(event.target.value) })} /></Field> : null}
       {assertion.type === 'tokens' ? <Field label="Maximum tokens"><Input type="number" min="0" value={assertion.max} onChange={(event) => onChange({ ...assertion, max: Number(event.target.value) })} /></Field> : null}
       {assertion.type === 'cost' ? <Field label="Maximum USD"><Input type="number" min="0" step="0.001" value={assertion.maxUsd} onChange={(event) => onChange({ ...assertion, maxUsd: Number(event.target.value) })} /></Field> : null}
-      {assertion.type === 'tool' ? <><Field label="Tool">{toolInput(assertion.tool, (tool) => onChange({ ...assertion, tool }))}</Field><Field label="Occurrence" hint="Optional, 1-based"><Input type="number" min="1" value={assertion.occurrence ?? ''} onChange={(event) => onChange({ ...assertion, ...(event.target.value ? { occurrence: Number(event.target.value) } : { occurrence: undefined }) })} /></Field><Field label="Arguments"><Select value={assertion.arguments ? 'equals' : 'none'} onChange={(event) => onChange(event.target.value === 'equals' ? { ...assertion, arguments: assertion.arguments ?? { equals: null } } : { ...assertion, arguments: undefined })}><option value="none">Do not check</option><option value="equals">Check JSON value</option></Select></Field>{assertion.arguments ? <><Field label="Argument path (optional)"><Input value={assertion.arguments.path ?? ''} placeholder="$.customer.id" onChange={(event) => onChange({ ...assertion, arguments: { ...assertion.arguments!, ...(event.target.value ? { path: event.target.value } : { path: undefined }) } })} /></Field><Field label="Expected arguments JSON"><Input defaultValue={JSON.stringify(assertion.arguments.equals)} onBlur={(event) => jsonBlur(event.target.value, (equals) => onChange({ ...assertion, arguments: { ...assertion.arguments!, equals } }))} /></Field></> : null}<Field label="Result"><Select value={!assertion.result ? 'none' : assertion.result.equals === undefined ? 'exists' : 'equals'} onChange={(event) => onChange(event.target.value === 'none' ? { ...assertion, result: undefined } : event.target.value === 'exists' ? { ...assertion, result: { exists: true } } : { ...assertion, result: { equals: null } })}><option value="none">Do not check</option><option value="exists">Path exists</option><option value="equals">Check JSON value</option></Select></Field>{assertion.result ? <><Field label="Result path (optional)"><Input value={assertion.result.path ?? ''} placeholder="$.content" onChange={(event) => onChange({ ...assertion, result: { ...assertion.result!, ...(event.target.value ? { path: event.target.value } : { path: undefined }) } })} /></Field>{assertion.result.equals !== undefined ? <Field label="Expected result JSON"><Input defaultValue={JSON.stringify(assertion.result.equals)} onBlur={(event) => jsonBlur(event.target.value, (equals) => onChange({ ...assertion, result: { ...assertion.result!, equals } }))} /></Field> : null}</> : null}<Field label="Success"><Select value={assertion.success === undefined ? 'any' : String(assertion.success)} onChange={(event) => onChange({ ...assertion, ...(event.target.value === 'any' ? { success: undefined } : { success: event.target.value === 'true' }) })}><option value="any">Any outcome</option><option value="true">Must succeed</option><option value="false">Must fail</option></Select></Field></> : null}
+      {assertion.type === 'tool' ? <><Field label="Tool">{toolInput(assertion.tool, (tool) => onChange({ ...assertion, tool }))}</Field><Field label="Occurrence" hint="Optional, 1-based"><Input type="number" min="1" value={assertion.occurrence ?? ''} onChange={(event) => onChange({ ...assertion, ...(event.target.value ? { occurrence: Number(event.target.value) } : { occurrence: undefined }) })} /></Field><Field label="Arguments"><Select value={assertion.arguments ? 'equals' : 'none'} onChange={(event) => onChange(event.target.value === 'equals' ? { ...assertion, arguments: assertion.arguments ?? { equals: null } } : { ...assertion, arguments: undefined })}><option value="none">Do not check</option><option value="equals">Check JSON value</option></Select></Field>{assertion.arguments ? <><Field label="Argument path (optional)"><Input value={assertion.arguments.path ?? ''} placeholder="$.customer.id" onChange={(event) => onChange({ ...assertion, arguments: { ...assertion.arguments!, ...(event.target.value ? { path: event.target.value } : { path: undefined }) } })} /></Field><Field label="Expected arguments JSON"><Input defaultValue={JSON.stringify(assertion.arguments.equals)} onChange={() => onError('Save changes before running')} onBlur={(event) => jsonBlur(event.target.value, (equals) => onChange({ ...assertion, arguments: { ...assertion.arguments!, equals } }))} /></Field></> : null}<Field label="Result"><Select value={!assertion.result ? 'none' : assertion.result.equals === undefined ? 'exists' : 'equals'} onChange={(event) => onChange(event.target.value === 'none' ? { ...assertion, result: undefined } : event.target.value === 'exists' ? { ...assertion, result: { exists: true } } : { ...assertion, result: { equals: null } })}><option value="none">Do not check</option><option value="exists">Path exists</option><option value="equals">Check JSON value</option></Select></Field>{assertion.result ? <><Field label="Result path (optional)"><Input value={assertion.result.path ?? ''} placeholder="$.content" onChange={(event) => onChange({ ...assertion, result: { ...assertion.result!, ...(event.target.value ? { path: event.target.value } : { path: undefined }) } })} /></Field>{assertion.result.equals !== undefined ? <Field label="Expected result JSON"><Input defaultValue={JSON.stringify(assertion.result.equals)} onChange={() => onError('Save changes before running')} onBlur={(event) => jsonBlur(event.target.value, (equals) => onChange({ ...assertion, result: { ...assertion.result!, equals } }))} /></Field> : null}</> : null}<Field label="Success"><Select value={assertion.success === undefined ? 'any' : String(assertion.success)} onChange={(event) => onChange({ ...assertion, ...(event.target.value === 'any' ? { success: undefined } : { success: event.target.value === 'true' }) })}><option value="any">Any outcome</option><option value="true">Must succeed</option><option value="false">Must fail</option></Select></Field></> : null}
     </div>
   </div>;
 }
@@ -111,84 +124,40 @@ export function SuitesPage({ suites, servers, providers, onRefresh, onRunStarted
   onRunStarted(id: string): void;
 }) {
   const defaultServer = servers[0]?.id ?? '';
-  const defaultGenerationServer = servers.find((server) => server.connected)?.id ?? '';
-  const defaultProvider = providers[0];
-  const defaultModel = Object.keys(defaultProvider?.models ?? {})[0] ?? '';
-  const initial = useMemo(() => createSuiteDraft('direct-regression', defaultServer), [defaultServer]);
-  const [selected, setSelected] = useState(suites[0] ?? '');
-  const [draft, setDraft] = useState<SuiteDraft>(initial);
-  const [source, setSource] = useState(() => serializeSuiteDraft(initial));
-  const [activeCaseId, setActiveCaseId] = useState(initial.cases[0].id);
+  const initial = useMemo(() => createManualSuiteDocument({ name: 'direct-regression', serverId: defaultServer }), [defaultServer]);
+  const [document, setDocument] = useState<SuiteDocumentState>(() => suites[0]
+    ? beginSuiteDocumentLoad(initial, suites[0], 'suite-load-0')
+    : initial);
+  const [activeCaseId, setActiveCaseId] = useState(initial.draft.cases[0]?.id ?? '');
   const [view, setView] = useState<'builder' | 'yaml'>('builder');
   const [tools, setTools] = useState<Tool[]>([]);
-  const [loading, setLoading] = useState(Boolean(suites[0]));
   const [busy, setBusy] = useState(false);
-  const [loadedSuiteName, setLoadedSuiteName] = useState('');
-  const loadEpoch = useRef(0);
-  const generationEpoch = useRef(0);
+  const loadSequence = useRef(0);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
-  const [generatorOpen, setGeneratorOpen] = useState(false);
-  const [generationForm, setGenerationForm] = useState<SuiteGenerationRequest & { authorInstructions: string }>(() => ({
-    serverId: defaultGenerationServer,
-    generatorProviderId: defaultProvider?.id ?? '',
-    generatorModel: defaultModel,
-    targetProviderId: defaultProvider?.id ?? '',
-    targetModel: defaultModel,
-    name: `${defaultGenerationServer || 'mcp'}-agent-regression`,
-    authorInstructions: '',
-  }));
-  const [generationResult, setGenerationResult] = useState<SuiteGenerationDraft>();
+  const [hasPendingEditorChanges, setHasPendingEditorChanges] = useState(false);
+  const [hasIntentionalDraft, setHasIntentionalDraft] = useState(false);
+  const [creationOpen, setCreationOpen] = useState(false);
 
+  const draft = document.draft;
+  const source = document.source;
+  const selected = document.selectedName ?? '';
+  const loadedSuiteName = document.savedName ?? '';
+  const loading = document.loading !== undefined;
+  const dirty = isSuiteDocumentDirty(document);
+  const canRun = canRunSuiteDocument(document) && !hasPendingEditorChanges;
   const activeCase = draft.cases.find((entry) => entry.id === activeCaseId) ?? draft.cases[0];
   const selectedProvider = activeCase?.kind === 'agent' ? providers.find((entry) => entry.id === activeCase.provider) : undefined;
-  const generationProvider = providers.find((entry) => entry.id === generationForm.generatorProviderId);
-  const generationTargetProvider = providers.find((entry) => entry.id === generationForm.targetProviderId);
-  const generationServer = servers.find((entry) => entry.id === generationForm.serverId);
-  const generationOptionsKey = useMemo(() => JSON.stringify({
-    servers: servers.map((entry) => [entry.id, entry.connected]),
-    providers: providers.map((entry) => [entry.id, Object.keys(entry.models)]),
-  }), [servers, providers]);
-  const canGenerate = Boolean(
-    generationServer?.connected
-    && generationProvider?.models[generationForm.generatorModel]
-    && generationTargetProvider?.models[generationForm.targetModel]
-    && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(generationForm.name),
-  );
 
   useEffect(() => {
-    generationEpoch.current += 1;
-    setGenerationResult(undefined);
-    setGenerationForm((current) => {
-      const server = servers.find((entry) => entry.id === current.serverId && entry.connected) ?? servers.find((entry) => entry.connected);
-      const generator = providers.find((entry) => entry.id === current.generatorProviderId) ?? providers[0];
-      const target = providers.find((entry) => entry.id === current.targetProviderId) ?? providers[0];
-      const next = {
-        ...current,
-        serverId: server?.id ?? '',
-        generatorProviderId: generator?.id ?? '',
-        generatorModel: generator?.models[current.generatorModel] ? current.generatorModel : Object.keys(generator?.models ?? {})[0] ?? '',
-        targetProviderId: target?.id ?? '',
-        targetModel: target?.models[current.targetModel] ? current.targetModel : Object.keys(target?.models ?? {})[0] ?? '',
-      };
-      return JSON.stringify(next) === JSON.stringify(current) ? current : next;
+    const guard = document.loading;
+    if (!guard) return;
+    void api.suite(guard.name).then((detail) => {
+      setDocument((current) => completeSuiteDocumentLoad(current, guard, detail));
+    }).catch((reason) => {
+      setDocument((current) => failSuiteDocumentLoad(current, guard, reason instanceof Error ? reason.message : String(reason)));
     });
-  }, [generationOptionsKey]);
-
-  useEffect(() => {
-    if (!selected) { setLoadedSuiteName(''); return; }
-    const epoch = ++loadEpoch.current;
-    setLoading(true); setLoadedSuiteName('');
-    void api.suite(selected).then((detail) => {
-      if (epoch !== loadEpoch.current) return;
-      setDraft(detail.suite);
-      setSource(detail.source);
-      setActiveCaseId(detail.suite.cases[0]?.id ?? '');
-      setLoadedSuiteName(detail.name);
-      setError('');
-    }).catch((reason) => { if (epoch === loadEpoch.current) setError(reason instanceof Error ? reason.message : String(reason)); })
-      .finally(() => { if (epoch === loadEpoch.current) setLoading(false); });
-  }, [selected]);
+  }, [document.loading?.requestId]);
 
   useEffect(() => {
     if (!activeCase?.server) { setTools([]); return; }
@@ -198,8 +167,17 @@ export function SuitesPage({ suites, servers, providers, onRefresh, onRunStarted
   }, [activeCase?.server]);
 
   const applyDraft = (next: SuiteDraft) => {
-    setDraft(next);
-    setSource(serializeSuiteDraft(next));
+    setHasIntentionalDraft(true);
+    setDocument((current) => replaceSuiteDocumentDraft(current, next));
+  };
+  const handleEditorError = (message: string) => {
+    setError(message);
+    setHasPendingEditorChanges(Boolean(message));
+    if (message) setHasIntentionalDraft(true);
+  };
+  const confirmDocumentReplacement = () => {
+    const needsConfirmation = hasPendingEditorChanges || (document.savedName ? dirty : hasIntentionalDraft);
+    return !needsConfirmation || window.confirm('Discard unsaved suite changes?');
   };
 
   const replaceCase = (nextCase: SuiteCase) => applyDraft({ ...draft, cases: draft.cases.map((entry) => entry.id === activeCase?.id ? nextCase : entry) });
@@ -211,66 +189,61 @@ export function SuitesPage({ suites, servers, providers, onRefresh, onRunStarted
     finally { setBusy(false); }
   };
 
-  const updateGenerationForm = (next: Partial<SuiteGenerationRequest & { authorInstructions: string }>) => {
-    generationEpoch.current += 1;
-    setGenerationForm((current) => ({ ...current, ...next }));
-    setGenerationResult(undefined);
-  };
-
-  const generateDraft = async () => {
-    if (busy) return;
-    const epoch = ++generationEpoch.current;
-    const snapshot = generationForm;
-    setGenerationResult(undefined);
-    setBusy(true); setMessage(''); setError('');
-    try {
-      const { authorInstructions, ...required } = snapshot;
-      const result = await api.generateSuiteDraft({
-        ...required,
-        ...(authorInstructions.trim() ? { authorInstructions: authorInstructions.trim() } : {}),
-      });
-      if (epoch !== generationEpoch.current) return;
-      setGenerationResult(result);
-      setMessage(`Generated ${result.coverage.length} case(s); ${result.exclusions.length} tool(s) excluded. Review before opening the draft.`);
-    } catch (reason) {
-      if (epoch === generationEpoch.current) setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const applyGeneratedDraft = () => {
-    if (!generationResult) return;
-    const next = parseSuiteDraft(serializeSuiteDraft(generationResult.suite));
-    loadEpoch.current += 1;
-    setSelected('');
-    setLoadedSuiteName('');
-    applyDraft(next);
-    setActiveCaseId(next.cases[0]?.id ?? '');
-    setView('builder');
-    setMessage(`Opened generated draft ${next.name}. Nothing is saved or executed until you choose those actions.`);
+  const selectSuite = (name: string) => {
+    if (busy || (name === selected && !loading) || !confirmDocumentReplacement()) return;
+    setCreationOpen(false);
+    const requestId = `suite-load-${++loadSequence.current}`;
+    setDocument((current) => beginSuiteDocumentLoad(current, name, requestId));
+    setMessage('');
     setError('');
+    setHasPendingEditorChanges(false);
   };
 
-  const startNew = () => {
-    const next = createSuiteDraft('new-suite', defaultServer);
-    loadEpoch.current += 1; setSelected(''); setLoadedSuiteName(''); setDraft(next); setSource(serializeSuiteDraft(next)); setActiveCaseId(next.cases[0].id); setView('builder'); setMessage('New suite draft. Nothing is written until Save.'); setError('');
+  const acceptCreatedDocument = (next: SuiteDocumentState, mode: 'manual' | 'generated') => {
+    if (!confirmDocumentReplacement()) return false;
+    setDocument(next);
+    setActiveCaseId(next.draft.cases[0]?.id ?? '');
+    setView('builder');
+    setMessage(mode === 'generated'
+      ? `Opened generated draft ${next.draft.name}. Nothing is saved or executed until you choose those actions.`
+      : `Opened manual draft ${next.draft.name}. Nothing is saved or executed until you choose those actions.`);
+    setError('');
+    setHasPendingEditorChanges(false);
+    setHasIntentionalDraft(true);
+    return true;
+  };
+
+  const openCreation = () => {
+    if (busy) return;
+    setCreationOpen(true);
   };
 
   const duplicateSuite = () => {
     const next = duplicateSuiteDraft(draft, suites);
-    loadEpoch.current += 1; setSelected(''); setLoadedSuiteName(''); setDraft(next); setSource(serializeSuiteDraft(next)); setActiveCaseId(next.cases[0]?.id ?? ''); setView('builder'); setMessage(`Duplicate draft ${next.name}. Save to create it.`); setError('');
+    setCreationOpen(false);
+    setDocument({ draft: next, source: serializeSuiteDraft(next) });
+    setActiveCaseId(next.cases[0]?.id ?? '');
+    setView('builder');
+    setMessage(`Duplicate draft ${next.name}. Save to create it.`);
+    setError('');
+    setHasPendingEditorChanges(false);
+    setHasIntentionalDraft(true);
   };
 
   const deleteSuite = () => {
-    if (!selected || loadedSuiteName !== selected || busy || !window.confirm(`Delete suite ${selected}? Historical runs remain available.`)) return;
+    if (!selected || loadedSuiteName !== selected || busy || dirty || hasPendingEditorChanges || !window.confirm(`Delete suite ${selected}? Historical runs remain available.`)) return;
     void act(async () => {
       const deleted = selected;
       await api.deleteSuite(deleted);
       await onRefresh();
       const remaining = suites.filter((name) => name !== deleted);
-      if (remaining[0]) setSelected(remaining[0]);
-      else startNew();
+      if (remaining[0]) {
+        const requestId = `suite-load-${++loadSequence.current}`;
+        setDocument((current) => beginSuiteDocumentLoad(current, remaining[0]!, requestId));
+      } else {
+        const next = createManualSuiteDocument({ name: 'new-suite', serverId: defaultServer });
+        acceptCreatedDocument(next, 'manual');
+      }
       setMessage(`Suite ${deleted} deleted. Historical runs were preserved.`);
     });
   };
@@ -315,32 +288,36 @@ export function SuitesPage({ suites, servers, providers, onRefresh, onRunStarted
 
   const convertToV2 = () => {
     if (draft.version === 2) return;
-    const cases = draft.cases.map((entry) => {
-      if (entry.kind !== 'agent' || !('prompt' in entry)) return entry;
-      const { prompt, ...agent } = entry;
-      return { ...agent, turns: [{ id: 'turn-1', user: prompt, assertions: [] }], iterations: { count: 1, minPasses: 1 } };
-    });
-    applyDraft({ version: 2, name: draft.name, ...(draft.description !== undefined ? { description: draft.description } : {}), cases });
-    setMessage('Converted to Version 2. Version 1 prompt moved into first user turn; conversion cannot downgrade this draft.');
+    applyDraft(upgradeSuiteDraftToV2(draft));
+    setMessage('Upgraded to current format. Version 1 prompt moved into first user turn. Save explicitly to keep this change.');
   };
 
   const switchView = (next: 'builder' | 'yaml') => {
     if (next === 'builder' && view === 'yaml') {
-      try {
-        const parsed = parseSuiteDraft(source);
-        setDraft(parsed); setActiveCaseId(parsed.cases[0]?.id ?? ''); setError('');
-      } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); return; }
+      const parsed = applySuiteDocumentSource(document);
+      setDocument(parsed);
+      if (parsed.sourceError) {
+        setError(parsed.sourceError);
+        return;
+      }
+      setActiveCaseId(parsed.draft.cases[0]?.id ?? '');
+      setError('');
     }
     setView(next);
   };
 
   const save = () => act(async () => {
+    if (document.loading) throw new Error('Wait for selected suite to finish loading');
     const saveSource = view === 'yaml' ? source : serializeSuiteDraft(draft);
-    const parsed = parseSuiteDraft(saveSource);
-    if (selected && loadedSuiteName !== selected) throw new Error('Wait for selected suite to finish loading');
-    const saved = selected ? await api.updateSuite(selected, saveSource) : await api.saveSuite(saveSource);
-    setDraft(parsed); setSource(saveSource); setSelected(saved.name); await onRefresh();
-    setMessage(`${selected ? 'Updated' : 'Created'} ${saved.name} with ${saved.cases} case(s). YAML remains ready for git and CI.`);
+    const saveSnapshot = suiteDocumentSaveSnapshot(document);
+    parseSuiteDraft(saveSource);
+    const existingName = document.savedName;
+    if (existingName && document.selectedName !== existingName) throw new Error('Selected suite did not finish loading');
+    const saved = existingName ? await api.updateSuite(existingName, saveSource) : await api.saveSuite(saveSource);
+    setDocument((current) => markSuiteDocumentSaved(current, saved.name, saveSource, saveSnapshot));
+    setHasIntentionalDraft(false);
+    await onRefresh();
+    setMessage(`${existingName ? 'Updated' : 'Created'} ${saved.name} with ${saved.cases} case(s). Clean saved baseline ready to run.`);
   });
 
   const renderCaseEditor = () => {
@@ -353,61 +330,56 @@ export function SuitesPage({ suites, servers, providers, onRefresh, onRunStarted
     return <div className="case-composer">
       <header className="case-composer-head"><div><span className="eyebrow">{activeCase.kind} case</span><h3>{activeCase.id || 'Untitled case'}</h3></div><div className="config-actions compact"><Button onClick={() => moveCase(-1)} aria-label="Move case up">↑</Button><Button onClick={() => moveCase(1)} aria-label="Move case down">↓</Button><Button onClick={duplicateCase}>Duplicate</Button><Button variant="danger" disabled={draft.cases.length === 1} onClick={removeCase}>Remove</Button></div></header>
       <div className="case-section"><span className="eyebrow">Scenario</span><div className="form-grid">
-        <Field label="Case ID" hint="Stable unique ID used in reports"><Input value={activeCase.id} onChange={(event) => { const previous = activeCase.id; const nextId = event.target.value; if (draft.cases.some((entry) => entry.id !== previous && entry.id === nextId)) { setError(`Case ID ${nextId} already exists.`); return; } const next = { ...activeCase, id: nextId } as SuiteCase; applyDraft({ ...draft, cases: draft.cases.map((entry) => entry.id === previous ? next : entry) }); setActiveCaseId(nextId); setError(''); }} /></Field>
+        <Field label="Case ID" hint="Stable unique ID used in reports"><Input value={activeCase.id} onChange={(event) => { const previous = activeCase.id; const nextId = event.target.value; if (draft.cases.some((entry) => entry.id !== previous && entry.id === nextId)) { handleEditorError(`Case ID ${nextId} already exists.`); return; } const next = { ...activeCase, id: nextId } as SuiteCase; applyDraft({ ...draft, cases: draft.cases.map((entry) => entry.id === previous ? next : entry) }); setActiveCaseId(nextId); handleEditorError(''); }} /></Field>
         <Field label="MCP server"><Select value={activeCase.server} onChange={(event) => replaceCase({ ...activeCase, server: event.target.value } as SuiteCase)}><option value="">Choose server</option>{servers.map((server) => <option key={server.id} value={server.id}>{server.name} · {server.id}</option>)}</Select></Field>
       </div></div>
       {activeCase.kind === 'direct' ? <div className="case-section"><span className="eyebrow">Direct invocation</span><div className="form-grid">
         <Field label="Tool" hint={tools.length ? `${tools.length} discovered tools` : 'Type a tool name or connect server to discover'}><ToolInput id={`case-tool-${activeCase.id}`} value={activeCase.call.tool} tools={tools} onChange={(tool) => replaceCase({ ...activeCase, call: { ...activeCase.call, tool } })} /></Field>
         <label className="check suite-danger"><input type="checkbox" checked={activeCase.call.dangerous ?? false} onChange={(event) => replaceCase({ ...activeCase, call: { ...activeCase.call, dangerous: event.target.checked || undefined } })} />Confirm destructive tool when running</label>
-        <Field label="Arguments JSON" hint="Portable JSON object passed to tool"><Textarea key={`${draft.name}-${activeCase.id}-${activeCase.call.tool}`} rows={8} defaultValue={JSON.stringify(activeCase.call.arguments, null, 2)} onBlur={(event) => { try { const value = JSON.parse(event.target.value) as DirectSuiteCase['call']['arguments']; if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(); replaceCase({ ...activeCase, call: { ...activeCase.call, arguments: value } }); setError(''); } catch { setError('Tool arguments must be a valid JSON object.'); } }} /></Field>
+        <Field label="Arguments JSON" hint="Portable JSON object passed to tool"><Textarea key={`${draft.name}-${activeCase.id}-${activeCase.call.tool}`} rows={8} defaultValue={JSON.stringify(activeCase.call.arguments, null, 2)} onChange={() => handleEditorError('Save changes before running')} onBlur={(event) => { try { const value = JSON.parse(event.target.value) as DirectSuiteCase['call']['arguments']; if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(); replaceCase({ ...activeCase, call: { ...activeCase.call, arguments: value } }); handleEditorError(''); } catch { handleEditorError('Tool arguments must be a valid JSON object.'); } }} /></Field>
       </div></div> : <div className="case-section"><span className="eyebrow">Agent scenario</span><div className="form-grid">
         <Field label="Provider"><Select value={activeCase.provider} onChange={(event) => { const provider = providers.find((entry) => entry.id === event.target.value); replaceCase({ ...activeCase, provider: event.target.value, model: Object.keys(provider?.models ?? {})[0] ?? '' }); }}><option value="">Choose provider</option>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} · {provider.id}</option>)}</Select></Field>
         <Field label="Model alias"><Select value={activeCase.model} onChange={(event) => replaceCase({ ...activeCase, model: event.target.value })}><option value="">Choose model</option>{Object.keys(selectedProvider?.models ?? {}).map((model) => <option key={model} value={model}>{model}</option>)}</Select></Field>
         {isV2AgentCase(activeCase) ? <><Field label="Iteration count"><Input type="number" min="1" value={activeCase.iterations.count} onChange={(event) => replaceCase({ ...activeCase, iterations: { ...activeCase.iterations, count: Number(event.target.value), minPasses: Math.min(activeCase.iterations.minPasses, Number(event.target.value)) } })} /></Field><Field label="Minimum passes"><Input type="number" min="1" max={activeCase.iterations.count} value={activeCase.iterations.minPasses} onChange={(event) => replaceCase({ ...activeCase, iterations: { ...activeCase.iterations, minPasses: Math.min(Number(event.target.value), activeCase.iterations.count) } })} /></Field></> : <Field label="User prompt" hint="One scenario turn; save playground interactions for richer seeds"><Textarea rows={7} value={activeCase.prompt} onChange={(event) => replaceCase({ ...activeCase, prompt: event.target.value })} /></Field>}
-      </div>{isV2AgentCase(activeCase) ? <div className="case-section assertions-editor"><header><div><span className="eyebrow">Scripted conversation</span><h3>{activeCase.turns.length} user turns</h3></div><Button onClick={() => updateV2Turns([...activeCase.turns, { id: nextTurnId(activeCase.turns), user: '', assertions: [] }])}>+ User turn</Button></header>{activeCase.turns.map((turn, turnIndex) => <div className="assertion-card" key={turn.id}><header><span><b>{turnIndex + 1}</b> User turn</span><div className="config-actions compact"><Button onClick={() => { if (turnIndex === 0) return; const turns = [...activeCase.turns]; [turns[turnIndex - 1], turns[turnIndex]] = [turns[turnIndex]!, turns[turnIndex - 1]!]; updateV2Turns(turns); }}>↑</Button><Button onClick={() => { if (turnIndex === activeCase.turns.length - 1) return; const turns = [...activeCase.turns]; [turns[turnIndex], turns[turnIndex + 1]] = [turns[turnIndex + 1]!, turns[turnIndex]!]; updateV2Turns(turns); }}>↓</Button><Button variant="danger" disabled={activeCase.turns.length === 1} onClick={() => updateV2Turns(activeCase.turns.filter((_turn, index) => index !== turnIndex))}>Remove</Button></div></header><div className="assertion-fields"><Field label="Turn ID"><Input value={turn.id} onChange={(event) => { const id = event.target.value; if (activeCase.turns.some((entry, index) => index !== turnIndex && entry.id === id)) { setError(`Turn ID ${id} already exists.`); return; } updateV2Turns(activeCase.turns.map((entry, index) => index === turnIndex ? { ...entry, id } : entry)); setError(''); }} /></Field><Field label="User message"><Textarea rows={4} value={turn.user} onChange={(event) => updateV2Turns(activeCase.turns.map((entry, index) => index === turnIndex ? { ...entry, user: event.target.value } : entry))} /></Field></div><div className="case-section assertions-editor"><header><div><span className="eyebrow">Turn assertions</span><h3>{turn.assertions.length} checks</h3></div><Select aria-label={`Add assertion to ${turn.id}`} value="" onChange={(event) => { if (!event.target.value) return; updateV2Turns(activeCase.turns.map((entry, index) => index === turnIndex ? { ...entry, assertions: [...entry.assertions, createSuiteAssertion(event.target.value as SuiteAssertion['type'])] } : entry)); event.target.value = ''; }}><option value="">+ Add check</option>{assertionTypes.map((entry) => <option key={entry.value} value={entry.value}>{entry.label}</option>)}</Select></header>{turn.assertions.length === 0 ? <Empty>No turn checks yet.</Empty> : turn.assertions.map((assertion, assertionIndex) => <AssertionEditor key={`${turn.id}-${assertionIndex}-${assertion.type}`} assertion={assertion} index={assertionIndex} scope={turn.id} tools={tools} types={assertionTypes} onError={setError} onChange={(value) => updateV2Turns(activeCase.turns.map((entry, index) => index === turnIndex ? { ...entry, assertions: entry.assertions.map((current, currentIndex) => currentIndex === assertionIndex ? value : current) } : entry))} onRemove={() => updateV2Turns(activeCase.turns.map((entry, index) => index === turnIndex ? { ...entry, assertions: entry.assertions.filter((_current, currentIndex) => currentIndex !== assertionIndex) } : entry))} />)}</div></div>)}</div> : null}<div className="form-grid compact suite-limits">
+      </div>{isV2AgentCase(activeCase) ? <div className="case-section assertions-editor"><header><div><span className="eyebrow">Scripted conversation</span><h3>{activeCase.turns.length} user turns</h3></div><Button onClick={() => updateV2Turns([...activeCase.turns, { id: nextTurnId(activeCase.turns), user: '', assertions: [] }])}>+ User turn</Button></header>{activeCase.turns.map((turn, turnIndex) => <div className="assertion-card" key={`${activeCase.id}-${turn.id}`}><header><span><b>{turnIndex + 1}</b> User turn</span><div className="config-actions compact"><Button onClick={() => { if (turnIndex === 0) return; const turns = [...activeCase.turns]; [turns[turnIndex - 1], turns[turnIndex]] = [turns[turnIndex]!, turns[turnIndex - 1]!]; updateV2Turns(turns); }}>↑</Button><Button onClick={() => { if (turnIndex === activeCase.turns.length - 1) return; const turns = [...activeCase.turns]; [turns[turnIndex], turns[turnIndex + 1]] = [turns[turnIndex + 1]!, turns[turnIndex]!]; updateV2Turns(turns); }}>↓</Button><Button variant="danger" disabled={activeCase.turns.length === 1} onClick={() => updateV2Turns(activeCase.turns.filter((_turn, index) => index !== turnIndex))}>Remove</Button></div></header><div className="assertion-fields"><Field label="Turn ID"><Input value={turn.id} onChange={(event) => { const id = event.target.value; if (activeCase.turns.some((entry, index) => index !== turnIndex && entry.id === id)) { handleEditorError(`Turn ID ${id} already exists.`); return; } updateV2Turns(activeCase.turns.map((entry, index) => index === turnIndex ? { ...entry, id } : entry)); handleEditorError(''); }} /></Field><Field label="User message"><Textarea rows={4} value={turn.user} onChange={(event) => updateV2Turns(activeCase.turns.map((entry, index) => index === turnIndex ? { ...entry, user: event.target.value } : entry))} /></Field></div><div className="case-section assertions-editor"><header><div><span className="eyebrow">Turn assertions</span><h3>{turn.assertions.length} checks</h3></div><Select aria-label={`Add assertion to ${turn.id}`} value="" onChange={(event) => { if (!event.target.value) return; updateV2Turns(activeCase.turns.map((entry, index) => index === turnIndex ? { ...entry, assertions: [...entry.assertions, createSuiteAssertion(event.target.value as SuiteAssertion['type'])] } : entry)); event.target.value = ''; }}><option value="">+ Add check</option>{assertionTypes.map((entry) => <option key={entry.value} value={entry.value}>{entry.label}</option>)}</Select></header>{turn.assertions.length === 0 ? <Empty>No turn checks yet.</Empty> : turn.assertions.map((assertion, assertionIndex) => <AssertionEditor key={`${activeCase.id}-${turn.id}-${assertionIndex}-${assertion.type}`} assertion={assertion} index={assertionIndex} scope={turn.id} tools={tools} types={assertionTypes} onError={handleEditorError} onChange={(value) => updateV2Turns(activeCase.turns.map((entry, index) => index === turnIndex ? { ...entry, assertions: entry.assertions.map((current, currentIndex) => currentIndex === assertionIndex ? value : current) } : entry))} onRemove={() => updateV2Turns(activeCase.turns.map((entry, index) => index === turnIndex ? { ...entry, assertions: entry.assertions.filter((_current, currentIndex) => currentIndex !== assertionIndex) } : entry))} />)}</div></div>)}</div> : null}<div className="form-grid compact suite-limits">
         <Field label={isV2AgentCase(activeCase) ? 'Max model turns' : 'Max turns'}><Input type="number" min="1" max="50" value={activeCase.limits.maxTurns} onChange={(event) => replaceCase({ ...activeCase, limits: { ...activeCase.limits, maxTurns: Number(event.target.value) } })} /></Field>
         <Field label="Max tool calls"><Input type="number" min="1" max="100" value={activeCase.limits.maxToolCalls} onChange={(event) => replaceCase({ ...activeCase, limits: { ...activeCase.limits, maxToolCalls: Number(event.target.value) } })} /></Field>
         <Field label="Timeout ms"><Input type="number" min="1" max="300000" value={activeCase.limits.timeoutMs} onChange={(event) => replaceCase({ ...activeCase, limits: { ...activeCase.limits, timeoutMs: Number(event.target.value) } })} /></Field>
         <Field label="Max cost USD" hint="Optional"><Input type="number" min="0" step="0.001" value={activeCase.limits.maxCostUsd ?? ''} onChange={(event) => replaceCase({ ...activeCase, limits: { ...activeCase.limits, ...(event.target.value ? { maxCostUsd: Number(event.target.value) } : { maxCostUsd: undefined }) } })} /></Field>
       </div></div>}
       <div className="case-section assertions-editor"><header><div><span className="eyebrow">Expected behavior</span><h3>{activeCase.assertions.length} checks</h3></div><Select aria-label="Add assertion" value="" onChange={(event) => { if (!event.target.value) return; updateAssertions([...activeCase.assertions, createSuiteAssertion(event.target.value as SuiteAssertion['type'])]); event.target.value = ''; }}><option value="">+ Add check</option>{availableAssertionTypes.map((entry) => <option key={entry.value} value={entry.value}>{entry.label}</option>)}</Select></header>
-        {activeCase.assertions.length === 0 ? <Empty>No checks yet. Add expected tools, output checks, or execution budgets.</Empty> : activeCase.assertions.map((assertion, index) => <AssertionEditor key={`${draft.name}-${activeCase.id}-${index}-${assertion.type}`} assertion={assertion} index={index} tools={tools} types={availableAssertionTypes} onError={setError} onChange={(value) => updateAssertions(activeCase.assertions.map((entry, assertionIndex) => assertionIndex === index ? value : entry))} onRemove={() => updateAssertions(activeCase.assertions.filter((_entry, assertionIndex) => assertionIndex !== index))} />)}
+        {activeCase.assertions.length === 0 ? <Empty>No checks yet. Add expected tools, output checks, or execution budgets.</Empty> : activeCase.assertions.map((assertion, index) => <AssertionEditor key={`${draft.name}-${activeCase.id}-${index}-${assertion.type}`} assertion={assertion} index={index} tools={tools} types={availableAssertionTypes} onError={handleEditorError} onChange={(value) => updateAssertions(activeCase.assertions.map((entry, assertionIndex) => assertionIndex === index ? value : entry))} onRemove={() => updateAssertions(activeCase.assertions.filter((_entry, assertionIndex) => assertionIndex !== index))} />)}
       </div>
     </div>;
   };
 
-  return <div className="suite-studio">
+  const runReason = !document.savedName
+    ? 'Save suite before running'
+    : dirty || document.sourceError || hasPendingEditorChanges
+      ? 'Save changes before running'
+      : loading
+        ? 'Wait for suite to finish loading'
+        : '';
+
+  return <><SuiteCreateLaunchpad open={creationOpen} servers={servers} providers={providers} suiteNames={suites} onClose={() => setCreationOpen(false)} onCreate={acceptCreatedDocument} /><div className="suite-studio">
     <Section title="Suite library" className="suite-library" action={<span className="count">{suites.length}</span>}>
-      <div className="suite-create-actions"><Button variant="primary" className="new-suite" onClick={startNew}>+ New suite</Button><Button disabled={busy} data-testid="open-suite-generator" onClick={() => setGeneratorOpen((open) => !open)}>{generatorOpen ? 'Close generator' : 'Generate draft'}</Button></div>
-      <div className="row-list">{suites.length === 0 ? <Empty>No saved suites yet.</Empty> : suites.map((suite) => <button key={suite} disabled={busy} className={`row-button ${selected === suite ? 'selected' : ''}`} onClick={() => { setSelected(suite); setMessage(''); setError(''); }}><span><b>{suite}</b><small>portable YAML · editable</small></span></button>)}</div>
-      <div className="suite-library-actions"><Button variant="primary" disabled={!selected || loadedSuiteName !== selected || busy} data-testid="run-suite" onClick={() => void act(async () => { const run = await api.runSuite(selected); onRunStarted(run.id); setMessage(`Run ${run.id.slice(0, 8)} started.`); })}>Run selected</Button><div className="config-actions compact"><Button disabled={!selected || loadedSuiteName !== selected || busy} onClick={duplicateSuite}>Duplicate</Button><Button variant="danger" disabled={!selected || loadedSuiteName !== selected || busy} onClick={deleteSuite}>Delete</Button></div><small>{selected ? `Saved suite: ${selected}` : 'Unsaved draft'}</small></div>
+      <div className="suite-create-actions"><Button variant="primary" className="new-suite" disabled={busy} data-testid="open-suite-generator" onClick={openCreation}>Create suite</Button></div>
+      <div className="row-list">{suites.length === 0 ? <Empty>No saved suites yet.</Empty> : suites.map((suite) => <button key={suite} disabled={busy} className={`row-button ${selected === suite ? 'selected' : ''}`} onClick={() => selectSuite(suite)}><span><b>{suite}</b><small>portable YAML · editable</small></span></button>)}</div>
+      <div className="suite-library-actions"><Button variant="primary" disabled={!canRun || busy} data-testid="run-suite" onClick={() => void act(async () => { if (!document.savedName || !canRunSuiteDocument(document) || hasPendingEditorChanges) return; const run = await api.runSuite(document.savedName); onRunStarted(run.id); setMessage(`Run ${run.id.slice(0, 8)} started from clean saved suite ${document.savedName}.`); })}>Run suite</Button>{runReason ? <small className="run-readiness" role="status">{runReason}</small> : <small className="run-readiness">Ready: {document.savedName}</small>}<div className="config-actions compact"><Button disabled={!selected || loadedSuiteName !== selected || busy || loading || hasPendingEditorChanges} onClick={duplicateSuite}>Duplicate</Button><Button variant="danger" disabled={!selected || loadedSuiteName !== selected || busy || loading || dirty || hasPendingEditorChanges} onClick={deleteSuite}>Delete</Button></div><small>{selected ? `${dirty ? 'Edited draft from' : 'Saved suite'}: ${selected}` : 'Unsaved draft'}</small></div>
     </Section>
 
-    <Section title="Suite composer" className="suite-workspace" action={<div className="suite-view-tabs"><button className={view === 'builder' ? 'selected' : ''} onClick={() => switchView('builder')}>Builder</button><button className={view === 'yaml' ? 'selected' : ''} onClick={() => switchView('yaml')}>YAML</button></div>}>
+    <Section title="Suite composer" className="suite-workspace" action={<div className="suite-view-tabs"><button disabled={busy} className={view === 'builder' ? 'selected' : ''} onClick={() => switchView('builder')}>Builder</button><button disabled={busy} className={view === 'yaml' ? 'selected' : ''} onClick={() => switchView('yaml')}>YAML</button></div>}>
+      <fieldset className="suite-editor-lock" disabled={busy} aria-busy={busy}>
       {loading ? <div className="loading"><i />Loading suite…</div> : <>
-        {generatorOpen ? <div className="suite-generator" data-testid="suite-generator">
-          <header><div><span className="eyebrow">LLM authoring bench</span><h3>Generate safe agent coverage</h3><p>Tool metadata becomes an unsaved Version 2 draft. Generator never invokes MCP tools.</p></div><span className="generation-sequence">metadata → plan → review</span></header>
-          <div className="generation-grid">
-            <section className="generation-step"><header><b>01</b><span>Source</span></header><Field label="Connected MCP server" hint="Live tool descriptions and schemas"><Select disabled={busy} value={generationForm.serverId} onChange={(event) => updateGenerationForm({ serverId: event.target.value })} data-testid="generation-server"><option value="">Choose connected server</option>{servers.map((server) => <option key={server.id} value={server.id} disabled={!server.connected}>{server.name} · {server.connected ? 'connected' : 'connect first'}</option>)}</Select></Field><Field label="Suite name" hint="Unsaved YAML filename"><Input disabled={busy} value={generationForm.name} onChange={(event) => updateGenerationForm({ name: event.target.value })} data-testid="generation-name" /></Field></section>
-            <section className="generation-step"><header><b>02</b><span>Authoring model</span></header><Field label="Generator provider"><Select disabled={busy} value={generationForm.generatorProviderId} onChange={(event) => { const provider = providers.find((entry) => entry.id === event.target.value); updateGenerationForm({ generatorProviderId: event.target.value, generatorModel: Object.keys(provider?.models ?? {})[0] ?? '' }); }} data-testid="generation-provider"><option value="">Choose provider</option>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} · {provider.id}</option>)}</Select></Field><Field label="Generator model"><Select disabled={busy} value={generationForm.generatorModel} onChange={(event) => updateGenerationForm({ generatorModel: event.target.value })}><option value="">Choose model</option>{Object.keys(generationProvider?.models ?? {}).map((model) => <option key={model} value={model}>{model}</option>)}</Select></Field></section>
-            <section className="generation-step"><header><b>03</b><span>Runtime target</span></header><Field label="Target provider"><Select disabled={busy} value={generationForm.targetProviderId} onChange={(event) => { const provider = providers.find((entry) => entry.id === event.target.value); updateGenerationForm({ targetProviderId: event.target.value, targetModel: Object.keys(provider?.models ?? {})[0] ?? '' }); }}><option value="">Choose provider</option>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} · {provider.id}</option>)}</Select></Field><Field label="Target model"><Select disabled={busy} value={generationForm.targetModel} onChange={(event) => updateGenerationForm({ targetModel: event.target.value })}><option value="">Choose model</option>{Object.keys(generationTargetProvider?.models ?? {}).map((model) => <option key={model} value={model}>{model}</option>)}</Select></Field></section>
-            <Field label="Safe fixtures and domain guidance" hint="Optional: known IDs, forbidden actions, realistic values, and domain constraints"><Textarea disabled={busy} rows={4} maxLength={20000} value={generationForm.authorInstructions} onChange={(event) => updateGenerationForm({ authorInstructions: event.target.value })} placeholder="Use tenant demo-acme. Never send messages or modify production records." data-testid="generation-instructions" /></Field>
-          </div>
-          <div className="generation-guardrail"><p><b>Draft boundary.</b> Explicitly destructive tools are excluded. Uncertain tools need a reason. Running any accepted case can still cause real side effects, so inspect every prompt and assertion.</p><Button variant="primary" disabled={!canGenerate || busy} data-testid="generate-suite-draft" onClick={() => void generateDraft()}>{busy ? 'Generating…' : 'Generate review draft'}</Button></div>
-          {generationResult ? <div className="generation-result">
-            <header><div><span className="eyebrow">Coverage ledger</span><h3>{generationResult.coverage.length} generated · {generationResult.exclusions.length} excluded</h3></div>{generationResult.usage ? <span className="metrics">{generationResult.usage.total} tokens</span> : null}</header>
-            <div className="generation-ledger"><section><h4>Generated cases</h4>{generationResult.coverage.map((entry) => <div className="generation-ledger-row" key={entry.tool}><span className="status pass">generated</span><code>{entry.tool}</code><small>{entry.caseId}</small></div>)}</section><section><h4>Excluded tools</h4>{generationResult.exclusions.length === 0 ? <Empty>No exclusions.</Empty> : generationResult.exclusions.map((entry) => <div className="generation-ledger-row exclusion" key={entry.tool}><span className={`status ${entry.category === 'destructive' ? 'fail' : ''}`}>{entry.category}</span><code>{entry.tool}</code><small>{entry.reason}</small></div>)}</section></div>
-            <footer><p>Opening replaces current editor only. Saved suite files and run history stay unchanged.</p><Button variant="primary" data-testid="apply-generated-suite" onClick={applyGeneratedDraft}>Open draft in composer</Button></footer>
-          </div> : null}
-        </div> : null}
-        <div className="suite-meta"><Field label="Suite name" hint="Filename-safe ID used by CLI and reports"><Input value={draft.name} onChange={(event) => applyDraft({ ...draft, name: event.target.value })} data-testid="suite-name" /></Field><Field label="Description" hint="Optional intent for reviewers"><Input value={draft.description ?? ''} onChange={(event) => applyDraft({ ...draft, description: event.target.value })} /></Field><Field label="Suite version" hint={draft.version === 2 ? 'Version 2 cannot be downgraded in builder.' : 'Version 2 supports scripted multi-turn agents.'}><Select value={draft.version} onChange={(event) => { if (event.target.value === '2') convertToV2(); }}><option value="1" disabled={draft.version === 2}>Version 1</option><option value="2">Version 2</option></Select></Field></div>
-        {view === 'yaml' ? <div className="yaml-workspace"><div className="yaml-note"><span>Canonical artifact</span><b>Version {draft.version} YAML</b><small>Edit directly, commit it, or run with <code>mcp-riksa run</code>.</small></div><Field label="Suite source"><Textarea className="code-editor" rows={28} value={source} onChange={(event) => setSource(event.target.value)} spellCheck={false} data-testid="suite-source" /></Field></div> : <div className="suite-builder">
+        {view === 'yaml' ? <div className="yaml-workspace"><div className="yaml-note"><span>Canonical artifact</span><b>Version {draft.version} YAML</b><small>YAML is canonical while this view is open. Switch to Builder to parse it; invalid YAML remains untouched here.</small></div><Field label="Suite source"><Textarea className="code-editor" rows={28} value={source} onChange={(event) => { setHasIntentionalDraft(true); setDocument((current) => updateSuiteDocumentSource(current, event.target.value)); }} spellCheck={false} data-testid="suite-source" /></Field></div> : <><div className="suite-meta"><Field label="Suite name" hint="Filename-safe ID used by CLI and reports"><Input value={draft.name} onChange={(event) => applyDraft({ ...draft, name: event.target.value })} data-testid="suite-name" /></Field><Field label="Description" hint="Optional intent for reviewers"><Input value={draft.description ?? ''} onChange={(event) => applyDraft({ ...draft, description: event.target.value })} /></Field><div className={`suite-format ${draft.version === 1 ? 'legacy' : ''}`}><span className="eyebrow">Format</span>{draft.version === 2 ? <b>Current format · multi-turn ready</b> : <><b>Legacy suite · single-prompt format</b><Button onClick={convertToV2}>Upgrade suite</Button></>}</div></div><div className="suite-builder">
           <aside className="case-rail"><header><div><span className="eyebrow">Cases</span><b>{draft.cases.length} scenarios</b></div><div><Button onClick={() => addCase('direct')}>+ Direct</Button><Button onClick={() => addCase('agent')}>+ Agent</Button></div></header><div className="case-list">{draft.cases.map((entry, index) => <button key={`${entry.id}-${index}`} className={entry.id === activeCase?.id ? 'selected' : ''} onClick={() => setActiveCaseId(entry.id)}><span>{String(index + 1).padStart(2, '0')}</span><div><b>{entry.id || 'Untitled case'}</b><small>{entry.kind} · {entry.server || 'no server'} · {entry.assertions.length} checks</small></div></button>)}</div></aside>
           {renderCaseEditor()}
-        </div>}
-        <footer className="suite-savebar"><div><span className="eyebrow">Portable by default</span><small>Visual edits serialize to strict YAML. Inline secrets still rejected.</small></div><div className="button-row"><Button onClick={() => switchView(view === 'builder' ? 'yaml' : 'builder')}>{view === 'builder' ? 'Preview YAML' : 'Back to builder'}</Button><Button variant="primary" disabled={busy || loading} data-testid="save-suite" onClick={() => void save()}>{busy ? 'Saving…' : selected ? 'Save changes' : 'Create suite'}</Button></div></footer>
-        {message ? <Notice>{message}</Notice> : null}{error ? <Notice error>{error}</Notice> : null}
+        </div></>}
+        <div className="suite-boundary-strip composer-boundary" aria-label="Suite lifecycle"><b className={dirty ? 'active' : ''}>Draft</b><span>→</span><b>Review</b><span>→</span><b className={!dirty && document.savedName ? 'active' : ''}>Save</b><span>→</span><b className={canRun ? 'active' : ''}>Run</b></div>
+        <footer className="suite-savebar"><div><span className="eyebrow">Portable by default</span><small>{dirty ? 'Unsaved changes. ' : 'Clean saved baseline. '}Visual edits serialize to strict YAML; inline secrets remain rejected.</small></div><div className="button-row"><Button onClick={() => switchView(view === 'builder' ? 'yaml' : 'builder')}>{view === 'builder' ? 'Preview YAML' : 'Back to builder'}</Button><Button variant="primary" disabled={busy || loading || hasPendingEditorChanges || Boolean(document.sourceError)} data-testid="save-suite" onClick={() => void save()}>{busy ? 'Saving…' : document.savedName ? 'Save changes' : 'Save suite'}</Button></div></footer>
+        {message ? <Notice>{message}</Notice> : null}{error || document.sourceError ? <Notice error>{error || document.sourceError}</Notice> : null}
       </>}
+      </fieldset>
     </Section>
-  </div>;
+  </div></>;
 }

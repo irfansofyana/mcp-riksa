@@ -328,6 +328,7 @@ export async function createAgentSuiteDraft(
   rawInput: SuiteGenerationInput,
   inspection: SuiteGenerationInspection,
   provider: ProviderAdapter,
+  signal?: AbortSignal,
 ): Promise<SuiteGenerationDraft> {
   const input = suiteGenerationInputSchema.parse(rawInput);
   if (inspection.tools.length === 0) throw new SuiteGenerationError('Connected MCP server exposes no tools');
@@ -342,7 +343,8 @@ export async function createAgentSuiteDraft(
     MAX_GENERATION_TIMEOUT_MS,
     GENERATION_TIMEOUT_MS + Math.max(0, timeoutSteps - 1) * BATCH_TIMEOUT_EXTENSION_MS,
   );
-  const deadline = AbortSignal.timeout(timeoutMs);
+  const timeout = AbortSignal.timeout(timeoutMs);
+  const deadline = signal ? AbortSignal.any([signal, timeout]) : timeout;
   const plan: GenerationPlan = { cases: [], exclusions: [] };
   let usage = { input: 0, output: 0, total: 0 };
   for (const batch of batches) {

@@ -217,6 +217,32 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     const serverCapture = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     writeFileSync(serverScreenshot, Buffer.from(String(serverCapture.data), 'base64'));
 
+    await navigate('suites');
+    await click('open-suite-generator');
+    await wait(`document.querySelector('.suite-launchpad[open]') && document.querySelector('[data-testid="suite-route-ai"]')?.getAttribute('aria-pressed') === 'true'`, 'AI suite creation launchpad');
+    await waitText('Ready');
+    await setValue('generation-name', 'smoke-generated');
+    await click('generate-suite-draft');
+    await wait(`document.querySelector('[data-testid="suite-generation-review"]')`, 'generated suite review', 30_000);
+    await wait(`document.activeElement === document.querySelector('[data-testid="suite-generation-review"] h3')`, 'focus moved to generated review summary');
+    await waitText('3 generated · 1 excluded');
+    const suiteScreenshot = join(options.outputDirectory, 'suite-creation.png');
+    const suiteCapture = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    writeFileSync(suiteScreenshot, Buffer.from(String(suiteCapture.data), 'base64'));
+    await click('apply-generated-suite');
+    await wait(`!document.querySelector('.suite-launchpad[open]')`, 'closed launchpad after using generated cases');
+    await wait(`document.querySelector('[data-testid="suite-name"]')?.value === 'smoke-generated' && document.querySelector('[data-testid="run-suite"]')?.hasAttribute('disabled')`, 'unsaved generated suite blocked from running');
+    await waitText('Current format · multi-turn ready');
+    await click('save-suite');
+    await waitText('Created smoke-generated with 3 case(s).');
+    await click('open-suite-generator');
+    await wait(`document.querySelector('.suite-launchpad[open]') && !document.querySelector('[data-testid="suite-generation-review"]')`, 'fresh suite creation session without stale result');
+    await click('suite-route-manual');
+    await setValue('generation-name', 'smoke-manual');
+    await click('create-manual-suite');
+    await wait(`!document.querySelector('.suite-launchpad[open]') && document.querySelector('[data-testid="suite-name"]')?.value === 'smoke-manual'`, 'manual suite from unified creation flow');
+    steps.push('suite-creation-checked');
+
     await navigate('playground');
     await setValue('playground-server', 'sample');
     await setValue('playground-provider', 'local');
@@ -251,6 +277,19 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     await click('save-playground-suite');
     await waitText('Interaction saved as a versioned YAML suite.');
     steps.push('suite-saved');
+
+    await navigate('suites');
+    await clickText('button', 'smoke-generated');
+    await wait(`!document.querySelector('[data-testid="run-suite"]')?.hasAttribute('disabled')`, 'clean generated suite runner');
+    await clickText('.suite-view-tabs button', 'YAML');
+    const dirtySource = await evaluate<string>(`document.querySelector('[data-testid="suite-source"]')?.value + ${JSON.stringify('\n# unsaved browser edit\n')}`);
+    await setValue('suite-source', dirtySource);
+    await evaluate(`window.confirm=()=>false`);
+    await clickText('button', 'smoke-agent');
+    await wait(`document.querySelector('[data-testid="suite-source"]')?.value.includes('# unsaved browser edit') && document.querySelector('.row-button.selected b')?.textContent === 'smoke-generated'`, 'dirty YAML protected when discard is rejected');
+    await evaluate(`window.confirm=()=>true`);
+    await clickText('button', 'smoke-agent');
+    await wait(`document.querySelector('.row-button.selected b')?.textContent === 'smoke-agent' && !document.querySelector('[data-testid="run-suite"]')?.hasAttribute('disabled')`, 'saved suite selected after discard confirmation');
 
     const runAndInspect = async (step: string) => {
       await navigate('suites');
@@ -298,13 +337,17 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     await wait(`(() => { const rail=document.querySelector('.nav-rail'); const active=rail?.querySelector('a.active'); if(!rail||!active)return false; const outer=rail.getBoundingClientRect(); const inner=active.getBoundingClientRect(); return inner.left >= outer.left && inner.right <= outer.right; })()`, 'active mobile conformance navigation');
     await wait(`(() => { const brand=document.querySelector('.brand'); const mark=brand?.querySelector('.brand-mark'); const label=brand?.querySelector('span'); if(!brand||!mark||!label)return false; const outer=brand.getBoundingClientRect(); const icon=mark.getBoundingClientRect(); return getComputedStyle(label).display === 'none' && icon.width >= 24 && icon.height >= 24 && icon.left >= outer.left && icon.right <= outer.right; })()`, 'visible mobile MCP Riksa mark');
     await wait(`document.documentElement.scrollWidth <= window.innerWidth + 1`, 'mobile conformance layout without horizontal overflow');
+    await navigate('suites');
+    await click('open-suite-generator');
+    await wait(`(() => { const dialog=document.querySelector('.suite-launchpad[open]'); return dialog && dialog.scrollWidth <= dialog.clientWidth + 1 && document.documentElement.scrollWidth <= window.innerWidth + 1; })()`, 'mobile suite launchpad without horizontal overflow');
+    await clickText('.suite-launchpad button', 'Close');
     await navigate('runs');
     await wait(`document.documentElement.scrollWidth <= window.innerWidth + 1`, 'mobile layout without horizontal overflow');
     const mobileScreenshot = join(options.outputDirectory, 'mobile.png');
     const mobile = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     writeFileSync(mobileScreenshot, Buffer.from(String(mobile.data), 'base64'));
     steps.push('mobile-checked');
-    return { steps, consoleErrors, lightScreenshot, secretsScreenshot, providersScreenshot, serverScreenshot, playgroundScreenshot, playgroundTraceScreenshot, desktopScreenshot, mobileScreenshot };
+    return { steps, consoleErrors, lightScreenshot, secretsScreenshot, providersScreenshot, serverScreenshot, suiteScreenshot, playgroundScreenshot, playgroundTraceScreenshot, desktopScreenshot, mobileScreenshot };
   } finally {
     cdp.close();
     if (child.exitCode === null) {

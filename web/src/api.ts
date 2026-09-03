@@ -16,11 +16,12 @@ export async function get<T>(path: string): Promise<T> {
   return parse<T>(await fetch(path));
 }
 
-export async function post<T>(path: string, body: unknown): Promise<T> {
+export async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
   return parse<T>(await fetch(path, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-workbench-session': sessionToken },
     body: JSON.stringify(body),
+    ...(signal ? { signal } : {}),
   }));
 }
 
@@ -121,7 +122,7 @@ export const api = {
   deleteConversation: (id: string) => remove<{ id: string; deleted: boolean }>(`/api/playground/conversations/${encodeURIComponent(id)}`),
   invokePlaygroundTool: (id: string, tool: string, body: { arguments: Record<string, unknown>; confirmDangerous: boolean }) => post<{ conversationId: string; prompt: string; result: PlaygroundResult; conversation: ConversationDetail }>(`/api/playground/conversations/${encodeURIComponent(id)}/tools/${encodeURIComponent(tool)}`, body),
   streamPlayground,
-  generateSuiteDraft: (body: SuiteGenerationRequest) => post<SuiteGenerationDraft>('/api/suites/generate', body),
+  generateSuiteDraft: (body: SuiteGenerationRequest, signal?: AbortSignal) => post<SuiteGenerationDraft>('/api/suites/generate', body, signal),
   saveSuite: (source: string) => post<{ name: string; cases: number }>('/api/suites', { source }),
   updateSuite: (name: string, source: string) => put<{ name: string; previousName: string; cases: number; renamed: boolean }>(`/api/suites/${encodeURIComponent(name)}`, { source }),
   deleteSuite: (name: string) => remove<{ name: string; deleted: boolean }>(`/api/suites/${encodeURIComponent(name)}`),

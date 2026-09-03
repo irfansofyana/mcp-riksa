@@ -363,7 +363,7 @@ export class WorkbenchRuntime {
     return this.withConfigUse([`server:${id}`], () => this.mcp.inspect(id));
   }
 
-  async generateSuiteDraft(input: SuiteGenerationInput) {
+  async generateSuiteDraft(input: SuiteGenerationInput, signal?: AbortSignal) {
     this.requireServer(input.serverId);
     if (!this.mcp.isConnected(input.serverId)) throw new WorkbenchError(`MCP server ${input.serverId} is not connected`, 409);
     const generator = this.requireProvider(input.generatorProviderId);
@@ -386,7 +386,7 @@ export class WorkbenchRuntime {
       let result: Awaited<ReturnType<typeof createAgentSuiteDraft>> | undefined;
       let failure: WorkbenchError | undefined;
       try {
-        result = await createAgentSuiteDraft(input, inspection, adapter);
+        result = await createAgentSuiteDraft(input, inspection, adapter, signal);
       } catch (error) {
         failure = error instanceof SuiteGenerationError
           ? new WorkbenchError(error.message, 502)

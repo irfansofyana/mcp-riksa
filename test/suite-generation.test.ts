@@ -167,6 +167,24 @@ describe('agent-suite generation', () => {
     expect(draft.usage).toEqual({ input: 13, output: 15, total: 28 });
   });
 
+  test('honors caller cancellation through the provider request signal', async () => {
+    const controller = new AbortController();
+    const adapter: ProviderAdapter = {
+      id: 'generator',
+      pricingFor: () => ({ inputPerMillion: 0, outputPerMillion: 0 }),
+      complete: async (request) => new Promise<ProviderResponse>((_resolve, reject) => {
+        if (request.signal?.aborted) return reject(request.signal.reason);
+        request.signal?.addEventListener('abort', () => reject(request.signal?.reason), { once: true });
+      }),
+    };
+
+    const pending = createAgentSuiteDraft(input, inspection, adapter, controller.signal);
+    await Promise.resolve();
+    controller.abort(new Error('cancelled by test'));
+
+    await expect(pending).rejects.toThrow('cancelled by test');
+  });
+
   test.each(['max_tokens', 'length'])('recursively splits a batch after %s truncation', async (stopReason) => {
     const tools = Array.from({ length: 4 }, (_value, index) => ({
       name: `adaptive-${index}`,

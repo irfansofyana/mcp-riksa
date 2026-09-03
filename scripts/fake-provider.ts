@@ -18,7 +18,8 @@ const server = createServer(async (request, response) => {
   const body = chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>;
 
   if (request.method === 'POST' && url.pathname === '/v1/chat/completions') {
-    const messages = Array.isArray(body.messages) ? body.messages as Array<{ role?: string }> : [];
+    const messages = Array.isArray(body.messages) ? body.messages as Array<{ role?: string; content?: unknown }> : [];
+    const isSuiteGeneration = messages.some((message) => message.role === 'system' && String(message.content).includes('author MCP test case plans'));
     const hasToolResult = messages.some((message) => message.role === 'tool');
     if (body.stream === true) {
       response.writeHead(200, { 'content-type': 'text/event-stream' });
@@ -32,6 +33,20 @@ const server = createServer(async (request, response) => {
       send({ id: 'fake-usage', object: 'chat.completion.chunk', created: 1, model: 'test-model', choices: [], usage: { prompt_tokens: 40, completion_tokens: 10, total_tokens: 50 } });
       response.end('data: [DONE]\n\n');
       return;
+    }
+    if (isSuiteGeneration) {
+      return json({
+        id: 'fake-suite-generation', object: 'chat.completion', created: 1, model: 'test-model',
+        choices: [{ index: 0, message: { role: 'assistant', content: JSON.stringify({
+          cases: [
+            { tool: 'add', prompt: 'Add 2 and 3.', arguments: { a: 2, b: 3 } },
+            { tool: 'unannotated_read', prompt: 'Read the deterministic sample value.', arguments: {} },
+            { tool: 'echo', prompt: 'Echo the text hello.', arguments: { text: 'hello' } },
+          ],
+          exclusions: [],
+        }) }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 120, completion_tokens: 80, total_tokens: 200 },
+      });
     }
     return json({
       id: hasToolResult ? 'fake-final' : 'fake-tool', object: 'chat.completion', created: 1, model: 'test-model',
