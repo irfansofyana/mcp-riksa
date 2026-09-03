@@ -110,17 +110,19 @@ function JsonObjectEditor({ editorId, value, onChange, onError }: {
   onChange(value: DirectSuiteCase['call']['arguments']): void;
   onError(editorId: string, message: string): void;
 }) {
+  const [text, setText] = useState(() => JSON.stringify(value, null, 2));
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
   useEffect(() => () => onErrorRef.current(editorId, ''), [editorId]);
+  useEffect(() => { setText(JSON.stringify(value, null, 2)); }, [editorId, value]);
   return <Textarea
     rows={8}
-    defaultValue={JSON.stringify(value, null, 2)}
+    value={text}
     data-testid="direct-arguments-json"
-    onChange={() => onError(editorId, 'Save changes before running')}
-    onBlur={(event) => {
+    onChange={(event) => { setText(event.target.value); onError(editorId, 'Save changes before running'); }}
+    onBlur={() => {
       try {
-        const parsed = JSON.parse(event.target.value) as DirectSuiteCase['call']['arguments'];
+        const parsed = JSON.parse(text) as DirectSuiteCase['call']['arguments'];
         if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error();
         onChange(parsed);
         onError(editorId, '');
