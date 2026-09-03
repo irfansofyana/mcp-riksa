@@ -201,7 +201,9 @@ describe('suite document workflow', () => {
     expect(failed.selectedName).toBe('first');
     expect(failed.savedName).toBe('first');
     expect(failed.loading).toBeUndefined();
-    expect(failed.sourceError).toBe('Could not load second');
+    expect(failed.sourceError).toBeUndefined();
+    expect(failed.loadError).toBe('Could not load second');
+    expect(canRunSuiteDocument(failed)).toBe(true);
   });
 
   test('rolls parser failures during load back to the prior saved identity', () => {
@@ -214,7 +216,9 @@ describe('suite document workflow', () => {
     expect(failed.selectedName).toBe('first');
     expect(failed.savedName).toBe('first');
     expect(failed.loading).toBeUndefined();
-    expect(failed.sourceError).toMatch(/version: 1 or 2/i);
+    expect(failed.sourceError).toBeUndefined();
+    expect(failed.loadError).toMatch(/version: 1 or 2/i);
+    expect(canRunSuiteDocument(failed)).toBe(true);
   });
 
   test('only lets current load replace document state', () => {

@@ -377,7 +377,7 @@ export function SuitesPage({ suites, servers, providers, onRefresh, onRunStarted
         </div></>}
         <div className="suite-boundary-strip composer-boundary" aria-label="Suite lifecycle"><b className={dirty ? 'active' : ''}>Draft</b><span>→</span><b>Review</b><span>→</span><b className={!dirty && document.savedName ? 'active' : ''}>Save</b><span>→</span><b className={canRun ? 'active' : ''}>Run</b></div>
         <footer className="suite-savebar"><div><span className="eyebrow">Portable by default</span><small>{dirty ? 'Unsaved changes. ' : 'Clean saved baseline. '}Visual edits serialize to strict YAML; inline secrets remain rejected.</small></div><div className="button-row"><Button onClick={() => switchView(view === 'builder' ? 'yaml' : 'builder')}>{view === 'builder' ? 'Preview YAML' : 'Back to builder'}</Button><Button variant="primary" disabled={busy || loading || hasPendingEditorChanges || Boolean(document.sourceError)} data-testid="save-suite" onClick={() => void save()}>{busy ? 'Saving…' : document.savedName ? 'Save changes' : 'Save suite'}</Button></div></footer>
-        {message ? <Notice>{message}</Notice> : null}{error || document.sourceError ? <Notice error>{error || document.sourceError}</Notice> : null}
+        {message ? <Notice>{message}</Notice> : null}{error || document.sourceError || document.loadError ? <Notice error>{error || document.sourceError || document.loadError}</Notice> : null}
       </>}
       </fieldset>
     </Section>

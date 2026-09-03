@@ -203,6 +203,7 @@ export type SuiteDocumentState = {
   baseline?: SuiteDocumentBaseline;
   loading?: SuiteDocumentLoadGuard;
   sourceError?: string;
+  loadError?: string;
 };
 
 function unsavedSuiteDocument(draft: SuiteDraftV2): SuiteDocumentState {
@@ -241,7 +242,7 @@ export function createSuiteDocument(source: string, savedName?: string): SuiteDo
 }
 
 export function updateSuiteDocumentSource(state: SuiteDocumentState, source: string): SuiteDocumentState {
-  return { ...state, source, sourceError: undefined };
+  return { ...state, source, sourceError: undefined, loadError: undefined };
 }
 
 export function applySuiteDocumentSource(state: SuiteDocumentState): SuiteDocumentState {
@@ -253,7 +254,7 @@ export function applySuiteDocumentSource(state: SuiteDocumentState): SuiteDocume
 }
 
 export function replaceSuiteDocumentDraft(state: SuiteDocumentState, draft: SuiteDraft): SuiteDocumentState {
-  return { ...state, draft, source: serializeSuiteDraft(draft), sourceError: undefined };
+  return { ...state, draft, source: serializeSuiteDraft(draft), sourceError: undefined, loadError: undefined };
 }
 
 export function suiteDocumentSourceDirty(state: SuiteDocumentState): boolean {
@@ -282,12 +283,13 @@ export function beginSuiteDocumentLoad(state: SuiteDocumentState, name: string, 
     selectedName: name,
     loading: { requestId, name },
     sourceError: undefined,
+    loadError: undefined,
   };
 }
 
 export function failSuiteDocumentLoad(state: SuiteDocumentState, guard: SuiteDocumentLoadGuard, message: string): SuiteDocumentState {
   if (state.loading?.requestId !== guard.requestId || state.loading.name !== guard.name || state.selectedName !== guard.name) return state;
-  return { ...state, selectedName: state.savedName, loading: undefined, sourceError: message };
+  return { ...state, selectedName: state.savedName, loading: undefined, sourceError: undefined, loadError: message };
 }
 
 export function completeSuiteDocumentLoad(
@@ -332,6 +334,7 @@ export function markSuiteDocumentSaved(
       savedName: name,
       baseline: { source, draftSource },
       sourceError: undefined,
+      loadError: undefined,
     };
   }
   return {
