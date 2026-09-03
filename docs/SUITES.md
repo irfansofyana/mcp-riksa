@@ -74,6 +74,10 @@ Generation is draft-only. It never invokes MCP tools, saves a suite file, or sta
 
 Review the coverage ledger, choose **Use generated cases**, inspect every prompt and assertion in the composer, then save explicitly. Starting another creation session always clears the previous generated review. Running the saved suite executes real MCP tools and may cause side effects. Generated exclusion reasons belong to the current review session and are not written into portable suite YAML.
 
+## Live run progress
+
+Starting a suite opens its Runs view immediately. While execution is active, the workbench refreshes automatically and reports completed/total cases, pass/fail counts, remaining cases, elapsed time, the active case, and the current iteration for sampled Version 2 cases. Final case evidence, model/tool timelines, and assertion details replace the live panel when execution finishes; manual Refresh is not required.
+
 ## Playground → suite
 
 Any completed Playground turn can be saved as a portable YAML regression case via **Save YAML case**, which is the fastest way to turn an exploratory chat into a repeatable check.

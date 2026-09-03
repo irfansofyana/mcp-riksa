@@ -297,8 +297,9 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
       await wait(`!document.querySelector('[data-testid="run-suite"]')?.hasAttribute('disabled')`, 'enabled suite runner');
       await click('run-suite');
       await wait(`document.querySelector('.page-heading h1')?.textContent === 'Runs'`, 'Runs page after suite start');
+      await wait(`document.querySelector('.run-progress [role="progressbar"]') && document.querySelector('.run-progress-activity > b')?.getAttribute('aria-live') === 'polite' && !document.querySelector('.run-progress-activity')?.hasAttribute('aria-live') && document.body.textContent?.includes('Live execution')`, 'live suite progress');
+      steps.push(`${step}-live-progress`);
       for (let attempt = 0; attempt < 80; attempt += 1) {
-        await clickText('button', 'Refresh');
         await new Promise((resolveWait) => setTimeout(resolveWait, 150));
         const ready = await evaluate<boolean>(`document.body.textContent?.includes('Model turns & MCP timeline') && document.body.textContent?.includes('passed')`);
         if (ready) { steps.push(step); return; }
@@ -307,6 +308,19 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     };
     await runAndInspect('first-run-inspected');
     await runAndInspect('second-run-inspected');
+
+    const runIds = await evaluate<string[]>(`[...document.querySelectorAll('.runs-rail [data-run-id]')].map((entry)=>entry.dataset.runId)`);
+    if (runIds.length < 2) throw new Error('Expected two runs for stale-refresh coverage');
+    await evaluate(`(() => { const original=window.fetch.bind(window); window.__originalRunFetch=original; window.fetch=(input, init) => String(input).endsWith('/api/runs/${runIds[0]}') ? new Promise((resolve, reject) => setTimeout(() => original(input, init).then(resolve, reject), 500)) : original(input, init); })()`);
+    await clickText('button', 'Refresh');
+    await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+    await evaluate(`document.querySelector('[data-run-id="${runIds[1]}"]').click()`);
+    await wait(`document.querySelector('.run-heading h1 span')?.textContent?.includes('${runIds[1]!.slice(0, 12)}')`, 'new run selected during stale refresh');
+    await new Promise((resolveWait) => setTimeout(resolveWait, 650));
+    const stayedSelected = await evaluate<boolean>(`document.querySelector('.run-heading h1 span')?.textContent?.includes('${runIds[1]!.slice(0, 12)}')`);
+    await evaluate(`window.fetch=window.__originalRunFetch; delete window.__originalRunFetch`);
+    if (!stayedSelected) throw new Error('Stale Refresh response replaced newly selected run');
+    steps.push('run-refresh-race-guarded');
 
     const desktopScreenshot = join(options.outputDirectory, 'desktop.png');
     const desktop = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });

@@ -9,6 +9,20 @@ export type RunnerDependencies = {
   agent: (entry: AgentCase, signal: AbortSignal) => Promise<Observation>;
 };
 
+export type SuiteRunProgress = {
+  phase: 'starting' | 'case_started' | 'iteration_started' | 'case_completed';
+  totalCases: number;
+  completedCases: number;
+  passedCases: number;
+  failedCases: number;
+  currentCaseId?: string;
+  currentCaseIndex?: number;
+  currentCaseKind?: DirectCase['kind'] | AgentCase['kind'];
+  currentIteration?: number;
+  totalIterations?: number;
+  updatedAt: string;
+};
+
 type ConversationObservation = Observation & {
   turns?: Array<{ id: string; user: string; observation: Observation }>;
 };
@@ -90,10 +104,12 @@ async function runScriptedCase(
   entry: V2AgentCase,
   dependencies: RunnerDependencies,
   signal: AbortSignal,
+  onIterationStarted?: (iteration: number, total: number) => void,
 ): Promise<CaseResult> {
   const iterations: IterationResult[] = [];
   for (let index = 1; index <= entry.iterations.count; index += 1) {
     if (signal.aborted) break;
+    onIterationStarted?.(index, entry.iterations.count);
     try {
       const raw = await dependencies.agent(entry, signal) as ConversationObservation;
       iterations.push(iterationVerdict(entry, raw, entry.id, index));
@@ -136,7 +152,7 @@ async function runScriptedCase(
 export async function runSuite(
   suite: Suite,
   dependencies: RunnerDependencies,
-  options: { signal?: AbortSignal; id?: string } = {},
+  options: { signal?: AbortSignal; id?: string; onProgress?: (progress: SuiteRunProgress) => void } = {},
 ): Promise<RunResult> {
   const startedAt = new Date().toISOString();
   const controller = new AbortController();
@@ -145,15 +161,41 @@ export async function runSuite(
   if (options.signal?.aborted) abort();
   const cases: CaseResult[] = [];
   const events = [];
+  let passedCases = 0;
+  let failedCases = 0;
+  const report = (progress: Omit<SuiteRunProgress, 'totalCases' | 'completedCases' | 'passedCases' | 'failedCases' | 'updatedAt'>) => {
+    try {
+      options.onProgress?.({
+        ...progress,
+        totalCases: suite.cases.length,
+        completedCases: cases.length,
+        passedCases,
+        failedCases,
+        updatedAt: new Date().toISOString(),
+      });
+    } catch {
+      // Progress is observational; observer failures must not change suite execution.
+    }
+  };
+  report({ phase: 'starting' });
 
   try {
-    for (const entry of suite.cases) {
+    for (const [caseOffset, entry] of suite.cases.entries()) {
       if (controller.signal.aborted) break;
+      const currentCase = { currentCaseId: entry.id, currentCaseIndex: caseOffset + 1, currentCaseKind: entry.kind };
+      report({ phase: 'case_started', ...currentCase });
       events.push(event(entry.id, 'case_started', { kind: entry.kind }));
       if (entry.kind === 'agent' && 'turns' in entry) {
-        const result = await runScriptedCase(entry, dependencies, controller.signal);
+        let currentIteration: number | undefined;
+        const result = await runScriptedCase(entry, dependencies, controller.signal, (iteration, totalIterations) => {
+          currentIteration = iteration;
+          report({ phase: 'iteration_started', ...currentCase, currentIteration: iteration, totalIterations });
+        });
         cases.push(result);
+        if (result.status === 'passed') passedCases += 1;
+        else failedCases += 1;
         events.push(...result.iterations!.flatMap((iteration) => iteration.observation.events), event(entry.id, 'case_completed', { status: result.status }, result.observation.durationMs));
+        report({ phase: 'case_completed', ...currentCase, ...(currentIteration === undefined ? {} : { currentIteration, totalIterations: entry.iterations.count }) });
         continue;
       }
       try {
@@ -164,13 +206,17 @@ export async function runSuite(
         const verdict = caseVerdict(entry, observation);
         const status = verdict.passed ? 'passed' : 'failed';
         cases.push({ id: entry.id, kind: entry.kind, status, observation, assertions: verdict.assertions, ...(verdict.error === undefined ? {} : { error: verdict.error }) });
+        if (status === 'passed') passedCases += 1;
+        else failedCases += 1;
         events.push(...observation.events, event(entry.id, 'case_completed', { status }, observation.durationMs));
       } catch (error) {
         const cancelled = controller.signal.aborted;
         const message = error instanceof Error ? error.message : String(error);
         cases.push({ id: entry.id, kind: entry.kind, status: cancelled ? 'cancelled' : 'failed', observation: emptyObservation(), assertions: [], error: redact(message) });
+        failedCases += 1;
         events.push(event(entry.id, cancelled ? 'stop' : 'error', { message }));
       }
+      report({ phase: 'case_completed', ...currentCase });
     }
   } finally {
     options.signal?.removeEventListener('abort', abort);

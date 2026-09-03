@@ -12,7 +12,7 @@ import { runAgent, runScriptedConversation, type AgentUpdate } from '../agent/lo
 import { event } from '../core/events.js';
 import { redact } from '../core/redaction.js';
 import { parseSuite } from '../core/suite.js';
-import { runSuite } from '../core/runner.js';
+import { runSuite, type SuiteRunProgress } from '../core/runner.js';
 import type { Observation, Suite } from '../core/types.js';
 import { McpManager, serverConfigSchema, type ServerConfig, type ServerConfigInput } from '../mcp/manager.js';
 import { OAuthCoordinator } from '../mcp/oauth.js';
@@ -66,6 +66,7 @@ export class WorkbenchRuntime {
   private readonly suites = new Map<string, { source: string; suite: Suite }>();
   private readonly activeRuns = new Map<string, AbortController>();
   private readonly activeRunTasks = new Map<string, Promise<void>>();
+  private readonly activeRunProgress = new Map<string, SuiteRunProgress>();
   private readonly activeConformance = new Map<string, AbortController>();
   private readonly activeConformanceTasks = new Map<string, Promise<void>>();
   private readonly activeConfigUses = new Map<string, number>();
@@ -582,15 +583,22 @@ export class WorkbenchRuntime {
     const id = randomUUID();
     const startedAt = new Date().toISOString();
     const controller = new AbortController();
-    this.activeRuns.set(id, controller);
     const configKeys = [...new Set(stored.suite.cases.flatMap((entry) => [
       `server:${entry.server}`,
       ...(entry.kind === 'agent' ? [`provider:${entry.provider}`] : []),
     ]))];
     this.beginConfigUse(configKeys);
-    try { this.runs.start(id, name, startedAt); } catch (error) {
+    try {
+      this.runs.start(id, name, startedAt);
+      this.activeRuns.set(id, controller);
+      this.activeRunProgress.set(id, {
+        phase: 'starting', totalCases: stored.suite.cases.length, completedCases: 0,
+        passedCases: 0, failedCases: 0, updatedAt: startedAt,
+      });
+    } catch (error) {
       this.endConfigUse(configKeys);
       this.activeRuns.delete(id);
+      this.activeRunProgress.delete(id);
       throw error;
     }
     const task = runSuite(stored.suite, {
@@ -602,20 +610,32 @@ export class WorkbenchRuntime {
           ? runScriptedConversation({ turns: entry.turns, model: entry.model, serverId: entry.server, limits: entry.limits }, dependencies, { signal })
           : runAgent({ prompt: entry.prompt, model: entry.model, serverId: entry.server, limits: entry.limits }, dependencies, { signal });
       },
-    }, { signal: controller.signal, id })
+    }, { signal: controller.signal, id, onProgress: (progress) => this.activeRunProgress.set(id, progress) })
       .then((result) => this.runs.complete(result))
       .catch((error: unknown) => this.runs.fail(id, error))
       .finally(() => {
         this.activeRuns.delete(id);
         this.activeRunTasks.delete(id);
+        this.activeRunProgress.delete(id);
         this.endConfigUse(configKeys);
       });
     this.activeRunTasks.set(id, task);
     return { id, suite: name, status: 'running' as const, startedAt };
   }
 
-  async listRuns() { return this.runs.list(); }
-  async getRun(id: string) { return this.runs.get(id); }
+  async listRuns() {
+    return this.runs.list().map((run) => {
+      const progress = this.activeRunProgress.get(run.id);
+      return progress ? { ...run, progress } : run;
+    });
+  }
+
+  async getRun(id: string) {
+    const run = this.runs.get(id);
+    if (!run) return undefined;
+    const progress = this.activeRunProgress.get(id);
+    return progress ? { ...run, progress } : run;
+  }
   async compareRuns(runA: string, runB: string) { return this.runs.compare(runA, runB); }
 
   async cancelRun(id: string) {

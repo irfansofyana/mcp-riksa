@@ -125,6 +125,34 @@ describe('suite runner', () => {
     expect(run.events.map((entry) => entry.caseId)).not.toContain('server-correlation-id');
   });
 
+  test('reports live case progress without changing final results', async () => {
+    const suite: Suite = {
+      version: 1,
+      name: 'progress',
+      cases: [
+        { id: 'first', kind: 'direct', server: 'sample', call: { tool: 'lookup', arguments: {} }, assertions: [] },
+        { id: 'second', kind: 'direct', server: 'sample', call: { tool: 'lookup', arguments: {} }, assertions: [] },
+      ],
+    };
+    const updates: Array<{ phase: string; completedCases: number; passedCases: number; currentCaseId?: string }> = [];
+    const run = await runSuite(suite, { direct: async () => observation, agent: async () => observation }, {
+      onProgress: (progress) => updates.push(progress),
+    });
+
+    expect(run.status).toBe('passed');
+    expect(updates.map(({ phase, completedCases, passedCases, currentCaseId }) => ({ phase, completedCases, passedCases, currentCaseId }))).toEqual([
+      { phase: 'starting', completedCases: 0, passedCases: 0, currentCaseId: undefined },
+      { phase: 'case_started', completedCases: 0, passedCases: 0, currentCaseId: 'first' },
+      { phase: 'case_completed', completedCases: 1, passedCases: 1, currentCaseId: 'first' },
+      { phase: 'case_started', completedCases: 1, passedCases: 1, currentCaseId: 'second' },
+      { phase: 'case_completed', completedCases: 2, passedCases: 2, currentCaseId: 'second' },
+    ]);
+
+    await expect(runSuite(suite, { direct: async () => observation, agent: async () => observation }, {
+      onProgress: () => { throw new Error('observer failed'); },
+    })).resolves.toMatchObject({ status: 'passed', summary: { passed: 2 } });
+  });
+
   test('runs all scripted iterations and applies the minimum-pass threshold', async () => {
     const suite: Suite = {
       version: 2,
@@ -141,6 +169,7 @@ describe('suite runner', () => {
       }],
     };
     let calls = 0;
+    const iterations: number[] = [];
     const turn = (id: string, output: unknown, toolCalls: ToolCallObservation[], stopReason = 'complete') => ({
       id, user: id, observation: { ...observation, output, toolCalls, stopReason, events: [event('server', 'model_turn', { turn: 1 })] },
     });
@@ -161,9 +190,10 @@ describe('suite runner', () => {
           ],
         };
       },
-    });
+    }, { onProgress: (progress) => { if (progress.phase === 'iteration_started') iterations.push(progress.currentIteration!); } });
 
     expect(calls).toBe(3);
+    expect(iterations).toEqual([1, 2, 3]);
     expect(run).toMatchObject({ status: 'passed', summary: { passed: 1 } });
     expect(run.cases[0]?.evaluation).toMatchObject({ count: 3, minPasses: 2, passed: 2, failed: 1 });
     expect(run.cases[0]?.iterations).toHaveLength(3);

@@ -3,6 +3,8 @@ import { createServer } from 'node:http';
 
 const portIndex = process.argv.indexOf('--port');
 const port = portIndex >= 0 ? Number(process.argv[portIndex + 1]) : 4000;
+const delayIndex = process.argv.indexOf('--delay-ms');
+const delayMs = delayIndex >= 0 ? Number(process.argv[delayIndex + 1]) : 0;
 
 const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? '/', 'http://127.0.0.1');
@@ -18,6 +20,7 @@ const server = createServer(async (request, response) => {
   const body = chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>;
 
   if (request.method === 'POST' && url.pathname === '/v1/chat/completions') {
+    if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
     const messages = Array.isArray(body.messages) ? body.messages as Array<{ role?: string; content?: unknown }> : [];
     const isSuiteGeneration = messages.some((message) => message.role === 'system' && String(message.content).includes('author MCP test case plans'));
     const hasToolResult = messages.some((message) => message.role === 'tool');

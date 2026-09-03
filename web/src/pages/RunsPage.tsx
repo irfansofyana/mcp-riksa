@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { Button, Empty, JsonView, Notice, Section, Status } from '../components.js';
+import { canCancelRun, formatRunElapsed, runProgressView, shouldPollRun } from '../run-progress.js';
 import type { CaseResult, EventRecord, Run } from '../types.js';
 
 type UserTurnTrace = { id: string; user: string };
@@ -90,43 +91,111 @@ function CaseDetail({ value }: { value: CaseResult }) {
   </div>;
 }
 
+function RunProgressPanel({ run, now }: { run: Run; now: number }) {
+  const progress = runProgressView(run, now);
+  const indeterminate = progress.total === 0;
+  return <section className="run-progress" aria-labelledby="run-progress-title">
+    <header><div><span className="execution-pulse" aria-hidden="true" /><b id="run-progress-title">Live execution</b></div><strong>{indeterminate ? 'Starting' : `${progress.percent}%`}</strong></header>
+    <div className={`run-progress-track ${indeterminate ? 'indeterminate' : ''}`} role="progressbar" aria-label="Suite run progress" aria-valuemin={0} aria-valuemax={Math.max(1, progress.total)} aria-valuenow={progress.completed} aria-valuetext={indeterminate ? progress.activity : `${progress.completed} of ${progress.total} cases completed`}>
+      <i style={{ width: indeterminate ? '35%' : `${progress.percent}%` }} />
+    </div>
+    <div className="run-progress-activity"><b aria-live="polite">{progress.activity}</b><span>Updates automatically · {formatRunElapsed(progress.elapsedMs)} elapsed</span></div>
+    <div className="run-progress-metrics"><div><span>Completed</span><b>{progress.completed}/{progress.total || '—'}</b></div><div><span>Passed</span><b>{progress.passed}</b></div><div><span>Failed</span><b>{progress.failed}</b></div><div><span>Remaining</span><b>{progress.total ? progress.remaining : '—'}</b></div></div>
+  </section>;
+}
+
 export function RunsPage({ runs, initialId, onRefresh }: { runs: Run[]; initialId?: string; onRefresh(): Promise<void> }) {
   const [selected, setSelected] = useState(initialId ?? runs[0]?.id ?? '');
   const [detail, setDetail] = useState<Run>();
   const [caseId, setCaseId] = useState('');
   const [error, setError] = useState('');
+  const [loadingDetail, setLoadingDetail] = useState(false);
+  const [cancellingId, setCancellingId] = useState<string>();
+  const [now, setNow] = useState(() => Date.now());
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
 
   useEffect(() => {
-    if (!selected) return;
+    if (!selected) { setDetail(undefined); return; }
     let active = true;
-    void api.run(selected).then((value) => { if (active) { setDetail(value); setCaseId((current) => current || value.cases[0]?.id || ''); } }).catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : String(reason)); });
-    return () => { active = false; };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    setDetail(undefined);
+    setCaseId('');
+    setError('');
+    setLoadingDetail(true);
+    const load = async () => {
+      try {
+        const value = await api.run(selected);
+        if (!active) return;
+        setDetail(value);
+        setCaseId((current) => current || value.cases[0]?.id || '');
+        setError('');
+        setLoadingDetail(false);
+        if (shouldPollRun(value)) timer = setTimeout(() => void load(), 750);
+        else void onRefresh();
+      } catch (reason) {
+        if (!active) return;
+        setError(reason instanceof Error ? reason.message : String(reason));
+        setLoadingDetail(false);
+      }
+    };
+    void load();
+    return () => { active = false; if (timer) clearTimeout(timer); };
   }, [selected]);
+
+  useEffect(() => {
+    if (!shouldPollRun(detail)) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(timer);
+  }, [detail?.status]);
 
   useEffect(() => { if (initialId) setSelected(initialId); }, [initialId]);
   const selectedCase = useMemo(() => detail?.cases.find((entry) => entry.id === caseId) ?? detail?.cases[0], [detail, caseId]);
 
   const refresh = async () => {
-    if (!selected) return;
+    const requestedId = selected;
+    if (!requestedId) return;
     try {
       await onRefresh();
-      setDetail(await api.run(selected));
+      const value = await api.run(requestedId);
+      if (selectedRef.current !== requestedId) return;
+      setDetail(value);
       setError('');
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      if (selectedRef.current === requestedId) setError(reason instanceof Error ? reason.message : String(reason));
+    }
+  };
+
+  const cancel = async () => {
+    if (!canCancelRun(detail, selectedRef.current)) return;
+    const requestedId = detail.id;
+    setCancellingId(requestedId);
+    try {
+      await api.cancelRun(requestedId);
+      const value = await api.run(requestedId);
+      if (selectedRef.current !== requestedId) return;
+      setDetail(value);
+      setError('');
+    } catch (reason) {
+      if (selectedRef.current === requestedId) setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setCancellingId((current) => current === requestedId ? undefined : current);
     }
   };
 
   return <div className="runs-layout">
     <Section title="Runs" className="runs-rail" action={<Button onClick={() => void refresh()}>Refresh</Button>}>
-      <div className="row-list">{runs.length === 0 ? <Empty>Suite runs will appear here.</Empty> : runs.map((run) => <button key={run.id} className={`row-button ${selected === run.id ? 'selected' : ''}`} onClick={() => { setSelected(run.id); setCaseId(''); }}><span><b>{run.suite}</b><small>{run.id.slice(0, 10)} · {new Date(run.startedAt).toLocaleString()}</small></span><Status value={run.status} /></button>)}</div>
+      <div className="row-list">{runs.length === 0 ? <Empty>Suite runs will appear here.</Empty> : runs.map((run) => { const progress = run.progress; return <button key={run.id} data-run-id={run.id} className={`row-button ${selected === run.id ? 'selected' : ''}`} onClick={() => { setSelected(run.id); setDetail(undefined); setCaseId(''); }}><span><b>{run.suite}</b><small>{progress ? `${progress.completedCases}/${progress.totalCases} cases · live` : `${run.id.slice(0, 10)} · ${new Date(run.startedAt).toLocaleString()}`}</small></span><Status value={run.status} /></button>; })}</div>
     </Section>
     <main className="run-workspace">
-      {!detail ? <Section title="Run detail"><Empty>Select a run to inspect its full trace.</Empty>{error ? <Notice error>{error}</Notice> : null}</Section> : <>
-        <header className="run-heading"><div><h1>{detail.suite} <span>/ {detail.id.slice(0, 12)}</span></h1><p>{new Date(detail.startedAt).toLocaleString()} · {detail.cases.length} cases</p></div><div className="button-row"><Status value={detail.status} />{detail.status === 'running' ? <Button variant="danger" onClick={() => void api.cancelRun(detail.id)}>Cancel</Button> : null}</div></header>
-        <div className="case-tabs">{detail.cases.map((entry) => <button key={entry.id} className={selectedCase?.id === entry.id ? 'selected' : ''} onClick={() => setCaseId(entry.id)}>{entry.id}<Status value={entry.status} /></button>)}</div>
-        {selectedCase ? <CaseDetail value={selectedCase} /> : <Section title="Summary"><div className="metric-strip"><div><span>Pass rate</span><b>{Math.round(detail.summary.passRate * 100)}%</b></div><div><span>Passed</span><b>{detail.summary.passed}</b></div><div><span>Failed</span><b>{detail.summary.failed}</b></div></div></Section>}
-        <JsonView value={detail.events} label="Sanitized raw run events" />
+      {!detail ? <Section title="Run detail"><Empty>{loadingDetail ? 'Loading run progress…' : 'Select a run to inspect its full trace.'}</Empty>{error ? <Notice error>{error}</Notice> : null}</Section> : <>
+        <header className="run-heading"><div><h1>{detail.suite} <span>/ {detail.id.slice(0, 12)}</span></h1><p>{new Date(detail.startedAt).toLocaleString()} · {detail.progress?.totalCases ?? detail.summary.total} cases</p></div><div className="button-row"><Status value={detail.status} />{canCancelRun(detail, selected) ? <Button variant="danger" disabled={cancellingId === detail.id} onClick={() => void cancel()}>{cancellingId === detail.id ? 'Cancelling…' : 'Cancel'}</Button> : null}</div></header>
+        {detail.status === 'running' ? <RunProgressPanel run={detail} now={now} /> : null}
+        {detail.cases.length > 0 ? <div className="case-tabs">{detail.cases.map((entry) => <button key={entry.id} className={selectedCase?.id === entry.id ? 'selected' : ''} onClick={() => setCaseId(entry.id)}>{entry.id}<Status value={entry.status} /></button>)}</div> : null}
+        {selectedCase ? <CaseDetail value={selectedCase} /> : detail.status === 'running' ? <Section title="Case evidence"><Empty>Results and traces appear when execution finishes.</Empty></Section> : <Section title="Summary"><div className="metric-strip"><div><span>Pass rate</span><b>{Math.round(detail.summary.passRate * 100)}%</b></div><div><span>Passed</span><b>{detail.summary.passed}</b></div><div><span>Failed</span><b>{detail.summary.failed}</b></div></div></Section>}
+        {detail.status === 'running' ? null : <JsonView value={detail.events} label="Sanitized raw run events" />}
+        {error ? <Notice error>{error}</Notice> : null}
       </>}
     </main>
   </div>;

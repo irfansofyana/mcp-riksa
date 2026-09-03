@@ -103,10 +103,25 @@ export type CaseResult = {
   iterations?: IterationObservation[];
 };
 
+export type RunProgress = {
+  phase: 'starting' | 'case_started' | 'iteration_started' | 'case_completed';
+  totalCases: number;
+  completedCases: number;
+  passedCases: number;
+  failedCases: number;
+  currentCaseId?: string;
+  currentCaseIndex?: number;
+  currentCaseKind?: 'direct' | 'agent';
+  currentIteration?: number;
+  totalIterations?: number;
+  updatedAt: string;
+};
+
 export type Run = {
   id: string; suite: string; status: string; startedAt: string; completedAt: string;
   summary: { total: number; passed: number; failed: number; passRate: number };
   cases: CaseResult[]; events: EventRecord[];
+  progress?: RunProgress;
 };
 
 export type ConformanceCheck = {

@@ -486,6 +486,59 @@ describe('concrete workbench runtime', () => {
     await restored.close();
   });
 
+  test('exposes active suite progress before the final run is persisted', async () => {
+    const { runtime } = createRuntime();
+    await runtime.saveSuite(`version: 1
+name: live-progress
+cases:
+  - id: first
+    kind: direct
+    server: sample
+    call: { tool: add, arguments: {} }
+    assertions: []
+  - id: second
+    kind: direct
+    server: sample
+    call: { tool: add, arguments: {} }
+    assertions: []
+`);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let calls = 0;
+    runtime['directObservation'] = async () => {
+      calls += 1;
+      if (calls === 1) await gate;
+      return { output: { sum: 5 }, toolCalls: [], durationMs: 1, tokens: { input: 0, output: 0, total: 0 }, costUsd: 0, events: [] };
+    };
+
+    const started = await runtime.startSuite('live-progress');
+    expect(await runtime.getRun(started.id)).toMatchObject({
+      status: 'running',
+      progress: { phase: 'case_started', totalCases: 2, completedCases: 0, currentCaseId: 'first', currentCaseIndex: 1 },
+    });
+    expect(await runtime.listRuns()).toEqual([expect.objectContaining({ id: started.id, progress: expect.objectContaining({ totalCases: 2 }) })]);
+
+    release();
+    const completed = await waitForRun(runtime, started.id) as { status: string; progress?: unknown };
+    expect(completed.status).toBe('passed');
+    expect(completed.progress).toBeUndefined();
+    await runtime.close();
+  });
+
+  test('does not leak active progress when configuration locking rejects a run start', async () => {
+    const { runtime } = createRuntime();
+    await runtime.saveSuite(suite);
+    runtime['mutatingConfigs'].add('server:sample');
+
+    await expect(runtime.startSuite('sample-direct')).rejects.toMatchObject({ status: 409 });
+    expect(runtime['activeRuns'].size).toBe(0);
+    expect(runtime['activeRunProgress'].size).toBe(0);
+    expect(await runtime.listRuns()).toEqual([]);
+
+    runtime['mutatingConfigs'].clear();
+    await runtime.close();
+  });
+
   test('runs a saved direct suite through the real sample MCP server and compares persisted runs', async () => {
     const { runtime } = createRuntime();
     await runtime.addServer({
