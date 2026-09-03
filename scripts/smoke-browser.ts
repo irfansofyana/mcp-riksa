@@ -301,6 +301,25 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     await wait(`!document.querySelector('[data-testid="run-suite"]')?.hasAttribute('disabled')`, 'clean suite restored after direct editor cleanup');
     steps.push('direct-editor-cleanup-checked');
 
+    const originalCaseId = await evaluate<string>(`document.querySelector('.case-list button:first-child b')?.textContent`);
+    await clickText('.case-rail button', '+ Agent');
+    await setValue('case-id', originalCaseId);
+    await wait(`document.querySelector('[data-testid="save-suite"]')?.hasAttribute('disabled')`, 'duplicate case ID blocks save');
+    await evaluate(`document.querySelector('.case-list button:first-child')?.click()`);
+    await wait(`!document.querySelector('[data-testid="save-suite"]')?.hasAttribute('disabled')`, 'discarded duplicate case ID releases save');
+    await evaluate(`([...document.querySelectorAll('.case-list button')].at(-1))?.click()`);
+    await clickText('.case-composer-head button', 'Remove');
+    await wait(`!document.querySelector('[data-testid="run-suite"]')?.hasAttribute('disabled')`, 'clean suite restored after case ID cleanup');
+    steps.push('case-id-cleanup-checked');
+
+    const originalTurnId = await evaluate<string>(`document.querySelector('[data-testid="turn-id-0"]')?.value`);
+    await clickText('.case-section.assertions-editor button', '+ User turn');
+    await setValue('turn-id-1', originalTurnId);
+    await wait(`document.querySelector('[data-testid="save-suite"]')?.hasAttribute('disabled')`, 'duplicate turn ID blocks save');
+    await click('remove-turn-1');
+    await wait(`!document.querySelector('[data-testid="run-suite"]')?.hasAttribute('disabled')`, 'removed duplicate turn ID releases run');
+    steps.push('turn-id-cleanup-checked');
+
     const runAndInspect = async (step: string) => {
       await navigate('suites');
       await clickText('button', 'smoke-agent');
