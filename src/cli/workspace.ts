@@ -1,5 +1,5 @@
 import { existsSync, lstatSync, mkdirSync, realpathSync, readdirSync, statSync } from 'node:fs';
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { DATA_DIRECTORY_ENVIRONMENT_VARIABLE, DEFAULT_DATA_DIRECTORY } from './data-dir.js';
 
 export type ServeWorkspaceOptions = {
@@ -23,7 +23,7 @@ function resolveFrom(cwd: string, value: string): string {
 
 function containsPath(parent: string, child: string): boolean {
   const candidate = relative(parent, child);
-  return candidate === '' || (!candidate.startsWith('..') && !isAbsolute(candidate));
+  return candidate === '' || (candidate !== '..' && !candidate.startsWith(`..${sep}`) && !isAbsolute(candidate));
 }
 
 function assertRepositoryLayout(layout: Required<Pick<ServeWorkspace, 'dataDirectory' | 'suiteDirectory' | 'configPath' | 'workspaceDirectory'>>): void {

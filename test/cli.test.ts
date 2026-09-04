@@ -150,6 +150,20 @@ describe('headless CLI', () => {
       suitesDir: escapedSuiteDirectory,
     }, {}))).toThrow('cannot escape the workspace');
     expect(existsSync(join(externalDirectory, 'new-suites'))).toBe(false);
+
+    mkdirSync(join(workspaceDirectory, '..tracked'));
+    const dotPrefixed = prepareServeWorkspace(resolveServeWorkspace({
+      workspace: workspaceDirectory,
+      suitesDir: join(workspaceDirectory, '..tracked/suites'),
+    }, {}));
+    expect(dotPrefixed.suiteDirectory).toBe(join(workspaceDirectory, '..tracked/suites'));
+
+    symlinkSync(externalDirectory, join(workspaceDirectory, '..link'));
+    expect(() => prepareServeWorkspace(resolveServeWorkspace({
+      workspace: workspaceDirectory,
+      suitesDir: join(workspaceDirectory, '..link/new-dot-suites'),
+    }, {}))).toThrow('cannot escape the workspace');
+    expect(existsSync(join(externalDirectory, 'new-dot-suites'))).toBe(false);
   });
 
   test('formats reachable loopback callback URLs', () => {
