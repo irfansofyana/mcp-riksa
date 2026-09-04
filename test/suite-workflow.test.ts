@@ -22,6 +22,7 @@ import {
   replaceSuiteDocumentDraft,
   suiteDocumentSaveSnapshot,
   suggestSuiteNameFromServerId,
+  suiteGenerationRequest,
   updatePendingEditorIssues,
   updateSuiteDocumentSource,
 } from '../web/src/suite-workflow.js';
@@ -71,6 +72,7 @@ describe('suite creation workflow', () => {
     const generatedForm = { ...manual, mode: 'generated' as const };
     expect(creationReadinessIssues(generatedForm, options)).toEqual(expect.arrayContaining([
       { field: 'generatorProviderId', message: 'Choose a generator provider.' },
+      { field: 'authorInstructions', message: 'Describe the scenarios to generate.' },
       { field: 'generatorModel', message: 'Choose a generator model.' },
       { field: 'targetProviderId', message: 'Choose a target provider.' },
       { field: 'targetModel', message: 'Choose a target model.' },
@@ -79,6 +81,25 @@ describe('suite creation workflow', () => {
     expect(creationReadinessIssues({ ...generatedForm, serverId: 'offline' }, options)).toContainEqual({
       field: 'serverId', message: 'Choose a connected MCP server for generation.',
     });
+    expect(creationReadinessIssues({ ...generatedForm, generationGoal: 'selected-tools' }, options)).toContainEqual({
+      field: 'selectedTools', message: 'Select at least one tool.',
+    });
+    expect(creationReadinessIssues({ ...generatedForm, generationGoal: 'all-safe-tools' }, options)).not.toContainEqual(expect.objectContaining({ field: 'authorInstructions' }));
+  });
+
+  test('maps every generation goal to an explicit API scope', () => {
+    const form = createSuiteCreationForm({
+      mode: 'generated', name: ' scoped ', serverId: 'connected', authorInstructions: ' Find Ada. ',
+      generatorProviderId: 'generator', generatorModel: 'author', targetProviderId: 'target', targetModel: 'runtime',
+      selectedTools: ['lookup'], scenarioCount: 2,
+    });
+    expect(suiteGenerationRequest(form)).toMatchObject({
+      name: 'scoped', authorInstructions: 'Find Ada.', scope: { mode: 'scenarios', caseCount: 2, tools: ['lookup'] },
+    });
+    expect(suiteGenerationRequest({ ...form, generationGoal: 'selected-tools' }).scope).toEqual({ mode: 'selected-tools', tools: ['lookup'] });
+    expect(suiteGenerationRequest({ ...form, generationGoal: 'all-safe-tools' }).scope).toEqual({ mode: 'all-safe-tools' });
+    expect(suiteGenerationRequest({ ...form, selectedTools: [], authorInstructions: '' })).not.toHaveProperty('authorInstructions');
+    expect(suiteGenerationRequest({ ...form, selectedTools: [] }).scope).toEqual({ mode: 'scenarios', caseCount: 2 });
   });
 
   test('uses a stable generation fingerprint and invalidates review when form changes', () => {
@@ -88,6 +109,9 @@ describe('suite creation workflow', () => {
     });
     expect(generationFingerprint(form)).toBe(generationFingerprint({ ...form }));
     expect(generationFingerprint({ ...form, targetModel: 'other' })).not.toBe(generationFingerprint(form));
+    expect(generationFingerprint({ ...form, generationGoal: 'all-safe-tools' })).not.toBe(generationFingerprint(form));
+    expect(generationFingerprint({ ...form, scenarioCount: 2 })).not.toBe(generationFingerprint(form));
+    expect(generationFingerprint({ ...form, selectedTools: ['lookup'] })).not.toBe(generationFingerprint(form));
 
     let state = creationSessionReducer(createSuiteCreationSession(form), { type: 'open' });
     const guard = generationRequestGuard(state, 'request-1');

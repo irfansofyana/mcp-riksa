@@ -229,12 +229,14 @@ describe('API security boundary', () => {
     expect(external.status).toBe(403);
     const invalid = await request('/api/suites/generate', mutation({ ...value, persist: true }));
     expect(invalid.status).toBe(400);
+    const missingScenario = await request('/api/suites/generate', mutation({ ...value, authorInstructions: undefined, scope: { mode: 'scenarios', caseCount: 1 } }));
+    expect(missingScenario.status).toBe(400);
     expect(calls).toHaveLength(0);
 
     const accepted = await request('/api/suites/generate', mutation(value));
     expect(accepted.status).toBe(200);
     expect(await accepted.json()).toMatchObject({ suite: { version: 2, name: 'generated-suite' } });
-    expect(calls).toEqual([{ method: 'generateSuiteDraft', value }]);
+    expect(calls).toEqual([{ method: 'generateSuiteDraft', value: { ...value, scope: { mode: 'all-safe-tools' } } }]);
   });
 });
 

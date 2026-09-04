@@ -40,6 +40,11 @@ export type VersionedSuiteDraft = SuiteDraftV1 | SuiteDraftV2;
 /* Mutable composer compatibility; parsed drafts retain precise version discrimination. */
 export type SuiteDraft = { version: 1 | 2; name: string; description?: string; cases: SuiteCase[] };
 export type SuiteDetail = { name: string; source: string; suite: VersionedSuiteDraft };
+export type SuiteGenerationScope =
+  | { mode: 'scenarios'; caseCount: number; tools?: string[] }
+  | { mode: 'selected-tools'; tools: string[] }
+  | { mode: 'all-safe-tools' };
+
 export type SuiteGenerationRequest = {
   serverId: string;
   generatorProviderId: string;
@@ -48,6 +53,7 @@ export type SuiteGenerationRequest = {
   targetModel: string;
   name: string;
   authorInstructions?: string;
+  scope: SuiteGenerationScope;
 };
 export type SuiteGenerationDraft = {
   suite: SuiteDraftV2;

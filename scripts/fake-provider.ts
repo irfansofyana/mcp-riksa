@@ -22,7 +22,23 @@ const server = createServer(async (request, response) => {
   if (request.method === 'POST' && url.pathname === '/v1/chat/completions') {
     if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
     const messages = Array.isArray(body.messages) ? body.messages as Array<{ role?: string; content?: unknown }> : [];
-    const isSuiteGeneration = messages.some((message) => message.role === 'system' && String(message.content).includes('author MCP test case plans'));
+    const isSuiteGeneration = messages.some((message) => message.role === 'system' && String(message.content).includes('author MCP test'));
+    const isScenarioGeneration = messages.some((message) => message.role === 'system' && String(message.content).includes('author MCP test scenario plans'));
+    const generationPrompt = String(messages.find((message) => message.role === 'user')?.content ?? '');
+    const metadataStart = generationPrompt.indexOf('<UNTRUSTED_METADATA>\n');
+    const metadataEnd = generationPrompt.lastIndexOf('\n</UNTRUSTED_METADATA>');
+    let generationToolNames = ['add', 'unannotated_read', 'echo'];
+    if (metadataStart >= 0 && metadataEnd > metadataStart) {
+      try {
+        const metadata = JSON.parse(generationPrompt.slice(metadataStart + '<UNTRUSTED_METADATA>\n'.length, metadataEnd)) as { tools?: Array<{ name?: unknown }> };
+        generationToolNames = (metadata.tools ?? []).flatMap((tool) => typeof tool.name === 'string' ? [tool.name] : []);
+      } catch { /* malformed test metadata falls back to the complete fixture */ }
+    }
+    const coverageCases = generationToolNames.map((tool) => tool === 'add'
+      ? { tool, prompt: 'Add 2 and 3.', arguments: { a: 2, b: 3 } }
+      : tool === 'echo'
+        ? { tool, prompt: 'Echo the text hello.', arguments: { text: 'hello' } }
+        : { tool, prompt: `Use ${tool} for a deterministic read-only request.`, arguments: {} });
     const hasToolResult = messages.some((message) => message.role === 'tool');
     if (body.stream === true) {
       response.writeHead(200, { 'content-type': 'text/event-stream' });
@@ -40,12 +56,10 @@ const server = createServer(async (request, response) => {
     if (isSuiteGeneration) {
       return json({
         id: 'fake-suite-generation', object: 'chat.completion', created: 1, model: 'test-model',
-        choices: [{ index: 0, message: { role: 'assistant', content: JSON.stringify({
-          cases: [
-            { tool: 'add', prompt: 'Add 2 and 3.', arguments: { a: 2, b: 3 } },
-            { tool: 'unannotated_read', prompt: 'Read the deterministic sample value.', arguments: {} },
-            { tool: 'echo', prompt: 'Echo the text hello.', arguments: { text: 'hello' } },
-          ],
+        choices: [{ index: 0, message: { role: 'assistant', content: JSON.stringify(isScenarioGeneration ? {
+          cases: [{ prompt: 'Add 2 and 3, then report the result.', tools: [{ tool: 'add', arguments: { a: 2, b: 3 } }] }],
+        } : {
+          cases: coverageCases,
           exclusions: [],
         }) }, finish_reason: 'stop' }],
         usage: { prompt_tokens: 120, completion_tokens: 80, total_tokens: 200 },

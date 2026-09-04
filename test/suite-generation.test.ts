@@ -1,6 +1,6 @@
 import { stringify } from 'yaml';
 import { describe, expect, test } from 'vitest';
-import { createAgentSuiteDraft, SuiteGenerationError, type SuiteGenerationInspection } from '../src/agent/suite-generation.js';
+import { createAgentSuiteDraft, suiteGenerationInputSchema, SuiteGenerationError, type SuiteGenerationInspection } from '../src/agent/suite-generation.js';
 import type { ProviderAdapter, ProviderRequest, ProviderResponse } from '../src/agent/types.js';
 import { parseSuite } from '../src/core/suite.js';
 
@@ -41,6 +41,7 @@ const inspection: SuiteGenerationInspection = {
         properties: {
           query: { type: 'string' },
           mode: { type: 'string', enum: ['exact', 'fuzzy'] },
+          email: { type: 'string', format: 'email' },
           filters: { type: 'object', properties: { tag: { type: 'string' } }, required: ['tag'], additionalProperties: false },
           tags: { type: 'array', items: { type: 'string' }, minItems: 1 },
         },
@@ -115,6 +116,99 @@ describe('agent-suite generation', () => {
     });
     expect(parseSuite(stringify(draft.suite))).toEqual(draft.suite);
     expect(JSON.stringify(draft.suite)).not.toContain('attacker');
+  });
+
+  test('limits coverage generation to explicitly selected tools', async () => {
+    const provider = fakeProvider([response(JSON.stringify({
+      cases: [{ tool: 'lookup', prompt: 'Find record Ada.', arguments: { query: 'Ada' } }],
+      exclusions: [],
+    }))]);
+
+    const draft = await createAgentSuiteDraft({ ...input, scope: { mode: 'selected-tools', tools: ['lookup'] } }, inspection, provider.adapter);
+
+    expect(draft.suite.cases).toHaveLength(1);
+    expect(draft.coverage).toEqual([{ tool: 'lookup', caseId: 'lookup' }]);
+    expect(draft.exclusions).toContainEqual({
+      tool: 'delete_record', reason: 'Tool declares annotations.destructiveHint=true.', category: 'destructive',
+    });
+    const prompt = provider.requests[0]?.messages[1]?.content ?? '';
+    expect(prompt).toContain('"lookup"');
+    expect(prompt).not.toContain('"opaque_action"');
+  });
+
+  test('generates requested multi-tool scenarios without forcing full coverage', async () => {
+    const provider = fakeProvider([response(JSON.stringify({
+      cases: [{
+        prompt: 'Find Ada, then inspect the related opaque record.',
+        tools: [
+          { tool: 'lookup', arguments: { query: 'Ada' } },
+          { tool: 'opaque_action' },
+        ],
+      }],
+    }))]);
+
+    const draft = await createAgentSuiteDraft({
+      ...input,
+      authorInstructions: 'Create one scenario that finds Ada and then inspects the related record.',
+      scope: { mode: 'scenarios', caseCount: 1, tools: ['lookup', 'opaque_action'] },
+    }, inspection, provider.adapter);
+
+    expect(draft.suite.cases).toEqual([expect.objectContaining({
+      id: 'scenario-1',
+      turns: [{
+        id: 'request',
+        user: 'Find Ada, then inspect the related opaque record.',
+        assertions: [
+          { type: 'tool', tool: 'lookup', arguments: { equals: { query: 'Ada' } }, success: true },
+          { type: 'tool', tool: 'opaque_action', success: true },
+        ],
+      }],
+      limits: { maxTurns: 4, maxToolCalls: 2, timeoutMs: 60_000 },
+      assertions: [
+        { type: 'tool_count', tool: 'lookup', count: 1 },
+        { type: 'tool_count', tool: 'opaque_action', count: 1 },
+        { type: 'tool_order', tools: ['lookup', 'opaque_action'] },
+      ],
+    })]);
+    expect(draft.coverage).toEqual([
+      { tool: 'lookup', caseId: 'scenario-1' },
+      { tool: 'opaque_action', caseId: 'scenario-1' },
+    ]);
+    const prompt = provider.requests[0]?.messages[1]?.content ?? '';
+    expect(prompt).toContain('Do not create one case per tool');
+    expect(prompt).toContain('Create exactly 1 credible, safe agent evaluation scenario');
+  });
+
+  test('repairs scenario plans with the wrong case count', async () => {
+    const oneCase = { cases: [{ prompt: 'Find Ada.', tools: [{ tool: 'lookup', arguments: { query: 'Ada' } }] }] };
+    const provider = fakeProvider([
+      response(JSON.stringify(oneCase)),
+      response(JSON.stringify({ cases: [...oneCase.cases, { prompt: 'Inspect the related record.', tools: [{ tool: 'opaque_action' }] }] })),
+    ]);
+
+    const draft = await createAgentSuiteDraft({
+      ...input,
+      authorInstructions: 'Create two read-only record investigation scenarios.',
+      scope: { mode: 'scenarios', caseCount: 2, tools: ['lookup', 'opaque_action'] },
+    }, inspection, provider.adapter);
+
+    expect(draft.suite.cases.map((entry) => entry.id)).toEqual(['scenario-1', 'scenario-2']);
+    expect(provider.requests).toHaveLength(2);
+    expect(provider.requests[1]?.messages.at(-1)?.content).toContain('exactly 2 scenario cases');
+  });
+
+  test('requires scenario instructions and unique selected tools', () => {
+    expect(() => suiteGenerationInputSchema.parse({ ...input, authorInstructions: undefined, scope: { mode: 'scenarios', caseCount: 1 } })).toThrow('Describe scenarios to generate');
+    expect(() => suiteGenerationInputSchema.parse({ ...input, scope: { mode: 'selected-tools', tools: ['lookup', 'lookup'] } })).toThrow('Duplicate selected tool lookup');
+  });
+
+  test('rejects unknown or destructive selected tools before provider use', async () => {
+    const provider = fakeProvider([]);
+    await expect(createAgentSuiteDraft({ ...input, scope: { mode: 'selected-tools', tools: ['missing'] } }, inspection, provider.adapter))
+      .rejects.toThrow('Selected tool missing is not exposed');
+    await expect(createAgentSuiteDraft({ ...input, scope: { mode: 'selected-tools', tools: ['delete_record'] } }, inspection, provider.adapter))
+      .rejects.toThrow('declares annotations.destructiveHint=true');
+    expect(provider.requests).toHaveLength(0);
   });
 
   test('repairs malformed output once and aggregates usage', async () => {
@@ -230,6 +324,7 @@ describe('agent-suite generation', () => {
     ['unknown argument assertion', { cases: [{ tool: 'lookup', prompt: 'Find Ada.', arguments: { query: 'Ada', invented: true } }], exclusions: [{ tool: 'opaque_action', reason: 'Unclear.' }] }],
     ['wrong argument type', { cases: [{ tool: 'lookup', prompt: 'Find Ada.', arguments: { query: 7 } }], exclusions: [{ tool: 'opaque_action', reason: 'Unclear.' }] }],
     ['invalid argument enum', { cases: [{ tool: 'lookup', prompt: 'Find Ada.', arguments: { query: 'Ada', mode: 'invalid' } }], exclusions: [{ tool: 'opaque_action', reason: 'Unclear.' }] }],
+    ['invalid argument format', { cases: [{ tool: 'lookup', prompt: 'Find Ada.', arguments: { query: 'Ada', email: 'not-an-email' } }], exclusions: [{ tool: 'opaque_action', reason: 'Unclear.' }] }],
     ['missing nested required argument', { cases: [{ tool: 'lookup', prompt: 'Find Ada.', arguments: { query: 'Ada', filters: {} } }], exclusions: [{ tool: 'opaque_action', reason: 'Unclear.' }] }],
     ['invalid argument array', { cases: [{ tool: 'lookup', prompt: 'Find Ada.', arguments: { query: 'Ada', tags: [] } }], exclusions: [{ tool: 'opaque_action', reason: 'Unclear.' }] }],
   ])('rejects %s instead of inventing a runnable ledger entry', async (_label, plan) => {

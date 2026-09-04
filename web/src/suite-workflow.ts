@@ -4,7 +4,7 @@ import {
   serializeSuiteDraft,
   upgradeSuiteDraftToV2,
 } from './model.js';
-import type { SuiteDraft, SuiteDraftV2, SuiteGenerationDraft } from './types.js';
+import type { SuiteDraft, SuiteDraftV2, SuiteGenerationDraft, SuiteGenerationRequest } from './types.js';
 
 export type EditorIdentityRegistry<T extends object> = {
   id(value: T): string;
@@ -44,6 +44,7 @@ export function updatePendingEditorIssues(
 }
 
 export type SuiteCreationMode = 'manual' | 'generated';
+export type SuiteGenerationGoal = 'scenarios' | 'selected-tools' | 'all-safe-tools';
 
 export type SuiteCreationForm = {
   mode: SuiteCreationMode;
@@ -53,6 +54,9 @@ export type SuiteCreationForm = {
   generatorModel: string;
   targetProviderId: string;
   targetModel: string;
+  generationGoal: SuiteGenerationGoal;
+  selectedTools: string[];
+  scenarioCount: number;
   authorInstructions: string;
 };
 
@@ -89,6 +93,9 @@ export function createSuiteCreationForm(initial: Partial<SuiteCreationForm> = {}
     generatorModel: initial.generatorModel ?? '',
     targetProviderId: initial.targetProviderId ?? '',
     targetModel: initial.targetModel ?? '',
+    generationGoal: initial.generationGoal ?? 'scenarios',
+    selectedTools: initial.selectedTools ?? [],
+    scenarioCount: initial.scenarioCount ?? 1,
     authorInstructions: initial.authorInstructions ?? '',
   };
 }
@@ -116,6 +123,15 @@ export function creationReadinessIssues(form: SuiteCreationForm, options: SuiteC
     else if (!target) issues.push({ field: 'targetProviderId', message: 'Target provider is unavailable.' });
     if (!form.targetModel) issues.push({ field: 'targetModel', message: 'Choose a target model.' });
     else if (!target || !Object.hasOwn(target.models, form.targetModel)) issues.push({ field: 'targetModel', message: 'Target model is unavailable.' });
+    if (form.generationGoal === 'scenarios') {
+      if (!form.authorInstructions.trim()) issues.push({ field: 'authorInstructions', message: 'Describe the scenarios to generate.' });
+      if (!Number.isInteger(form.scenarioCount) || form.scenarioCount < 1 || form.scenarioCount > 8) {
+        issues.push({ field: 'scenarioCount', message: 'Generate between 1 and 8 scenarios.' });
+      }
+    }
+    if (form.generationGoal === 'selected-tools' && form.selectedTools.length === 0) {
+      issues.push({ field: 'selectedTools', message: 'Select at least one tool.' });
+    }
   }
   return issues;
 }
@@ -124,6 +140,23 @@ export const getCreationReadinessIssues = creationReadinessIssues;
 
 export function isSuiteCreationReady(form: SuiteCreationForm, options: SuiteCreationOptions): boolean {
   return creationReadinessIssues(form, options).length === 0;
+}
+
+export function suiteGenerationRequest(form: SuiteCreationForm): SuiteGenerationRequest {
+  return {
+    serverId: form.serverId,
+    generatorProviderId: form.generatorProviderId,
+    generatorModel: form.generatorModel,
+    targetProviderId: form.targetProviderId,
+    targetModel: form.targetModel,
+    name: form.name.trim(),
+    ...(form.authorInstructions.trim() ? { authorInstructions: form.authorInstructions.trim() } : {}),
+    scope: form.generationGoal === 'scenarios'
+      ? { mode: 'scenarios', caseCount: form.scenarioCount, ...(form.selectedTools.length ? { tools: [...form.selectedTools] } : {}) }
+      : form.generationGoal === 'selected-tools'
+        ? { mode: 'selected-tools', tools: [...form.selectedTools] }
+        : { mode: 'all-safe-tools' },
+  };
 }
 
 export function generationFingerprint(form: SuiteCreationForm): string {
@@ -135,6 +168,9 @@ export function generationFingerprint(form: SuiteCreationForm): string {
     generatorModel: form.generatorModel,
     targetProviderId: form.targetProviderId,
     targetModel: form.targetModel,
+    generationGoal: form.generationGoal,
+    selectedTools: [...form.selectedTools].sort(),
+    scenarioCount: form.scenarioCount,
     authorInstructions: form.authorInstructions.trim(),
   });
 }
