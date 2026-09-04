@@ -31,11 +31,20 @@ export type AgentSuiteCaseV2 = {
   limits: SuiteLimits; assertions: SuiteAssertion[];
 };
 export type AgentSuiteCase = AgentSuiteCaseV1 | AgentSuiteCaseV2;
-export type SuiteCase = DirectSuiteCase | AgentSuiteCase;
-export type SuiteDraftV1 = { version: 1; name: string; description?: string; cases: SuiteCase[] };
-export type SuiteDraftV2 = { version: 2; name: string; description?: string; cases: SuiteCase[] };
-export type SuiteDraft = SuiteDraftV1 | SuiteDraftV2;
-export type SuiteDetail = { name: string; source: string; suite: SuiteDraft };
+export type SuiteCaseV1 = DirectSuiteCase | AgentSuiteCaseV1;
+export type SuiteCaseV2 = DirectSuiteCase | AgentSuiteCaseV2;
+export type SuiteCase = SuiteCaseV1 | SuiteCaseV2;
+export type SuiteDraftV1 = { version: 1; name: string; description?: string; cases: SuiteCaseV1[] };
+export type SuiteDraftV2 = { version: 2; name: string; description?: string; cases: SuiteCaseV2[] };
+export type VersionedSuiteDraft = SuiteDraftV1 | SuiteDraftV2;
+/* Mutable composer compatibility; parsed drafts retain precise version discrimination. */
+export type SuiteDraft = { version: 1 | 2; name: string; description?: string; cases: SuiteCase[] };
+export type SuiteDetail = { name: string; source: string; suite: VersionedSuiteDraft };
+export type SuiteGenerationScope =
+  | { mode: 'scenarios'; caseCount: number; tools?: string[] }
+  | { mode: 'selected-tools'; tools: string[] }
+  | { mode: 'all-safe-tools' };
+
 export type SuiteGenerationRequest = {
   serverId: string;
   generatorProviderId: string;
@@ -44,6 +53,7 @@ export type SuiteGenerationRequest = {
   targetModel: string;
   name: string;
   authorInstructions?: string;
+  scope: SuiteGenerationScope;
 };
 export type SuiteGenerationDraft = {
   suite: SuiteDraftV2;
@@ -64,17 +74,20 @@ export type SecretReference =
   | { source: 'vault'; id: string }
   | { source: 'session'; id: string };
 
+export type ConfigurationSource = 'local' | 'repository';
+
 export type ServerSummary = {
   id: string;
   name: string;
   connected?: boolean;
+  source?: ConfigurationSource;
 } & (
   | { transport: 'stdio'; command: string; args: string[]; cwd?: string; envRefs: Record<string, string>; env: Record<string, SecretReference> }
   | { transport: 'http'; url: string; headerEnv: Record<string, string>; headers: Record<string, SecretReference>; staticAuth?: { header: string; scheme: string; credential: SecretReference }; allowUnsafeEndpoint: boolean; oauth?: { scopes: string[]; clientId?: string; clientSecretEnv?: string; clientSecret?: SecretReference; timeoutMs: number } }
 );
 
 export type ProviderSummary = {
-  id: string; name: string; type: 'openai-compatible' | 'anthropic-compatible'; baseUrl: string;
+  id: string; name: string; type: 'openai-compatible' | 'anthropic-compatible'; baseUrl: string; source?: ConfigurationSource;
   models: Record<string, { id: string; pricing: { inputPerMillion: number; outputPerMillion: number } }>;
   apiKeyEnv?: string; apiKey?: SecretReference; apiKeyConfigured?: boolean; headerEnv?: Record<string, string>; headers?: Record<string, SecretReference>;
   headerStatus?: Record<string, { source: string; reference: string; configured: boolean }>;
@@ -99,10 +112,25 @@ export type CaseResult = {
   iterations?: IterationObservation[];
 };
 
+export type RunProgress = {
+  phase: 'starting' | 'case_started' | 'iteration_started' | 'case_completed';
+  totalCases: number;
+  completedCases: number;
+  passedCases: number;
+  failedCases: number;
+  currentCaseId?: string;
+  currentCaseIndex?: number;
+  currentCaseKind?: 'direct' | 'agent';
+  currentIteration?: number;
+  totalIterations?: number;
+  updatedAt: string;
+};
+
 export type Run = {
   id: string; suite: string; status: string; startedAt: string; completedAt: string;
   summary: { total: number; passed: number; failed: number; passRate: number };
   cases: CaseResult[]; events: EventRecord[];
+  progress?: RunProgress;
 };
 
 export type ConformanceCheck = {
@@ -184,7 +212,15 @@ export type VaultStatus = {
   keyLocation: string;
 };
 
+export type WorkspaceSummary = {
+  configPath: string;
+  suiteDirectory: string;
+  configReadOnly: true;
+};
+
 export type Bootstrap = {
+  mode: 'local' | 'repository';
+  workspace?: WorkspaceSummary;
   servers: ServerSummary[];
   providers: ProviderSummary[];
   suites: string[];

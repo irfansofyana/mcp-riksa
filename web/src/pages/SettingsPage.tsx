@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { api } from '../api.js';
 import { Button, Empty, Field, Input, Notice, Section, Select, Status } from '../components.js';
 import { buildProviderPayload, providerToForm, type ProviderForm } from '../model.js';
-import type { ProviderSummary } from '../types.js';
+import type { ProviderSummary, WorkspaceSummary } from '../types.js';
 
 const initial = (): ProviderForm => ({
   id: '', name: '', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1',
@@ -10,7 +10,7 @@ const initial = (): ProviderForm => ({
   headerEnv: '',
 });
 
-export function SettingsPage({ providers, onRefresh }: { providers: ProviderSummary[]; onRefresh(): Promise<void> }) {
+export function SettingsPage({ providers, workspace, onRefresh }: { providers: ProviderSummary[]; workspace?: WorkspaceSummary; onRefresh(): Promise<void> }) {
   const [form, setForm] = useState(initial);
   const [editingId, setEditingId] = useState('');
   const [message, setMessage] = useState('');
@@ -27,9 +27,9 @@ export function SettingsPage({ providers, onRefresh }: { providers: ProviderSumm
   return <div className="settings-layout">
     <Section title="Model Providers" action={<span className="count">{providers.length}</span>}>
       <p className="section-copy">One provider can expose many model aliases. Suites and conversations select an alias; provider-specific model IDs stay centralized here.</p>
-      <div className="provider-list">{providers.length === 0 ? <Empty>Add an OpenAI-compatible or Anthropic-compatible private endpoint.</Empty> : providers.map((provider) => <div className="provider-row provider-card" key={provider.id}>
-        <div><div className="provider-title"><b>{provider.name}</b><Status value={provider.apiKeyConfigured ? 'credential ready' : 'no key'} /></div><small>{provider.type} · {provider.baseUrl}</small><div className="model-chips">{Object.entries(provider.models).map(([alias, model]) => <span key={alias}><b>{alias}</b><code>{model.id}</code><small>${model.pricing.inputPerMillion}/${model.pricing.outputPerMillion}</small></span>)}</div></div>
-        <div className="config-actions"><Button onClick={() => void act(async () => { const value = await api.testProvider(provider.id); setMessage(`Connection passed. ${value.models.length} model(s) available.`); })}>Test</Button><Button onClick={() => edit(provider)}>Edit</Button><Button onClick={() => duplicate(provider)}>Duplicate</Button><Button variant="danger" onClick={() => void act(async () => {
+      <div className="provider-list">{providers.length === 0 ? <Empty>{workspace ? `Add providers to ${workspace.configPath}, then restart MCP Riksa.` : 'Add an OpenAI-compatible or Anthropic-compatible private endpoint.'}</Empty> : providers.map((provider) => <div className="provider-row provider-card" key={provider.id}>
+        <div><div className="provider-title"><b>{provider.name}</b><Status value={provider.apiKeyConfigured ? 'credential ready' : 'no key'} />{provider.source === 'repository' ? <Status value="repository config" /> : null}</div><small>{provider.type} · {provider.baseUrl}</small><div className="model-chips">{Object.entries(provider.models).map(([alias, model]) => <span key={alias}><b>{alias}</b><code>{model.id}</code><small>${model.pricing.inputPerMillion}/${model.pricing.outputPerMillion}</small></span>)}</div></div>
+        <div className="config-actions"><Button onClick={() => void act(async () => { const value = await api.testProvider(provider.id); setMessage(`Connection passed. ${value.models.length} model(s) available.`); })}>Test</Button>{provider.source === 'repository' ? null : <><Button onClick={() => edit(provider)}>Edit</Button><Button onClick={() => duplicate(provider)}>Duplicate</Button><Button variant="danger" onClick={() => void act(async () => {
           try { await api.deleteProvider(provider.id); }
           catch (reason) {
             if (!(reason instanceof Error) || !reason.message.includes('referenced') || !window.confirm(`${reason.message}. Delete anyway? Saved suites and conversations will remain unresolved until this ID is restored.`)) throw reason;
@@ -37,12 +37,12 @@ export function SettingsPage({ providers, onRefresh }: { providers: ProviderSumm
           }
           if (editingId === provider.id) reset();
           await onRefresh(); setMessage('Model provider deleted.');
-        })}>Delete</Button></div>
+        })}>Delete</Button></>}</div>
       </div>)}</div>
     </Section>
 
-    <Section title={editingId ? `Edit provider · ${editingId}` : 'Add model provider'} action={editingId ? <Status value="editing" /> : undefined}>
-      <form className="form-grid" onSubmit={(event) => { event.preventDefault(); void act(async () => {
+    <Section title={workspace ? 'Repository configuration' : editingId ? `Edit provider · ${editingId}` : 'Add model provider'} action={workspace ? <Status value="read only" /> : editingId ? <Status value="editing" /> : undefined}>
+      {workspace ? <Notice>Providers come from <code>{workspace.configPath}</code>. Edit that file and restart MCP Riksa to apply changes. Provider connection tests remain available here.</Notice> : <form className="form-grid" onSubmit={(event) => { event.preventDefault(); void act(async () => {
         const payload = buildProviderPayload(form);
         if (editingId) await api.updateProvider(editingId, payload); else await api.addProvider(payload);
         await onRefresh(); setMessage(editingId ? 'Model provider updated.' : 'Model provider created.'); reset();
@@ -68,7 +68,7 @@ export function SettingsPage({ providers, onRefresh }: { providers: ProviderSumm
         <Field label="Custom header references" hint="One Header=env:ENV_NAME or Header=vault:secret-id per line."><Input value={form.headerEnv} onChange={(event) => change('headerEnv', event.target.value)} /></Field>
 
         <div className="form-actions"><Button variant="primary" type="submit" data-testid="save-provider">{editingId ? 'Save changes' : 'Create provider'}</Button>{editingId || form.id ? <Button type="button" onClick={reset}>Cancel</Button> : null}</div>
-      </form>
+      </form>}
       {message ? <Notice>{message}</Notice> : null}{error ? <Notice error>{error}</Notice> : null}
     </Section>
     <Section title="Security posture"><div className="definition-list"><div><b>Loopback service</b><span>Bound to 127.0.0.1 unless external access is explicitly enabled.</span></div><div><b>Credential references</b><span>Configuration stores environment, vault, or session references—never credential values.</span></div><div><b>Deletion safety</b><span>Referenced configurations require explicit confirmation. Historical suites, conversations, and runs remain local.</span></div></div></Section>

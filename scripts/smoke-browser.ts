@@ -217,6 +217,41 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     const serverCapture = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     writeFileSync(serverScreenshot, Buffer.from(String(serverCapture.data), 'base64'));
 
+    await navigate('suites');
+    await click('open-suite-generator');
+    await wait(`document.querySelector('.suite-launchpad[open]') && document.querySelector('[data-testid="suite-route-ai"]')?.getAttribute('aria-pressed') === 'true'`, 'AI suite creation launchpad');
+    await click('generation-goal-selected');
+    await wait(`document.querySelector('[data-testid="generation-tool-add"]')`, 'selected-tool generation controls');
+    await waitText('Select at least one tool.');
+    await click('generation-tool-add');
+    await waitText('Ready');
+    await click('generation-goal-all');
+    await waitText('Ready');
+    await click('generation-goal-scenarios');
+    await setValue('generation-name', 'smoke-generated');
+    await setValue('generation-instructions', 'Create one scenario that adds 2 and 3, then reports the result.');
+    await waitText('Ready');
+    await click('generate-suite-draft');
+    await wait(`document.querySelector('[data-testid="suite-generation-review"]')`, 'generated suite review', 30_000);
+    await wait(`document.activeElement === document.querySelector('[data-testid="suite-generation-review"] h3')`, 'focus moved to generated review summary');
+    await waitText('1 case · 1 expected tool call · 1 excluded');
+    const suiteScreenshot = join(options.outputDirectory, 'suite-creation.png');
+    const suiteCapture = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    writeFileSync(suiteScreenshot, Buffer.from(String(suiteCapture.data), 'base64'));
+    await click('apply-generated-suite');
+    await wait(`!document.querySelector('.suite-launchpad[open]')`, 'closed launchpad after using generated cases');
+    await wait(`document.querySelector('[data-testid="suite-name"]')?.value === 'smoke-generated' && document.querySelector('[data-testid="run-suite"]')?.hasAttribute('disabled')`, 'unsaved generated suite blocked from running');
+    await waitText('Current format · multi-turn ready');
+    await click('save-suite');
+    await waitText('Created smoke-generated with 1 case(s).');
+    await click('open-suite-generator');
+    await wait(`document.querySelector('.suite-launchpad[open]') && !document.querySelector('[data-testid="suite-generation-review"]')`, 'fresh suite creation session without stale result');
+    await click('suite-route-manual');
+    await setValue('generation-name', 'smoke-manual');
+    await click('create-manual-suite');
+    await wait(`!document.querySelector('.suite-launchpad[open]') && document.querySelector('[data-testid="suite-name"]')?.value === 'smoke-manual'`, 'manual suite from unified creation flow');
+    steps.push('suite-creation-checked');
+
     await navigate('playground');
     await setValue('playground-server', 'sample');
     await setValue('playground-provider', 'local');
@@ -252,22 +287,87 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     await waitText('Interaction saved as a versioned YAML suite.');
     steps.push('suite-saved');
 
-    const runAndInspect = async (step: string) => {
+    await navigate('suites');
+    await clickText('button', 'smoke-generated');
+    await wait(`!document.querySelector('[data-testid="run-suite"]')?.hasAttribute('disabled')`, 'clean generated suite runner');
+    await clickText('.suite-view-tabs button', 'YAML');
+    const dirtySource = await evaluate<string>(`document.querySelector('[data-testid="suite-source"]')?.value + ${JSON.stringify('\n# unsaved browser edit\n')}`);
+    await setValue('suite-source', dirtySource);
+    await evaluate(`window.confirm=()=>false`);
+    await clickText('button', 'smoke-agent');
+    await wait(`document.querySelector('[data-testid="suite-source"]')?.value.includes('# unsaved browser edit') && document.querySelector('.row-button.selected b')?.textContent === 'smoke-generated'`, 'dirty YAML protected when discard is rejected');
+    await evaluate(`window.confirm=()=>true`);
+    await clickText('button', 'smoke-agent');
+    await wait(`document.querySelector('.row-button.selected b')?.textContent === 'smoke-agent' && !document.querySelector('[data-testid="run-suite"]')?.hasAttribute('disabled')`, 'saved suite selected after discard confirmation');
+    await clickText('.suite-view-tabs button', 'Builder');
+    await clickText('.case-rail button', '+ Direct');
+    await setValue('direct-arguments-json', '{');
+    await wait(`document.querySelector('[data-testid="save-suite"]')?.hasAttribute('disabled')`, 'invalid direct arguments block save');
+    await evaluate(`document.querySelector('.case-list button')?.click()`);
+    await wait(`!document.querySelector('[data-testid="save-suite"]')?.hasAttribute('disabled')`, 'discarded direct arguments release save');
+    await evaluate(`([...document.querySelectorAll('.case-list button')].at(-1))?.click()`);
+    await clickText('.case-composer-head button', 'Remove');
+    await wait(`!document.querySelector('[data-testid="run-suite"]')?.hasAttribute('disabled')`, 'clean suite restored after direct editor cleanup');
+    steps.push('direct-editor-cleanup-checked');
+
+    const originalCaseId = await evaluate<string>(`document.querySelector('.case-list button:first-child b')?.textContent`);
+    await clickText('.case-rail button', '+ Agent');
+    await setValue('case-id', originalCaseId);
+    await wait(`document.querySelector('[data-testid="save-suite"]')?.hasAttribute('disabled')`, 'duplicate case ID blocks save');
+    await evaluate(`document.querySelector('.case-list button:first-child')?.click()`);
+    await wait(`!document.querySelector('[data-testid="save-suite"]')?.hasAttribute('disabled')`, 'discarded duplicate case ID releases save');
+    await evaluate(`([...document.querySelectorAll('.case-list button')].at(-1))?.click()`);
+    await clickText('.case-composer-head button', 'Remove');
+    await wait(`!document.querySelector('[data-testid="run-suite"]')?.hasAttribute('disabled')`, 'clean suite restored after case ID cleanup');
+    steps.push('case-id-cleanup-checked');
+
+    const originalTurnId = await evaluate<string>(`document.querySelector('[data-testid="turn-id-0"]')?.value`);
+    await clickText('.case-section.assertions-editor button', '+ User turn');
+    await setValue('turn-id-1', originalTurnId);
+    await wait(`document.querySelector('[data-testid="save-suite"]')?.hasAttribute('disabled')`, 'duplicate turn ID blocks save');
+    await click('remove-turn-1');
+    await wait(`!document.querySelector('[data-testid="run-suite"]')?.hasAttribute('disabled')`, 'removed duplicate turn ID releases run');
+    steps.push('turn-id-cleanup-checked');
+
+    const runAndInspect = async (step: string, injectTransientFailure = false) => {
       await navigate('suites');
       await clickText('button', 'smoke-agent');
       await wait(`!document.querySelector('[data-testid="run-suite"]')?.hasAttribute('disabled')`, 'enabled suite runner');
       await click('run-suite');
       await wait(`document.querySelector('.page-heading h1')?.textContent === 'Runs'`, 'Runs page after suite start');
+      await wait(`document.querySelector('.run-progress [role="progressbar"]') && document.querySelector('.run-progress-activity > b')?.getAttribute('aria-live') === 'polite' && !document.querySelector('.run-progress-activity')?.hasAttribute('aria-live') && document.body.textContent?.includes('Live execution')`, 'live suite progress');
+      steps.push(`${step}-live-progress`);
+      if (injectTransientFailure) {
+        const activeRunId = await evaluate<string>(`document.querySelector('.runs-rail .row-button.selected')?.dataset.runId`);
+        await evaluate(`(() => { const original=window.fetch.bind(window); let failed=false; window.__originalPollFetch=original; window.fetch=(input, init) => { if (!failed && String(input).endsWith('/api/runs/${activeRunId}')) { failed=true; return Promise.reject(new TypeError('transient run poll')); } return original(input, init); }; })()`);
+      }
       for (let attempt = 0; attempt < 80; attempt += 1) {
-        await clickText('button', 'Refresh');
         await new Promise((resolveWait) => setTimeout(resolveWait, 150));
         const ready = await evaluate<boolean>(`document.body.textContent?.includes('Model turns & MCP timeline') && document.body.textContent?.includes('passed')`);
-        if (ready) { steps.push(step); return; }
+        if (ready) { if (injectTransientFailure) { await evaluate(`window.fetch=window.__originalPollFetch; delete window.__originalPollFetch`); steps.push('run-poll-recovered'); } steps.push(step); return; }
       }
       throw new Error('Suite run did not become inspectable');
     };
-    await runAndInspect('first-run-inspected');
+    await runAndInspect('first-run-inspected', true);
     await runAndInspect('second-run-inspected');
+
+    const runIds = await evaluate<string[]>(`[...document.querySelectorAll('.runs-rail [data-run-id]')].map((entry)=>entry.dataset.runId)`);
+    if (runIds.length < 2) throw new Error('Expected two runs for stale-refresh coverage');
+    await evaluate(`(() => { const original=window.fetch.bind(window); window.__originalRunFetch=original; window.fetch=(input, init) => String(input).endsWith('/api/runs/${runIds[0]}') ? new Promise((resolve, reject) => setTimeout(() => original(input, init).then(resolve, reject), 500)) : original(input, init); })()`);
+    await clickText('button', 'Refresh');
+    await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+    await evaluate(`document.querySelector('[data-run-id="${runIds[1]}"]').click()`);
+    await wait(`document.querySelector('.run-heading h1 span')?.textContent?.includes('${runIds[1]!.slice(0, 12)}')`, 'new run selected during stale refresh');
+    await new Promise((resolveWait) => setTimeout(resolveWait, 650));
+    const stayedSelected = await evaluate<boolean>(`document.querySelector('.run-heading h1 span')?.textContent?.includes('${runIds[1]!.slice(0, 12)}')`);
+    await evaluate(`window.fetch=window.__originalRunFetch; delete window.__originalRunFetch`);
+    if (!stayedSelected) throw new Error('Stale Refresh response replaced newly selected run');
+    steps.push('run-refresh-race-guarded');
+    await evaluate(`document.querySelector('[data-run-id="${runIds[1]}"]').click()`);
+    await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+    const detailStayedOpen = await evaluate<boolean>(`document.querySelector('.run-heading h1 span')?.textContent?.includes('${runIds[1]!.slice(0, 12)}')`);
+    if (!detailStayedOpen) throw new Error('Reselecting active run cleared its detail');
+    steps.push('active-run-reselection-guarded');
 
     const desktopScreenshot = join(options.outputDirectory, 'desktop.png');
     const desktop = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
@@ -298,13 +398,17 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     await wait(`(() => { const rail=document.querySelector('.nav-rail'); const active=rail?.querySelector('a.active'); if(!rail||!active)return false; const outer=rail.getBoundingClientRect(); const inner=active.getBoundingClientRect(); return inner.left >= outer.left && inner.right <= outer.right; })()`, 'active mobile conformance navigation');
     await wait(`(() => { const brand=document.querySelector('.brand'); const mark=brand?.querySelector('.brand-mark'); const label=brand?.querySelector('span'); if(!brand||!mark||!label)return false; const outer=brand.getBoundingClientRect(); const icon=mark.getBoundingClientRect(); return getComputedStyle(label).display === 'none' && icon.width >= 24 && icon.height >= 24 && icon.left >= outer.left && icon.right <= outer.right; })()`, 'visible mobile MCP Riksa mark');
     await wait(`document.documentElement.scrollWidth <= window.innerWidth + 1`, 'mobile conformance layout without horizontal overflow');
+    await navigate('suites');
+    await click('open-suite-generator');
+    await wait(`(() => { const dialog=document.querySelector('.suite-launchpad[open]'); return dialog && dialog.scrollWidth <= dialog.clientWidth + 1 && document.documentElement.scrollWidth <= window.innerWidth + 1; })()`, 'mobile suite launchpad without horizontal overflow');
+    await clickText('.suite-launchpad button', 'Close');
     await navigate('runs');
     await wait(`document.documentElement.scrollWidth <= window.innerWidth + 1`, 'mobile layout without horizontal overflow');
     const mobileScreenshot = join(options.outputDirectory, 'mobile.png');
     const mobile = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     writeFileSync(mobileScreenshot, Buffer.from(String(mobile.data), 'base64'));
     steps.push('mobile-checked');
-    return { steps, consoleErrors, lightScreenshot, secretsScreenshot, providersScreenshot, serverScreenshot, playgroundScreenshot, playgroundTraceScreenshot, desktopScreenshot, mobileScreenshot };
+    return { steps, consoleErrors, lightScreenshot, secretsScreenshot, providersScreenshot, serverScreenshot, suiteScreenshot, playgroundScreenshot, playgroundTraceScreenshot, desktopScreenshot, mobileScreenshot };
   } finally {
     cdp.close();
     if (child.exitCode === null) {

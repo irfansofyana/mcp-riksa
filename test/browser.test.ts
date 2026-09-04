@@ -38,7 +38,7 @@ describe('browser success path', () => {
     const directory = mkdtempSync(join(tmpdir(), 'mcp-browser-'));
     directories.push(directory);
     const tsx = resolve('node_modules/tsx/dist/cli.mjs');
-    const fake = await start(process.execPath, [tsx, resolve('scripts/fake-provider.ts'), '--port', '0'], /Fake provider listening at (http:\/\/127\.0\.0\.1:\d+)/);
+    const fake = await start(process.execPath, [tsx, resolve('scripts/fake-provider.ts'), '--port', '0', '--delay-ms', '250'], /Fake provider listening at (http:\/\/127\.0\.0\.1:\d+)/);
     const providerUrl = fake.match[1]!;
     const app = await start(
       process.execPath,
@@ -55,13 +55,17 @@ describe('browser success path', () => {
       throw new Error(`${error instanceof Error ? error.message : String(error)}\nAPP PROCESS:\n${app.output()}\nFAKE PROVIDER:\n${fake.output()}`);
     }
     expect(result.steps).toEqual([
-      'theme-checked', 'secret-managed', 'provider-added', 'server-added', 'server-inspected', 'tool-invoked', 'playground-complete',
-      'suite-saved', 'first-run-inspected', 'second-run-inspected', 'conformance-page-checked', 'runs-compared', 'mobile-checked',
+      'theme-checked', 'secret-managed', 'provider-added', 'server-added', 'server-inspected', 'tool-invoked', 'suite-creation-checked',
+      'playground-complete', 'suite-saved', 'direct-editor-cleanup-checked', 'case-id-cleanup-checked',
+      'turn-id-cleanup-checked', 'first-run-inspected-live-progress', 'run-poll-recovered', 'first-run-inspected',
+      'second-run-inspected-live-progress', 'second-run-inspected', 'run-refresh-race-guarded',
+      'active-run-reselection-guarded', 'conformance-page-checked', 'runs-compared', 'mobile-checked',
     ]);
     expect(result.consoleErrors).toEqual([]);
     expect(result.lightScreenshot).toMatch(/light-mode\.png$/);
     expect(result.secretsScreenshot).toMatch(/secrets\.png$/);
     expect(result.serverScreenshot).toMatch(/stdio-server\.png$/);
+    expect(result.suiteScreenshot).toMatch(/suite-creation\.png$/);
     expect(result.desktopScreenshot).toMatch(/desktop\.png$/);
     expect(result.mobileScreenshot).toMatch(/mobile\.png$/);
   }, 120_000);

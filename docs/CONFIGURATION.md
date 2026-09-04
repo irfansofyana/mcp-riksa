@@ -4,6 +4,22 @@
 
 Browser edits persist in SQLite. Configuration passed via `serve --config` seeds missing entries without overwriting browser edits; deleting a seeded entry creates a local tombstone so it stays deleted across restarts. Headless `run --config` is authoritative for that run — it does not read or write the browser's SQLite state.
 
+## Repository-managed configuration
+
+`serve --workspace <path>` makes `<workspace>/mcp-riksa.config.yaml` authoritative for that process:
+
+```bash
+mcp-riksa serve --workspace .
+```
+
+Repository providers and servers are loaded fresh on startup, are not copied into SQLite, and cannot be created, edited, duplicated, or deleted through the UI. Connection tests, MCP inspection, OAuth, Playground, suite generation, and suite execution remain available. Edit YAML and restart to apply changes.
+
+Repository mode intentionally ignores provider/server rows and tombstones in the runtime database. Those rows remain untouched and become visible again when starting the same data directory in legacy local mode. This avoids destructive configuration migration while ensuring every teammate gets the committed configuration.
+
+Use environment references for portable team configuration. Vault and session IDs belong to one local workbench and should not be committed as shared assumptions.
+
+Relative stdio working directories resolve from the workspace root. When `cwd` is omitted, stdio servers start from the workspace root.
+
 ## Providers
 
 Provider configs support:

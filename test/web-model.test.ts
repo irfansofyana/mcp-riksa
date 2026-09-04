@@ -19,7 +19,9 @@ import {
   pages,
   signedDelta,
   traceWindowMs,
+  upgradeSuiteDraftToV2,
 } from '../web/src/model.js';
+import type { VersionedSuiteDraft } from '../web/src/types.js';
 import { expectedToolNames } from '../web/src/pages/RunsPage.js';
 import {
   THEME_STORAGE_KEY,
@@ -211,16 +213,25 @@ describe('workbench browser view model', () => {
     expect(() => buildToolArguments(dateFields, { startsAt: 'not-a-date' })).toThrow(/valid date-time/i);
   });
 
-  test('creates a versioned agent suite from a playground interaction', () => {
+  test('creates a v2 single-turn agent suite from a playground interaction', () => {
     const source = buildSuiteFromPlayground({ name: 'saved-playground', server: 'sample', provider: 'local', model: 'fast', prompt: 'Add 2 and 3', expectedText: '5' });
-    expect(source).toContain('version: 1');
-    expect(source).toContain('kind: agent');
-    expect(source).toContain('provider: local');
+    expect(parseSuiteDraft(source)).toEqual({
+      version: 2,
+      name: 'saved-playground',
+      cases: [{
+        id: 'saved-playground-case', kind: 'agent', server: 'sample', provider: 'local', model: 'fast',
+        turns: [{ id: 'turn-1', user: 'Add 2 and 3', assertions: [] }],
+        iterations: { count: 1, minPasses: 1 },
+        limits: { maxTurns: 8, maxToolCalls: 16, timeoutMs: 60_000 },
+        assertions: [{ type: 'contains', value: '5' }],
+      }],
+    });
     expect(source).not.toMatch(/api[_-]?key|token:/i);
   });
 
   test('round-trips visual suite drafts through portable YAML', () => {
     const draft = createSuiteDraft('checkout-regression', 'sample');
+    expect(draft.version).toBe(2);
     draft.description = 'Critical checkout tool contract';
     const direct = draft.cases[0]!;
     expect(direct.kind).toBe('direct');
@@ -236,7 +247,7 @@ describe('workbench browser view model', () => {
     expect(parseSuiteDraft(source)).toEqual(draft);
   });
 
-  test('accepts core-compatible v1 tool assertions and defaults omitted v2 iterations', () => {
+  test('accepts core-compatible v1 cases and defaults omitted v2 iterations', () => {
     const v1 = parseSuiteDraft(`version: 1
 name: v1-tool
 cases:
@@ -246,8 +257,17 @@ cases:
     call: { tool: add, arguments: {} }
     assertions:
       - { type: tool, tool: add, success: true }
+  - id: agent
+    kind: agent
+    server: sample
+    provider: local
+    model: default
+    prompt: Add 2 and 3
+    limits: { maxTurns: 2, maxToolCalls: 2, timeoutMs: 5000 }
+    assertions: []
 `);
     expect(v1.cases[0]?.assertions).toEqual([{ type: 'tool', tool: 'add', success: true }]);
+    expect(v1.cases[1]).toMatchObject({ kind: 'agent', prompt: 'Add 2 and 3' });
 
     const v2 = parseSuiteDraft(`version: 2
 name: v2-defaults
@@ -280,6 +300,62 @@ cases:
 `)).toThrow(/valid iterations/i);
   });
 
+  test('discriminates agent shape by suite version while allowing direct cases in both', () => {
+    const agentText = (draft: VersionedSuiteDraft): string => {
+      if (draft.version === 1) {
+        const agent = draft.cases.find((entry) => entry.kind === 'agent');
+        return agent?.kind === 'agent' ? agent.prompt : '';
+      }
+      const agent = draft.cases.find((entry) => entry.kind === 'agent');
+      return agent?.kind === 'agent' ? agent.turns[0]?.user ?? '' : '';
+    };
+    expect(agentText(parseSuiteDraft(`version: 1\nname: old\ncases:\n  - { id: direct, kind: direct, server: sample, call: { tool: add, arguments: {} }, assertions: [] }\n  - { id: agent, kind: agent, server: sample, provider: local, model: fast, prompt: old prompt, limits: { maxTurns: 2, maxToolCalls: 2, timeoutMs: 5000 }, assertions: [] }\n`))).toBe('old prompt');
+    expect(agentText(parseSuiteDraft(`version: 2\nname: current\ncases:\n  - { id: direct, kind: direct, server: sample, call: { tool: add, arguments: {} }, assertions: [] }\n  - { id: agent, kind: agent, server: sample, provider: local, model: fast, turns: [{ id: turn-1, user: current prompt, assertions: [] }], iterations: { count: 1, minPasses: 1 }, limits: { maxTurns: 2, maxToolCalls: 2, timeoutMs: 5000 }, assertions: [] }\n`))).toBe('current prompt');
+  });
+
+  test('upgrades v1 agents without changing direct cases or agent execution settings', () => {
+    const v1 = parseSuiteDraft(`version: 1
+name: mixed-suite
+description: Preserve me
+cases:
+  - id: direct
+    kind: direct
+    server: sample
+    call: { tool: add, arguments: { a: 2, b: 3 }, dangerous: true }
+    assertions: [{ type: jsonpath, path: $.value, equals: 5 }]
+  - id: agent
+    kind: agent
+    server: sample
+    provider: local
+    model: quality
+    prompt: Add 2 and 3
+    limits: { maxTurns: 4, maxToolCalls: 3, timeoutMs: 9000, maxCostUsd: 0.25 }
+    assertions: [{ type: contains, value: "5" }]
+`);
+    const upgraded = upgradeSuiteDraftToV2(v1);
+    expect(upgraded).toEqual({
+      version: 2,
+      name: 'mixed-suite',
+      description: 'Preserve me',
+      cases: [
+        {
+          id: 'direct', kind: 'direct', server: 'sample',
+          call: { tool: 'add', arguments: { a: 2, b: 3 }, dangerous: true },
+          assertions: [{ type: 'jsonpath', path: '$.value', equals: 5 }],
+        },
+        {
+          id: 'agent', kind: 'agent', server: 'sample', provider: 'local', model: 'quality',
+          turns: [{ id: 'turn-1', user: 'Add 2 and 3', assertions: [] }],
+          iterations: { count: 1, minPasses: 1 },
+          limits: { maxTurns: 4, maxToolCalls: 3, timeoutMs: 9000, maxCostUsd: 0.25 },
+          assertions: [{ type: 'contains', value: '5' }],
+        },
+      ],
+    });
+    expect(upgraded.cases[0]).not.toBe(v1.cases[0]);
+    expect(upgradeSuiteDraftToV2(upgraded)).toEqual(upgraded);
+  });
+
   test('includes tool invocation assertions in expected-tool summaries', () => {
     expect(expectedToolNames([
       { assertion: { type: 'tool_called', tool: 'add' }, passed: true, message: '' },
@@ -287,6 +363,33 @@ cases:
       { assertion: { type: 'tool_count', tool: 'ignored' }, passed: true, message: '' },
       { assertion: { type: 'tool_not_called', tool: 'delete' }, passed: true, message: '' },
     ])).toEqual(['add', 'lookup']);
+  });
+
+  test('hydrates core-compatible omitted suite defaults for browser editing', () => {
+    const draft = parseSuiteDraft(`version: 2
+name: omitted-defaults
+cases:
+  - id: direct
+    kind: direct
+    server: sample
+    call: { tool: add }
+  - id: agent
+    kind: agent
+    server: sample
+    provider: local
+    model: default
+    turns:
+      - id: request
+        user: Add 2 and 3
+        assertions: []
+`);
+    expect(draft.cases[0]).toMatchObject({ kind: 'direct', call: { tool: 'add', arguments: {} }, assertions: [] });
+    expect(draft.cases[1]).toMatchObject({
+      kind: 'agent',
+      iterations: { count: 1, minPasses: 1 },
+      limits: { maxTurns: 8, maxToolCalls: 16, timeoutMs: 60_000 },
+      assertions: [],
+    });
   });
 
   test('rejects malformed YAML before opening it in the visual composer', () => {
@@ -299,7 +402,7 @@ cases:
   test('duplicates suites with collision-safe names and independent cases', () => {
     const original = createSuiteDraft('sample-suite', 'sample');
     original.description = 'Regression';
-    const duplicate = duplicateSuiteDraft(original, ['sample-suite', 'sample-suite-copy']);
+    const duplicate = duplicateSuiteDraft(original, ['sample-suite', 'SAMPLE-SUITE-COPY']);
     expect(duplicate).toMatchObject({ name: 'sample-suite-copy-2', description: 'Regression (copy)' });
     expect(duplicate.cases).not.toBe(original.cases);
   });

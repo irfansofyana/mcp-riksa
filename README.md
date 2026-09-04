@@ -21,6 +21,32 @@ npx mcp-riksa serve --config ./mcp-riksa.config.yaml
 
 Open `http://127.0.0.1:4317`. By default, runtime state is stored in `.mcp-riksa` relative to current directory. Set `MCP_RIKSA_DATA_HOME` or pass `--data-dir` for a personal shared workbench; see [Headless CLI](docs/CLI.md#runtime-data-directory).
 
+## Repository workspace
+
+Commit configuration and portable suites while keeping runtime state ignored:
+
+```text
+project/
+├── mcp-riksa.config.yaml
+├── suites/
+│   └── smoke.yaml
+└── .mcp-riksa/       # ignored
+```
+
+```bash
+mcp-riksa serve --workspace .
+```
+
+Repository mode loads `mcp-riksa.config.yaml` as authoritative, read-only configuration, reads and writes suites in `suites/`, and stores history plus encrypted vault data in `.mcp-riksa/`. Authenticate OAuth servers and execute suites through the browser. OAuth tokens remain process-memory only.
+
+Use explicit paths for a custom layout:
+
+```bash
+mcp-riksa serve --workspace . --config ./mcp-riksa.config.yaml --suites-dir ./suites --data-dir ./.mcp-riksa
+```
+
+Without `--workspace`, `--config` retains legacy seed semantics. See [Headless CLI](docs/CLI.md#repository-workspace).
+
 ## Try it against the bundled sample
 
 ```bash
@@ -49,7 +75,7 @@ The API key stays in the process environment — the config only ever stores `{ 
 
 ![Write-only encrypted and session secret management](docs/screenshots/secrets.png)
 
-**Compose portable test suites visually.** Add tool-call expectations, assertions, and cost/duration budgets through a case composer, hand-author the underlying YAML, or use a configured model to generate a reviewable agent-suite draft from live MCP tool metadata. Draft generation never invokes tools, saves files, or starts runs.
+**Compose portable test suites visually.** Add tool-call expectations, assertions, and cost/duration budgets through a case composer, hand-author the underlying YAML, or generate a reviewable draft for specific scenarios, selected tools, or every safe tool. Draft generation reads live MCP metadata but never invokes tools, saves files, or starts runs.
 
 **Inspect a completed evaluation.** The browser and CLI share the same suite runner, so a run's trace — provider turns, MCP tool calls, latency, tokens, estimated cost, assertions — looks identical whether it ran interactively or headless.
 
@@ -60,7 +86,7 @@ The API key stays in the process environment — the config only ever stores `{ 
 - [Configuration](docs/CONFIGURATION.md) — providers, secrets, OAuth, static auth
 - [Suite format](docs/SUITES.md) — assertions, direct vs. agent cases, the visual composer
 - [Playground](docs/PLAYGROUND.md) — the interactive chat/tool-call workspace
-- [Headless CLI](docs/CLI.md) — running suites outside the browser, CI usage
+- [CLI and repository workspace](docs/CLI.md) — browser OAuth workspaces, headless suites, CI usage
 - [Security boundaries](docs/SECURITY.md) — what MCP Riksa protects against, and what it doesn't
 - [Development](docs/DEVELOPMENT.md) — local setup, verification, releasing to npm
 

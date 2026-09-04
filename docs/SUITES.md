@@ -58,19 +58,44 @@ Supported assertion types:
 
 See [`examples/sample-suite.yaml`](../examples/sample-suite.yaml) for a direct-tool suite and [`examples/sample-agent-suite.yaml`](../examples/sample-agent-suite.yaml) for an agent suite.
 
+## Repository suite directory
+
+Use `serve --workspace .` to load portable suites from `./suites`, or override it with `--suites-dir <path>`. Repository suite files remain fully editable through the browser and can be committed directly; runtime history and secrets stay under `.mcp-riksa`.
+
+Suite directories are flat. Every file must end in `.yaml`, its filename must equal `<suite.name>.yaml`, symbolic links are rejected, and case-insensitive name collisions fail startup. External file edits require restart in this release.
+
+To migrate suites from legacy project storage:
+
+```bash
+mkdir -p suites
+cp .mcp-riksa/suites/*.yaml suites/
+```
+
+Review files before committing; migration is never automatic.
+
 ## Composing suites in the browser
 
-The **Suites** workspace has a visual case composer for both direct and agent cases — add expected tool calls, output assertions, JSONPath checks, and budgets without hand-authoring YAML. The YAML tab stays canonical: visual edits serialize to strict versioned suite YAML that commits and runs unchanged through the CLI or CI.
+Choose **Create suite** once, then select **Generate with AI** or **Build manually**. Both routes produce an unsaved draft in the same visual composer for direct and agent cases. Add expected tool calls, output assertions, JSONPath checks, and budgets without hand-authoring YAML. The YAML tab stays canonical: visual edits serialize to strict versioned suite YAML that commits and runs unchanged through the CLI or CI.
 
-Existing suite files load back into the visual composer, and raw YAML stays editable for anything the composer doesn't cover. The suite library supports full CRUD — create, load/edit, rename, duplicate, delete. Renaming moves the underlying YAML file; deleting removes only the suite definition and keeps historical run evidence intact.
+New browser-authored suites use the current multi-turn-capable format. Existing Version 1 files still load and remain editable; the composer labels them as legacy and offers an explicit one-way upgrade instead of asking authors to choose a schema version during creation.
+
+Existing suite files load back into the visual composer, and raw YAML stays editable for anything the composer doesn't cover. The suite library supports full CRUD — create, load/edit, rename, duplicate, delete. Renaming moves the underlying YAML file; deleting removes only the suite definition and keeps historical run evidence intact. Unsaved or edited suites cannot run until saved, preventing a visible draft from accidentally running older persisted YAML.
 
 ## Generate an agent suite draft
 
-Choose **Generate draft** in the Suites workspace to turn a connected server's live tool names, descriptions, and input schemas into a reviewable Version 2 agent suite. Select the configured provider/model that authors the cases separately from the provider/model the cases will evaluate. Optional guidance can supply safe fixture IDs, realistic domain values, and forbidden actions.
+In **Create suite**, choose **Generate with AI** to turn a connected server's live tool names, descriptions, and input schemas into a reviewable agent suite. Select the configured **AI author** provider/model separately from the **Model to test**, then choose a generation goal:
 
-Generation is draft-only. It never invokes MCP tools, saves a suite file, or starts a run. Tools declaring `annotations.destructiveHint: true` are excluded before model generation; the model must either create one case for every remaining tool or exclude it with a concrete uncertainty reason. Missing destructive annotations are not proof that a tool is safe.
+- **Specific scenarios** — describe one to eight workflows. The author chooses only relevant expected tools, can plan multiple calls per case, and does not force unrelated tool coverage. Optionally restrict which safe tools it may use.
+- **Selected tool coverage** — select explicit tools. The author must create or justify excluding exactly those tools; unrelated safe tools stay outside the ledger.
+- **All safe tools** — preserve exhaustive behavior. The author must create a case for every non-destructive tool or exclude it with a concrete uncertainty reason.
 
-Review the coverage ledger, open the result in the composer, inspect every prompt and assertion, then save explicitly. Running the saved suite executes real MCP tools and may cause side effects. Generated exclusion reasons belong to the current review session and are not written into portable suite YAML.
+Generation is draft-only. It never invokes MCP tools, saves a suite file, or starts a run. Tools declaring `annotations.destructiveHint: true` are excluded before model generation and cannot be selected. Missing destructive annotations are not proof that a tool is safe. Fixture and domain guidance can supply known IDs, realistic values, and forbidden actions, but it never changes the structured generation scope.
+
+Review generated cases, expected tool calls, and exclusions; choose **Use generated cases**; inspect every prompt and assertion in the composer; then save explicitly. Starting another creation session always clears the previous generated review. Running the saved suite executes real MCP tools and may cause side effects. Generated exclusion reasons belong to the current review session and are not written into portable suite YAML.
+
+## Live run progress
+
+Starting a suite opens its Runs view immediately. While execution is active, the workbench refreshes automatically and reports completed/total cases, pass/fail counts, remaining cases, elapsed time, the active case, and the current iteration for sampled Version 2 cases. Final case evidence, model/tool timelines, and assertion details replace the live panel when execution finishes; manual Refresh is not required.
 
 ## Playground → suite
 

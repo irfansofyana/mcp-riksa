@@ -7,6 +7,8 @@
 - Stdio servers and the official conformance runner spawn fixed executables with argument arrays — no shell. Conformance children get a minimal environment, bounded output, a timeout, cancellation, and a forced-kill fallback.
 - Only tools that declare `annotations.destructiveHint: true` require confirmation before being called. Missing annotations do not imply destructive behavior, and don't block manual, Playground, or agent-suite calls — because annotations are server-provided hints, only connect MCP servers you trust.
 - The runtime redacts authorization headers, cookies, token fields, URL query secrets, bearer strings, and nested payloads before anything reaches SQLite, API responses, logs, or reports.
+- Repository mode keeps committed config and suites outside `.mcp-riksa`. Config is authoritative and read-only through the API; suite YAML remains writable by design. OAuth access tokens, refresh tokens, authorization codes, and PKCE verifiers remain process-memory only and must be reacquired after restart.
+- Commit only secret references such as `{ source: env, name: OPENAI_API_KEY }`. Vault/session IDs are machine-local; never commit plaintext credentials.
 - SQLite runs in WAL mode with forward-only migrations, transactional writes, recovery for interrupted runs/conformance jobs, immutable run/playground event rows, tombstones for deleted seeded config, and sanitized conformance/playground history.
 
 ## MCP conformance runner
