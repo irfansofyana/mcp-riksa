@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -458,6 +458,99 @@ describe('concrete workbench runtime', () => {
     expect(await restored.seedServer({ id: 'sample', name: 'Seed', transport: 'stdio', command: process.execPath, args: [], envRefs: {}, env: {} })).toBe(false);
     expect((await restored.bootstrap() as { providers: unknown[]; servers: unknown[] })).toMatchObject({ providers: [], servers: [] });
     await restored.close();
+  });
+
+  test('loads repository configuration authoritatively without mutating local configuration', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'mcp-repository-runtime-'));
+    directories.push(directory);
+    const databasePath = join(directory, 'state', 'workbench.db');
+    mkdirSync(join(directory, 'state'));
+    const localSuites = join(directory, 'local-suites');
+    const repositorySuites = join(directory, 'repo', 'suites');
+    mkdirSync(repositorySuites, { recursive: true });
+    writeFileSync(join(repositorySuites, 'repo-smoke.yaml'), `version: 1
+name: repo-smoke
+cases:
+  - id: smoke
+    kind: direct
+    server: managed-server
+    call: { tool: ping, arguments: {} }
+    assertions: []
+`);
+
+    const local = new WorkbenchRuntime({ databasePath, suiteDirectory: localSuites, callbackUrl: 'http://127.0.0.1:4317/api/oauth/callback' });
+    await local.addProvider({
+      id: 'local-provider', name: 'Local provider', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4000/v1',
+      models: { default: model('local') }, headerEnv: {}, headers: {},
+    });
+    await local.addServer({ id: 'local-server', name: 'Local server', transport: 'stdio', command: process.execPath, args: [], envRefs: {}, env: {} });
+    await local.close();
+
+    const configPath = join(directory, 'repo', 'mcp-riksa.config.yaml');
+    const repository = new WorkbenchRuntime({
+      databasePath,
+      suiteDirectory: repositorySuites,
+      callbackUrl: 'http://127.0.0.1:4317/api/oauth/callback',
+      repositoryWorkspace: { workspaceDirectory: join(directory, 'repo'), configPath },
+    });
+    await expect(repository.initializeRepositoryConfiguration({
+      providers: [
+        { id: 'duplicate', name: 'First', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4001/v1', models: { default: model('first') }, headerEnv: {}, headers: {} },
+        { id: 'duplicate', name: 'Second', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4002/v1', models: { default: model('second') }, headerEnv: {}, headers: {} },
+      ],
+      servers: [],
+    })).rejects.toMatchObject({ status: 400 });
+    await repository.initializeRepositoryConfiguration({
+      providers: [{
+        id: 'managed-provider', name: 'Managed provider', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4001/v1',
+        models: { default: model('managed') }, headerEnv: {}, headers: {},
+      }],
+      servers: [{ id: 'managed-server', name: 'Managed server', transport: 'stdio', command: process.execPath, args: [], envRefs: {}, env: {} }],
+    });
+
+    expect(await repository.bootstrap()).toMatchObject({
+      mode: 'repository',
+      workspace: { configPath, suiteDirectory: repositorySuites, configReadOnly: true },
+      suites: ['repo-smoke'],
+      providers: [{ id: 'managed-provider', source: 'repository' }],
+      servers: [{ id: 'managed-server', source: 'repository', cwd: join(directory, 'repo') }],
+    });
+    await expect(repository.createProvider({
+      id: 'blocked', name: 'Blocked', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:4002/v1',
+      models: { default: model('blocked') }, headerEnv: {}, headers: {},
+    })).rejects.toMatchObject({ status: 409 });
+    await expect(repository.updateServer('managed-server', {
+      id: 'managed-server', name: 'Changed', transport: 'stdio', command: process.execPath, args: [], envRefs: {}, env: {},
+    })).rejects.toMatchObject({ status: 409 });
+    await repository.initializeRepositoryConfiguration({ providers: [], servers: [] });
+    expect(await repository.bootstrap()).toMatchObject({ providers: [], servers: [] });
+    await repository.close();
+
+    const restoredLocal = new WorkbenchRuntime({ databasePath, suiteDirectory: localSuites, callbackUrl: 'http://127.0.0.1:4317/api/oauth/callback' });
+    expect(await restoredLocal.bootstrap()).toMatchObject({
+      mode: 'local',
+      providers: [{ id: 'local-provider', source: 'local' }],
+      servers: [{ id: 'local-server', source: 'local' }],
+    });
+    await restoredLocal.close();
+  });
+
+  test('persists repository suite edits outside runtime data', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'mcp-repository-suites-'));
+    directories.push(directory);
+    const suiteDirectory = join(directory, 'repo', 'suites');
+    mkdirSync(join(directory, 'state'));
+    const runtime = new WorkbenchRuntime({
+      databasePath: join(directory, 'state', 'workbench.db'),
+      suiteDirectory,
+      callbackUrl: 'http://127.0.0.1:4317/api/oauth/callback',
+      repositoryWorkspace: { workspaceDirectory: join(directory, 'repo'), configPath: join(directory, 'repo', 'mcp-riksa.config.yaml') },
+    });
+    await runtime.initializeRepositoryConfiguration({ providers: [], servers: [] });
+    const source = 'version: 1\nname: tracked\ncases:\n  - id: smoke\n    kind: direct\n    server: notion\n    call: { tool: search, arguments: {} }\n    assertions: []\n';
+    await runtime.createSuite(source);
+    expect(readFileSync(join(suiteDirectory, 'tracked.yaml'), 'utf8')).toBe(source);
+    await runtime.close();
   });
 
   test('persists only environment references and restores provider/server configuration', async () => {

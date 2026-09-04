@@ -68,17 +68,20 @@ export type SecretReference =
   | { source: 'vault'; id: string }
   | { source: 'session'; id: string };
 
+export type ConfigurationSource = 'local' | 'repository';
+
 export type ServerSummary = {
   id: string;
   name: string;
   connected?: boolean;
+  source?: ConfigurationSource;
 } & (
   | { transport: 'stdio'; command: string; args: string[]; cwd?: string; envRefs: Record<string, string>; env: Record<string, SecretReference> }
   | { transport: 'http'; url: string; headerEnv: Record<string, string>; headers: Record<string, SecretReference>; staticAuth?: { header: string; scheme: string; credential: SecretReference }; allowUnsafeEndpoint: boolean; oauth?: { scopes: string[]; clientId?: string; clientSecretEnv?: string; clientSecret?: SecretReference; timeoutMs: number } }
 );
 
 export type ProviderSummary = {
-  id: string; name: string; type: 'openai-compatible' | 'anthropic-compatible'; baseUrl: string;
+  id: string; name: string; type: 'openai-compatible' | 'anthropic-compatible'; baseUrl: string; source?: ConfigurationSource;
   models: Record<string, { id: string; pricing: { inputPerMillion: number; outputPerMillion: number } }>;
   apiKeyEnv?: string; apiKey?: SecretReference; apiKeyConfigured?: boolean; headerEnv?: Record<string, string>; headers?: Record<string, SecretReference>;
   headerStatus?: Record<string, { source: string; reference: string; configured: boolean }>;
@@ -203,7 +206,15 @@ export type VaultStatus = {
   keyLocation: string;
 };
 
+export type WorkspaceSummary = {
+  configPath: string;
+  suiteDirectory: string;
+  configReadOnly: true;
+};
+
 export type Bootstrap = {
+  mode: 'local' | 'repository';
+  workspace?: WorkspaceSummary;
   servers: ServerSummary[];
   providers: ProviderSummary[];
   suites: string[];

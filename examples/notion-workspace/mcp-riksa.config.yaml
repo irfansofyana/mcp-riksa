@@ -1,0 +1,25 @@
+version: 2
+servers:
+  - id: notion
+    name: Notion MCP
+    transport: http
+    url: https://mcp.notion.com/mcp
+    headerEnv: {}
+    headers: {}
+    oauth:
+      scopes: []
+      timeoutMs: 120000
+providers:
+  - id: openai
+    name: OpenAI
+    type: openai-compatible
+    baseUrl: https://api.openai.com/v1
+    models:
+      default:
+        id: gpt-4o-mini
+        pricing: { inputPerMillion: 0, outputPerMillion: 0 }
+    apiKey:
+      source: env
+      name: OPENAI_API_KEY
+    headerEnv: {}
+    headers: {}

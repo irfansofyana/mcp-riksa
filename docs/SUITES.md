@@ -58,6 +58,21 @@ Supported assertion types:
 
 See [`examples/sample-suite.yaml`](../examples/sample-suite.yaml) for a direct-tool suite and [`examples/sample-agent-suite.yaml`](../examples/sample-agent-suite.yaml) for an agent suite.
 
+## Repository suite directory
+
+Use `serve --workspace .` to load portable suites from `./suites`, or override it with `--suites-dir <path>`. Repository suite files remain fully editable through the browser and can be committed directly; runtime history and secrets stay under `.mcp-riksa`.
+
+Suite directories are flat. Every file must end in `.yaml`, its filename must equal `<suite.name>.yaml`, symbolic links are rejected, and case-insensitive name collisions fail startup. External file edits require restart in this release.
+
+To migrate suites from legacy project storage:
+
+```bash
+mkdir -p suites
+cp .mcp-riksa/suites/*.yaml suites/
+```
+
+Review files before committing; migration is never automatic.
+
 ## Composing suites in the browser
 
 Choose **Create suite** once, then select **Generate with AI** or **Build manually**. Both routes produce an unsaved draft in the same visual composer for direct and agent cases. Add expected tool calls, output assertions, JSONPath checks, and budgets without hand-authoring YAML. The YAML tab stays canonical: visual edits serialize to strict versioned suite YAML that commits and runs unchanged through the CLI or CI.

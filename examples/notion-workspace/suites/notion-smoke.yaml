@@ -1,0 +1,24 @@
+version: 2
+name: notion-smoke
+description: Read-only smoke test for the hosted Notion MCP server.
+cases:
+  - id: search-workspace
+    kind: agent
+    server: notion
+    provider: openai
+    model: default
+    turns:
+      - id: search
+        user: Search my Notion workspace for pages related to onboarding, then summarize what you find without changing any content.
+        assertions:
+          - type: tool
+            tool: notion-search
+            success: true
+    iterations: { count: 1, minPasses: 1 }
+    limits:
+      maxTurns: 4
+      maxToolCalls: 2
+      timeoutMs: 30000
+    assertions:
+      - type: tool_called
+        tool: notion-search

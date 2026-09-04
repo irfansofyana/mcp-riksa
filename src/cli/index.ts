@@ -18,12 +18,27 @@ import { reportJunit } from '../reporters/junit.js';
 import { redact } from '../core/redaction.js';
 import { packageRoot, packageVersion } from '../core/package-info.js';
 import type { RunResult } from '../core/types.js';
-import { dataDirectoryOptionDescription, dataDirectoryStartupMessage, resolveDataDirectory } from './data-dir.js';
+import { dataDirectoryOptionDescription, resolveDataDirectory } from './data-dir.js';
+import { httpServerOrigin, loopbackCallbackUrl, prepareServeWorkspace, resolveServeWorkspace, serveWorkspaceStartupMessages } from './workspace.js';
 
 const configurationSchema = z.strictObject({
   version: z.literal(2),
   servers: z.array(serverConfigSchema).default([]),
   providers: z.array(providerConfigSchema).default([]),
+}).superRefine((configuration, context) => {
+  for (const kind of ['servers', 'providers'] as const) {
+    const seen = new Map<string, number>();
+    configuration[kind].forEach((entry, index) => {
+      const previous = seen.get(entry.id);
+      if (previous !== undefined) {
+        context.addIssue({
+          code: 'custom',
+          path: [kind, index, 'id'],
+          message: `Duplicate ${kind === 'servers' ? 'server' : 'provider'} ID ${entry.id}; first declared at index ${previous}`,
+        });
+      } else seen.set(entry.id, index);
+    });
+  }
 });
 
 type WorkbenchConfiguration = { version: 2; servers: ServerConfig[]; providers: ProviderConfig[] };
@@ -134,21 +149,33 @@ program.command('serve')
   .description('Start the loopback browser workbench')
   .option('--host <host>', 'bind host', '127.0.0.1')
   .option('--port <port>', 'bind port', (value) => Number.parseInt(value, 10), 4317)
+  .option('--workspace <path>', 'repository workspace root with config, suites, and isolated runtime state')
+  .option('--suites-dir <path>', 'portable suite YAML directory (default: workspace/suites or data-dir/suites)')
   .option('--data-dir <path>', dataDirectoryOptionDescription)
   .option('--config <path>', 'workbench YAML configuration')
   .option('--allow-external', 'explicitly permit a non-loopback bind')
   .option('--dev', 'serve the Vite development UI')
-  .action(async (options: { host: string; port: number; dataDir?: string; config?: string; allowExternal?: boolean; dev?: boolean }) => {
+  .action(async (options: { host: string; port: number; workspace?: string; suitesDir?: string; dataDir?: string; config?: string; allowExternal?: boolean; dev?: boolean }) => {
     const loopback = ['127.0.0.1', 'localhost', '::1'].includes(options.host);
     if (!loopback && !options.allowExternal) throw new Error('External bind requires --allow-external');
-    const dataDirectory = resolveDataDirectory(options.dataDir);
-    mkdirSync(dataDirectory, { recursive: true });
+    const workspace = prepareServeWorkspace(resolveServeWorkspace(options));
     const runtime = new WorkbenchRuntime({
-      databasePath: join(dataDirectory, 'workbench.db'),
-      suiteDirectory: join(dataDirectory, 'suites'),
-      callbackUrl: `http://127.0.0.1:${options.port}/api/oauth/callback`,
+      databasePath: join(workspace.dataDirectory, 'workbench.db'),
+      suiteDirectory: workspace.suiteDirectory,
+      callbackUrl: loopbackCallbackUrl(options.host, options.port),
+      ...(workspace.mode === 'repository' ? { repositoryWorkspace: {
+        workspaceDirectory: workspace.workspaceDirectory!,
+        configPath: workspace.configPath!,
+      } } : {}),
     });
-    await applyConfiguration(runtime, loadConfiguration(options.config), false);
+    try {
+      const config = loadConfiguration(workspace.configPath);
+      if (workspace.mode === 'repository') await runtime.initializeRepositoryConfiguration(config);
+      else await applyConfiguration(runtime, config, false);
+    } catch (error) {
+      await runtime.close();
+      throw error;
+    }
     const staticDirectory = options.dev ? undefined : join(packageRoot(), 'dist/web');
     const app = createApp(runtime, { ...(staticDirectory === undefined ? {} : { staticDirectory }) });
     let vite: { middlewares: RequestHandler; close(): Promise<void> } | undefined;
@@ -164,7 +191,7 @@ program.command('serve')
     });
     const address = server.address();
     const port = address && typeof address !== 'string' ? address.port : options.port;
-    process.stdout.write(`MCP Riksa listening at http://${options.host}:${port}\n${dataDirectoryStartupMessage(dataDirectory)}\n`);
+    runtime.setCallbackUrl(loopbackCallbackUrl(options.host, port));
     const shutdown = async () => {
       const serverClose = new Promise<void>((resolveClose, rejectClose) => server.close((error) => error ? rejectClose(error) : resolveClose()));
       const results = await Promise.allSettled([serverClose, vite?.close(), runtime.close()]);
@@ -182,6 +209,7 @@ program.command('serve')
     };
     process.once('SIGINT', stop);
     process.once('SIGTERM', stop);
+    process.stdout.write(`MCP Riksa listening at ${httpServerOrigin(options.host, port)}\n${serveWorkspaceStartupMessages(workspace).join('\n')}\n`);
   });
 
 program.parseAsync(process.argv).catch((error: unknown) => {

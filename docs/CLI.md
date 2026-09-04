@@ -1,6 +1,62 @@
-# Headless CLI
+# CLI and repository workspace
 
-The CLI runs the same suite runner used by the browser workbench, so a suite behaves identically whether it's launched interactively or from CI.
+MCP Riksa supports a repository-owned browser workspace and headless suite runs. Both use the same suite runner.
+
+## Repository workspace
+
+Use repository mode when configuration and suites belong in Git while OAuth, run history, and local secrets must remain local:
+
+```text
+project/
+├── mcp-riksa.config.yaml
+├── suites/
+│   └── smoke.yaml
+├── .mcp-riksa/       # runtime state; ignored
+└── .gitignore
+```
+
+```bash
+cd project
+mcp-riksa serve --workspace .
+```
+
+`--workspace` selects these defaults:
+
+- configuration: `<workspace>/mcp-riksa.config.yaml`
+- portable suites: `<workspace>/suites`
+- runtime state: `<workspace>/.mcp-riksa`
+
+Repository configuration is authoritative and read-only in the UI. Edit YAML and restart MCP Riksa to apply configuration changes. Suite edits made in the UI write directly to the repository suite directory. OAuth authorization remains available in the UI and its tokens remain in process memory only.
+
+Custom paths override workspace defaults:
+
+```bash
+mcp-riksa serve --workspace . \
+  --config ./config/mcp-riksa.yaml \
+  --suites-dir ./evals \
+  --data-dir ./.mcp-riksa
+```
+
+`--suites-dir` expects a flat directory of `.yaml` files. Each filename must match its suite `name`. Runtime data and suite directories cannot overlap in repository mode.
+
+Recommended `.gitignore`:
+
+```gitignore
+.mcp-riksa/
+reports/
+.env
+```
+
+### OAuth-only server example
+
+The bundled repository example targets Notion's hosted Streamable HTTP server:
+
+```bash
+export OPENAI_API_KEY="..."
+mcp-riksa serve --workspace ./examples/notion-workspace
+```
+
+Open the printed URL, authenticate Notion from **Servers**, then run `notion-smoke` from **Suites**. Notion documents `https://mcp.notion.com/mcp` as its hosted OAuth server: [Notion MCP setup](https://developers.notion.com/guides/mcp/get-started-with-mcp).
 
 ## Inspect a server without a full config
 
@@ -43,17 +99,25 @@ npx tsx src/cli/index.ts run examples/sample-agent-suite.yaml \
 
 1. Explicit `--data-dir <path>`
 2. `MCP_RIKSA_DATA_HOME`
-3. `.mcp-riksa` relative to current working directory
+3. `<workspace>/.mcp-riksa` in repository mode, otherwise `.mcp-riksa` relative to current working directory
 
-The directory contains local SQLite history, saved suite-library files, and encrypted vault data. `serve` prints its resolved absolute path at startup.
+The directory contains local SQLite history and encrypted vault data. In legacy mode it also contains saved suite-library files. Repository mode keeps suites in `--suites-dir` instead. `serve` prints its resolved absolute mode, config, suite, and data paths at startup.
 
 ### Project mode
 
-Best for repository-local work and CI. State stays isolated and `.mcp-riksa/` is ignored by Git:
+For repository-owned browser workflows, prefer workspace mode:
+
+```bash
+mcp-riksa serve --workspace .
+```
+
+For legacy UI-managed configuration, state and suites can remain isolated together:
 
 ```bash
 mcp-riksa serve --data-dir .mcp-riksa --config ./mcp-riksa.config.yaml
 ```
+
+Without `--workspace`, `serve --config` seeds missing entries and preserves browser edits.
 
 ### Personal mode
 
@@ -65,7 +129,7 @@ export MCP_RIKSA_DATA_HOME="$HOME/.local/state/mcp-riksa"
 mcp-riksa serve --config ./mcp-riksa.config.yaml
 ```
 
-`--data-dir` always overrides `MCP_RIKSA_DATA_HOME`.
+`--data-dir` always overrides `MCP_RIKSA_DATA_HOME`. Repository mode changes only the fallback; an explicit data directory or environment setting still wins.
 
 ## Output
 

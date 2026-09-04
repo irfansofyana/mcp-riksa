@@ -1,5 +1,5 @@
 import { existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync, closeSync, fsyncSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { createProviderAdapter } from '../agent/providers.js';
@@ -34,6 +34,15 @@ type RuntimeOptions = {
   secretConfigDirectory?: string;
   conformanceRunner?: ConformanceRunner;
   providerAdapterFactory?: typeof createProviderAdapter;
+  repositoryWorkspace?: {
+    workspaceDirectory: string;
+    configPath: string;
+  };
+};
+
+type RepositoryConfiguration = {
+  providers: ProviderConfig[];
+  servers: ServerConfig[];
 };
 
 type PlaygroundInput = {
@@ -63,6 +72,8 @@ export class WorkbenchRuntime {
   private readonly oauth: OAuthCoordinator;
   private readonly providers = new Map<string, ProviderConfig>();
   private readonly servers = new Map<string, ServerConfig>();
+  private readonly managedProviderIds = new Set<string>();
+  private readonly managedServerIds = new Set<string>();
   private readonly suites = new Map<string, { source: string; suite: Suite }>();
   private readonly activeRuns = new Map<string, AbortController>();
   private readonly activeRunTasks = new Map<string, Promise<void>>();
@@ -92,13 +103,15 @@ export class WorkbenchRuntime {
     this.conformanceRunner = options.conformanceRunner ?? new OfficialConformanceRunner();
     this.runs.recoverInterrupted();
     this.conformance.recoverInterrupted();
-    for (const config of this.configurations.list<ProviderConfig>('provider')) {
-      const parsed = providerConfigSchema.parse(config);
-      this.providers.set(parsed.id, parsed);
-    }
-    for (const config of this.configurations.list<ServerConfig>('server')) {
-      const parsed = serverConfigSchema.parse(config);
-      this.servers.set(parsed.id, parsed);
+    if (options.repositoryWorkspace === undefined) {
+      for (const config of this.configurations.list<ProviderConfig>('provider')) {
+        const parsed = providerConfigSchema.parse(config);
+        this.providers.set(parsed.id, parsed);
+      }
+      for (const config of this.configurations.list<ServerConfig>('server')) {
+        const parsed = serverConfigSchema.parse(config);
+        this.servers.set(parsed.id, parsed);
+      }
     }
     const loadedNames = new Set<string>();
     for (const filename of readdirSync(options.suiteDirectory).filter((name) => name.endsWith('.yaml'))) {
@@ -114,9 +127,24 @@ export class WorkbenchRuntime {
     }
   }
 
+  setCallbackUrl(callbackUrl: string): void {
+    this.options.callbackUrl = callbackUrl;
+  }
+
   async bootstrap() {
+    const repository = this.options.repositoryWorkspace;
     return {
-      servers: [...this.servers.values()].map((config) => ({ ...config, connected: this.mcp.isConnected(config.id) })),
+      mode: repository === undefined ? 'local' as const : 'repository' as const,
+      ...(repository === undefined ? {} : { workspace: {
+        configPath: repository.configPath,
+        suiteDirectory: this.options.suiteDirectory,
+        configReadOnly: true as const,
+      } }),
+      servers: [...this.servers.values()].map((config) => ({
+        ...config,
+        connected: this.mcp.isConnected(config.id),
+        source: this.managedServerIds.has(config.id) ? 'repository' as const : 'local' as const,
+      })),
       providers: (await this.settings()).providers,
       suites: await this.listSuites(),
       runs: await this.listRuns(),
@@ -130,6 +158,7 @@ export class WorkbenchRuntime {
       callbackUrl: this.options.callbackUrl,
       providers: await Promise.all([...this.providers.values()].map(async (config) => ({
         ...config,
+        source: this.managedProviderIds.has(config.id) ? 'repository' as const : 'local' as const,
         apiKeyConfigured: config.apiKey !== undefined
           ? await this.secrets.isConfigured(config.apiKey)
           : config.apiKeyEnv !== undefined && process.env[config.apiKeyEnv] !== undefined,
@@ -198,7 +227,62 @@ export class WorkbenchRuntime {
     });
   }
 
+  private assertConfigurationWritable(kind: 'provider' | 'server'): void {
+    if (this.options.repositoryWorkspace === undefined) return;
+    throw new WorkbenchError(
+      `Repository ${kind} configuration is read-only; edit ${this.options.repositoryWorkspace.configPath} and restart MCP Riksa`,
+      409,
+    );
+  }
+
+  async initializeRepositoryConfiguration(input: RepositoryConfiguration) {
+    const repository = this.options.repositoryWorkspace;
+    if (repository === undefined) throw new Error('Repository configuration requires repository workspace mode');
+    if (this.activeConfigUses.size > 0 || this.mutatingConfigs.size > 0) {
+      throw new WorkbenchError('Repository configuration can only be initialized before use', 409);
+    }
+    for (const [kind, entries] of [['server', input.servers], ['provider', input.providers]] as const) {
+      const seen = new Set<string>();
+      for (const entry of entries) {
+        if (seen.has(entry.id)) throw new WorkbenchError(`Duplicate repository ${kind} ID ${entry.id}`, 400);
+        seen.add(entry.id);
+      }
+    }
+
+    const providers: ProviderConfig[] = [];
+    for (const inputProvider of input.providers) {
+      const provider = providerConfigSchema.parse(inputProvider);
+      await validateHttpEndpoint(provider.baseUrl);
+      await this.assertManagedSecretReferences(provider);
+      providers.push(provider);
+    }
+    const servers: ServerConfig[] = [];
+    for (const inputServer of input.servers) {
+      const parsed = serverConfigSchema.parse(inputServer);
+      const server = parsed.transport === 'stdio'
+        ? { ...parsed, cwd: resolve(repository.workspaceDirectory, parsed.cwd ?? '.') }
+        : parsed;
+      await this.assertManagedSecretReferences(server);
+      servers.push(server);
+    }
+
+    this.providers.clear();
+    this.servers.clear();
+    this.managedProviderIds.clear();
+    this.managedServerIds.clear();
+    for (const provider of providers) {
+      this.providers.set(provider.id, provider);
+      this.managedProviderIds.add(provider.id);
+    }
+    for (const server of servers) {
+      this.servers.set(server.id, server);
+      this.managedServerIds.add(server.id);
+    }
+    return { providers: providers.length, servers: servers.length };
+  }
+
   async addProvider(input: ProviderConfig) {
+    this.assertConfigurationWritable('provider');
     const config = providerConfigSchema.parse(input);
     return this.withConfigMutations([`provider:${config.id}`, ...this.configSecretLockKeys(config)], async () => {
       await validateHttpEndpoint(config.baseUrl);
@@ -210,6 +294,7 @@ export class WorkbenchRuntime {
   }
 
   async seedProvider(input: ProviderConfig) {
+    this.assertConfigurationWritable('provider');
     const config = providerConfigSchema.parse(input);
     if (!this.configurations.canSeed('provider', config.id)) return false;
     return this.withConfigMutations([`provider:${config.id}`, ...this.configSecretLockKeys(config)], async () => {
@@ -222,6 +307,7 @@ export class WorkbenchRuntime {
   }
 
   async createProvider(input: ProviderConfigInput) {
+    this.assertConfigurationWritable('provider');
     const config = providerConfigSchema.parse(input);
     return this.withConfigMutations([`provider:${config.id}`, ...this.configSecretLockKeys(config)], async () => {
       await validateHttpEndpoint(config.baseUrl);
@@ -234,6 +320,7 @@ export class WorkbenchRuntime {
   }
 
   async updateProvider(id: string, input: ProviderConfigInput) {
+    this.assertConfigurationWritable('provider');
     const config = providerConfigSchema.parse(input);
     if (config.id !== id) throw new WorkbenchError('Provider ID cannot be changed while editing', 400);
     this.requireProvider(id);
@@ -251,6 +338,7 @@ export class WorkbenchRuntime {
   }
 
   async deleteProvider(id: string, force = false) {
+    this.assertConfigurationWritable('provider');
     this.requireProvider(id);
     return this.withConfigMutation(`provider:${id}`, async () => {
       const references = this.providerReferences(id);
@@ -279,6 +367,7 @@ export class WorkbenchRuntime {
   }
 
   async addServer(input: ServerConfig) {
+    this.assertConfigurationWritable('server');
     const config = serverConfigSchema.parse(input);
     return this.withConfigMutations([`server:${config.id}`, ...this.configSecretLockKeys(config)], async () => {
       await this.assertManagedSecretReferences(config);
@@ -289,6 +378,7 @@ export class WorkbenchRuntime {
   }
 
   async seedServer(input: ServerConfig) {
+    this.assertConfigurationWritable('server');
     const config = serverConfigSchema.parse(input);
     if (!this.configurations.canSeed('server', config.id)) return false;
     return this.withConfigMutations([`server:${config.id}`, ...this.configSecretLockKeys(config)], async () => {
@@ -300,6 +390,7 @@ export class WorkbenchRuntime {
   }
 
   async createServer(input: ServerConfigInput) {
+    this.assertConfigurationWritable('server');
     const config = serverConfigSchema.parse(input);
     return this.withConfigMutations([`server:${config.id}`, ...this.configSecretLockKeys(config)], async () => {
       await this.assertManagedSecretReferences(config);
@@ -311,6 +402,7 @@ export class WorkbenchRuntime {
   }
 
   async updateServer(id: string, input: ServerConfigInput) {
+    this.assertConfigurationWritable('server');
     const config = serverConfigSchema.parse(input);
     if (config.id !== id) throw new WorkbenchError('Server ID cannot be changed while editing', 400);
     this.requireServer(id);
@@ -325,6 +417,7 @@ export class WorkbenchRuntime {
   }
 
   async deleteServer(id: string, force = false) {
+    this.assertConfigurationWritable('server');
     this.requireServer(id);
     return this.withConfigMutation(`server:${id}`, async () => {
       const references = this.serverReferences(id);

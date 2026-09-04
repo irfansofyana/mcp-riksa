@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { Button, Empty, Field, Input, JsonView, Notice, RichToolResult, Section, Select, Status, Textarea } from '../components.js';
 import { buildServerPayload, buildToolArguments, buildToolFields, initialToolValues, serverToForm, type ServerForm } from '../model.js';
-import type { ConformanceReportSummary, ServerSummary, Tool } from '../types.js';
+import type { ConformanceReportSummary, ServerSummary, Tool, WorkspaceSummary } from '../types.js';
 
 type OAuthStatus = { id?: string; state: string; scopes: string[]; timeline: unknown[]; authorizationUrl?: string; expiresAt?: string };
 
@@ -13,8 +13,8 @@ const initialForm = (): ServerForm => ({
   staticAuthEnabled: false, staticAuthHeader: 'Authorization', staticAuthScheme: 'Bearer', staticAuthCredential: '',
 });
 
-export function ServersPage({ servers, conformanceReports, onRefresh, onConformanceStarted }: {
-  servers: ServerSummary[]; conformanceReports: ConformanceReportSummary[]; onRefresh(): Promise<void>; onConformanceStarted(id: string): void;
+export function ServersPage({ servers, conformanceReports, workspace, onRefresh, onConformanceStarted }: {
+  servers: ServerSummary[]; conformanceReports: ConformanceReportSummary[]; workspace?: WorkspaceSummary; onRefresh(): Promise<void>; onConformanceStarted(id: string): void;
 }) {
   const [form, setForm] = useState(initialForm);
   const [editingId, setEditingId] = useState('');
@@ -117,9 +117,9 @@ export function ServersPage({ servers, conformanceReports, onRefresh, onConforma
   return <div className="page-grid servers-page">
     <Section title="MCP servers" className="rail-section" action={<span className="count">{servers.length}</span>}>
       <div className="row-list server-config-list" data-testid="server-list">
-        {servers.length === 0 ? <Empty>Register a stdio or Streamable HTTP server to begin.</Empty> : servers.map((server) => <div key={server.id} className={`config-list-item ${selected === server.id ? 'selected' : ''}`}>
+        {servers.length === 0 ? <Empty>{workspace ? `Add servers to ${workspace.configPath}, then restart MCP Riksa.` : 'Register a stdio or Streamable HTTP server to begin.'}</Empty> : servers.map((server) => <div key={server.id} className={`config-list-item ${selected === server.id ? 'selected' : ''}`}>
           <button className="config-select" onClick={() => { setSelected(server.id); clearInspection(); }}><span><b>{server.name}</b><small>{server.transport} · {server.id}</small></span><Status value={server.connected ? 'connected' : 'saved'} /></button>
-          <div className="config-actions compact"><Button onClick={() => editServer(server)}>Edit</Button><Button onClick={() => duplicateServer(server)}>Duplicate</Button><Button variant="danger" onClick={() => void act(async () => {
+          {server.source === 'repository' ? <div className="config-actions compact"><Status value="repository config" /></div> : <div className="config-actions compact"><Button onClick={() => editServer(server)}>Edit</Button><Button onClick={() => duplicateServer(server)}>Duplicate</Button><Button variant="danger" onClick={() => void act(async () => {
             try { await api.deleteServer(server.id); }
             catch (reason) {
               if (!(reason instanceof Error) || !reason.message.includes('referenced') || !window.confirm(`${reason.message}. Delete anyway? Saved suites and conversations will remain unresolved until this ID is restored.`)) throw reason;
@@ -128,7 +128,7 @@ export function ServersPage({ servers, conformanceReports, onRefresh, onConforma
             if (selected === server.id) { setSelected(''); clearInspection(); }
             if (editingId === server.id) resetForm();
             await onRefresh(); setMessage('MCP server deleted.');
-          })}>Delete</Button></div>
+          })}>Delete</Button></div>}
         </div>)}
       </div>
       <div className="button-row">
@@ -144,8 +144,8 @@ export function ServersPage({ servers, conformanceReports, onRefresh, onConforma
     </Section>
 
     <div className="workspace-stack">
-      <Section title={editingId ? `Edit server · ${editingId}` : 'Register server'} action={editingId ? <Status value="editing" /> : undefined}>
-        <form className="form-grid" onSubmit={(event) => { event.preventDefault(); void act(async () => { const payload = buildServerPayload(form); if (editingId) await api.updateServer(editingId, payload); else await api.addServer(payload); setSelected(form.id); clearInspection(); await onRefresh(); setMessage(editingId ? 'Server updated. Reconnect to apply changes.' : 'Server created.'); resetForm(); }); }}>
+      <Section title={workspace ? 'Repository configuration' : editingId ? `Edit server · ${editingId}` : 'Register server'} action={workspace ? <Status value="read only" /> : editingId ? <Status value="editing" /> : undefined}>
+        {workspace ? <Notice>Servers come from <code>{workspace.configPath}</code>. Edit that file and restart MCP Riksa to apply changes. Connection, inspection, OAuth, and execution remain available here.</Notice> : <form className="form-grid" onSubmit={(event) => { event.preventDefault(); void act(async () => { const payload = buildServerPayload(form); if (editingId) await api.updateServer(editingId, payload); else await api.addServer(payload); setSelected(form.id); clearInspection(); await onRefresh(); setMessage(editingId ? 'Server updated. Reconnect to apply changes.' : 'Server created.'); resetForm(); }); }}>
           <Field label="Server ID" hint={editingId ? 'ID is immutable. Duplicate to create a new ID.' : 'Stable alias used by suites and conversations.'}><Input required disabled={Boolean(editingId)} value={form.id} onChange={(event) => change('id', event.target.value)} placeholder="sample" data-testid="server-id" /></Field>
           <Field label="Display name"><Input required value={form.name} onChange={(event) => change('name', event.target.value)} placeholder="Sample tools" data-testid="server-name" /></Field>
           <Field label="Transport"><Select value={form.transport} onChange={(event) => change('transport', event.target.value as ServerForm['transport'])}><option value="stdio">stdio</option><option value="http">Streamable HTTP</option></Select></Field>
@@ -173,7 +173,7 @@ export function ServersPage({ servers, conformanceReports, onRefresh, onConforma
             <label className="check"><input type="checkbox" checked={form.allowUnsafeEndpoint ?? false} onChange={(event) => change('allowUnsafeEndpoint', event.target.checked)} /> Allow endpoint addresses blocked by default safety policy</label>
           </>}
           <div className="form-actions"><Button variant="primary" type="submit" data-testid="save-server">{editingId ? 'Save changes' : 'Create server'}</Button>{editingId || form.id ? <Button type="button" onClick={resetForm}>Cancel</Button> : null}</div>
-        </form>
+        </form>}
         {message ? <Notice>{message}</Notice> : null}{error ? <Notice error>{error}</Notice> : null}
       </Section>
 
