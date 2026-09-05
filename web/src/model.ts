@@ -15,7 +15,7 @@ import type {
   VersionedSuiteDraft,
 } from './types.js';
 
-export const pages = ['Servers', 'Playground', 'Suites', 'Runs', 'Conformance', 'Compare', 'Secrets', 'Settings'] as const;
+export const pages = ['Servers', 'Playground', 'Suites', 'Runs', 'Compare', 'Secrets', 'Settings'] as const;
 export type Page = typeof pages[number];
 
 export function normalizePage(hash: string): Page {

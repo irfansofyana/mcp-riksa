@@ -59,7 +59,7 @@ describe('browser success path', () => {
       'playground-complete', 'suite-saved', 'direct-editor-cleanup-checked', 'case-id-cleanup-checked',
       'turn-id-cleanup-checked', 'first-run-inspected-live-progress', 'run-poll-recovered', 'first-run-inspected',
       'second-run-inspected-live-progress', 'second-run-inspected', 'run-refresh-race-guarded',
-      'active-run-reselection-guarded', 'conformance-page-checked', 'runs-compared', 'mobile-checked',
+      'active-run-reselection-guarded', 'runs-compared', 'mobile-checked',
     ]);
     expect(result.consoleErrors).toEqual([]);
     expect(result.lightScreenshot).toMatch(/light-mode\.png$/);

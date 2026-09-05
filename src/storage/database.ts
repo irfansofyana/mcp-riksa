@@ -121,35 +121,6 @@ CREATE TABLE IF NOT EXISTS configuration_tombstones (
 );
 `;
 
-const conformanceMigration = `
-CREATE TABLE IF NOT EXISTS conformance_reports (
-  id TEXT PRIMARY KEY,
-  server_id TEXT NOT NULL,
-  endpoint TEXT NOT NULL,
-  selection_json TEXT NOT NULL,
-  status TEXT NOT NULL CHECK(status IN ('running', 'passed', 'failed', 'warning', 'harness_error', 'cancelled', 'timed_out', 'interrupted')),
-  started_at TEXT NOT NULL,
-  completed_at TEXT,
-  runner_version TEXT NOT NULL,
-  summary_json TEXT NOT NULL,
-  raw_report_json TEXT,
-  diagnostic TEXT
-);
-
-CREATE TABLE IF NOT EXISTS conformance_checks (
-  report_id TEXT NOT NULL REFERENCES conformance_reports(id) ON DELETE CASCADE,
-  sequence INTEGER NOT NULL,
-  scenario TEXT NOT NULL,
-  check_id TEXT NOT NULL,
-  status TEXT NOT NULL CHECK(status IN ('passed', 'failed', 'warning', 'skipped', 'harness_error')),
-  check_json TEXT NOT NULL,
-  PRIMARY KEY (report_id, sequence)
-);
-
-CREATE INDEX IF NOT EXISTS conformance_reports_server_started
-ON conformance_reports(server_id, started_at DESC);
-`;
-
 export type WorkbenchDatabase = Database.Database;
 
 function backfillPlaygroundEvents(database: WorkbenchDatabase): void {
@@ -234,7 +205,7 @@ export function openDatabase(path: string): WorkbenchDatabase {
   }
   if (version < 7) {
     database.transaction(() => {
-      database.exec(conformanceMigration);
+      // Retain forward-only migration numbering for existing databases.
       database.prepare('INSERT INTO migrations(version, applied_at) VALUES (?, ?)').run(7, new Date().toISOString());
     })();
     version = 7;

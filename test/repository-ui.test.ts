@@ -40,10 +40,8 @@ describe('repository workspace UI', () => {
   test('keeps operational server actions but removes repository configuration mutations', () => {
     const html = renderToStaticMarkup(createElement(ServersPage, {
       servers: [server],
-      conformanceReports: [],
       workspace,
       onRefresh: refresh,
-      onConformanceStarted: () => undefined,
     }));
     expect(html).toContain('Repository configuration');
     expect(html).toContain('repository config');

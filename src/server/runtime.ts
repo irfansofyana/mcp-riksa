@@ -4,9 +4,6 @@ import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { createProviderAdapter } from '../agent/providers.js';
 import { createAgentSuiteDraft, SuiteGenerationError, type SuiteGenerationInput } from '../agent/suite-generation.js';
-import { conformanceStatus } from '../conformance/model.js';
-import { OfficialConformanceRunner } from '../conformance/runner.js';
-import { CONFORMANCE_RUNNER_VERSION, type ConformanceRunner, type ConformanceSelection } from '../conformance/types.js';
 import { providerConfigSchema, type ProviderConfig, type ProviderConfigInput, type ProviderMessage } from '../agent/types.js';
 import { runAgent, runScriptedConversation, type AgentUpdate } from '../agent/loop.js';
 import { event } from '../core/events.js';
@@ -21,7 +18,6 @@ import { EncryptedFileSecretBackend } from '../secrets/encrypted-file.js';
 import { SecretStore, type CreateSecretInput } from '../secrets/store.js';
 import type { SecretPurpose, SecretReference } from '../secrets/types.js';
 import { ConfigurationRepository } from '../storage/configurations.js';
-import { ConformanceRepository } from '../storage/conformance.js';
 import { ConversationRepository } from '../storage/conversations.js';
 import { openDatabase, type WorkbenchDatabase } from '../storage/database.js';
 import { RunRepository } from '../storage/runs.js';
@@ -32,7 +28,6 @@ type RuntimeOptions = {
   suiteDirectory: string;
   callbackUrl: string;
   secretConfigDirectory?: string;
-  conformanceRunner?: ConformanceRunner;
   providerAdapterFactory?: typeof createProviderAdapter;
   repositoryWorkspace?: {
     workspaceDirectory: string;
@@ -64,8 +59,6 @@ export class WorkbenchRuntime {
   private readonly runs: RunRepository;
   private readonly configurations: ConfigurationRepository;
   private readonly conversations: ConversationRepository;
-  private readonly conformance: ConformanceRepository;
-  private readonly conformanceRunner: ConformanceRunner;
   private readonly vault: EncryptedFileSecretBackend;
   private readonly secrets: SecretStore;
   private readonly mcp: McpManager;
@@ -78,8 +71,6 @@ export class WorkbenchRuntime {
   private readonly activeRuns = new Map<string, AbortController>();
   private readonly activeRunTasks = new Map<string, Promise<void>>();
   private readonly activeRunProgress = new Map<string, SuiteRunProgress>();
-  private readonly activeConformance = new Map<string, AbortController>();
-  private readonly activeConformanceTasks = new Map<string, Promise<void>>();
   private readonly activeConfigUses = new Map<string, number>();
   private readonly mutatingConfigs = new Set<string>();
   private readonly activeConfigTasks = new Set<Promise<unknown>>();
@@ -99,10 +90,7 @@ export class WorkbenchRuntime {
     this.runs = new RunRepository(this.database);
     this.configurations = new ConfigurationRepository(this.database);
     this.conversations = new ConversationRepository(this.database);
-    this.conformance = new ConformanceRepository(this.database);
-    this.conformanceRunner = options.conformanceRunner ?? new OfficialConformanceRunner();
     this.runs.recoverInterrupted();
-    this.conformance.recoverInterrupted();
     if (options.repositoryWorkspace === undefined) {
       for (const config of this.configurations.list<ProviderConfig>('provider')) {
         const parsed = providerConfigSchema.parse(config);
@@ -148,7 +136,6 @@ export class WorkbenchRuntime {
       providers: (await this.settings()).providers,
       suites: await this.listSuites(),
       runs: await this.listRuns(),
-      conformanceReports: await this.listConformanceReports(),
     };
   }
 
@@ -738,64 +725,6 @@ export class WorkbenchRuntime {
     return true;
   }
 
-  async startConformance(input: { serverId: string; selection: ConformanceSelection; timeoutMs: number }) {
-    if (this.closing) throw new WorkbenchError('Runtime is closing', 409);
-    const config = this.requireServer(input.serverId);
-    if (config.transport !== 'http') throw new WorkbenchError('Official conformance MVP supports Streamable HTTP servers only; stdio is unsupported', 400);
-    if (Object.keys(config.headerEnv).length > 0 || Object.keys(config.headers).length > 0 || config.staticAuth || config.oauth) {
-      throw new WorkbenchError('Pinned official conformance runner does not support workbench header, static authorization, or OAuth injection', 400);
-    }
-    const endpoint = await validateHttpEndpoint(config.url, false);
-    if (this.closing) throw new WorkbenchError('Runtime is closing', 409);
-    const hostname = endpoint.hostname.toLowerCase().replace(/^\[|\]$/g, '');
-    if (hostname !== 'localhost' && hostname !== '127.0.0.1' && hostname !== '::1') {
-      throw new WorkbenchError('Conformance execution is restricted to loopback MCP endpoints', 400);
-    }
-    if (endpoint.username || endpoint.password || endpoint.search || endpoint.hash) {
-      throw new WorkbenchError('Conformance endpoints cannot contain credentials, query parameters, or fragments', 400);
-    }
-    const id = randomUUID();
-    const startedAt = new Date().toISOString();
-    const controller = new AbortController();
-    const configKeys = [`server:${input.serverId}`];
-    this.beginConfigUse(configKeys);
-    try {
-      this.conformance.start({ id, serverId: input.serverId, endpoint: endpoint.href, selection: input.selection, startedAt, runnerVersion: CONFORMANCE_RUNNER_VERSION });
-    } catch (error) {
-      this.endConfigUse(configKeys);
-      throw error;
-    }
-    this.activeConformance.set(id, controller);
-    const task = Promise.resolve()
-      .then(() => controller.signal.aborted
-        ? { checks: [], rawReport: {}, exitCode: null, timedOut: false, cancelled: true }
-        : this.conformanceRunner.run({ endpoint: endpoint.href, selection: input.selection, timeoutMs: input.timeoutMs }, controller.signal))
-      .then((execution) => this.conformance.complete(id, {
-        status: conformanceStatus(execution), completedAt: new Date().toISOString(), checks: execution.checks,
-        rawReport: execution.rawReport, ...(execution.diagnostic ? { diagnostic: execution.diagnostic } : {}),
-      }))
-      .catch((error: unknown) => this.conformance.complete(id, {
-        status: controller.signal.aborted ? 'cancelled' : 'harness_error', completedAt: new Date().toISOString(), checks: [], rawReport: {},
-        diagnostic: redact(error instanceof Error ? error.message : String(error)),
-      }))
-      .finally(() => {
-        this.activeConformance.delete(id);
-        this.activeConformanceTasks.delete(id);
-        this.endConfigUse(configKeys);
-      });
-    this.activeConformanceTasks.set(id, task);
-    return { id, serverId: input.serverId, status: 'running' as const, startedAt, runnerVersion: CONFORMANCE_RUNNER_VERSION };
-  }
-
-  async listConformanceReports(serverId?: string) { return this.conformance.list(serverId); }
-  async getConformanceReport(id: string) { return this.conformance.get(id); }
-  async cancelConformance(id: string) {
-    const controller = this.activeConformance.get(id);
-    if (!controller) return false;
-    controller.abort(new Error('Cancelled by user'));
-    return true;
-  }
-
   async beginOAuth(id: string) {
     const config = this.requireServer(id);
     if (config.transport !== 'http') throw new WorkbenchError('OAuth is available only for Streamable HTTP servers', 400);
@@ -832,8 +761,7 @@ export class WorkbenchRuntime {
   async close(): Promise<void> {
     this.closing = true;
     for (const controller of this.activeRuns.values()) controller.abort(new Error('Runtime closing'));
-    for (const controller of this.activeConformance.values()) controller.abort(new Error('Runtime closing'));
-    await Promise.allSettled([...this.activeRunTasks.values(), ...this.activeConformanceTasks.values()]);
+    await Promise.allSettled([...this.activeRunTasks.values()]);
     await Promise.allSettled([...this.activeConfigTasks]);
     const cleanups = await Promise.allSettled([this.mcp.closeAll(), this.oauth.close(), this.secrets.close()]);
     this.database.close();
