@@ -373,18 +373,6 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     const desktop = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     writeFileSync(desktopScreenshot, Buffer.from(String(desktop.data), 'base64'));
 
-    await navigate('conformance');
-    await waitText('@modelcontextprotocol/conformance@0.1.10');
-    await waitText('Stdio and authenticated endpoints are unsupported');
-    await waitText('not universal MCP certification');
-    await wait(`(() => { const section=document.querySelector('.conformance-runner'); return section && section.scrollWidth <= section.clientWidth + 1; })()`, 'conformance runner without horizontal overflow');
-    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 901, height: 800, deviceScaleFactor: 1, mobile: false });
-    await wait(`document.querySelector('.conformance-runner') !== null`, 'conformance page at transition width');
-    await evaluate(`(() => { const host=document.querySelector('.conformance-report'); if(!host)return; const metrics=document.createElement('div'); metrics.className='conformance-metrics'; metrics.dataset.testid='conformance-metrics-fixture'; for(const label of ['Passed','Failed','Warnings','Skipped','Harness errors']){ const item=document.createElement('div'); item.innerHTML='<b>1</b><span>'+label+'</span>'; metrics.append(item); } host.append(metrics); })()`);
-    await wait(`(() => { const report=document.querySelector('.conformance-report'); const metrics=document.querySelector('[data-testid="conformance-metrics-fixture"]'); return report && metrics && report.scrollWidth <= report.clientWidth + 1 && metrics.scrollWidth <= metrics.clientWidth + 1; })()`, 'conformance metrics without transition-width overflow');
-    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
-    steps.push('conformance-page-checked');
-
     await navigate('compare');
     await click('compare-runs');
     await waitText('Regression ledger');
@@ -392,12 +380,6 @@ export async function runBrowserSmoke(options: { appUrl: string; providerUrl: st
     steps.push('runs-compared');
 
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
-    await navigate('conformance');
-    await cdp.send('Page.reload', { ignoreCache: true });
-    await wait(`document.querySelector('.conformance-runner') !== null`, 'direct mobile conformance page');
-    await wait(`(() => { const rail=document.querySelector('.nav-rail'); const active=rail?.querySelector('a.active'); if(!rail||!active)return false; const outer=rail.getBoundingClientRect(); const inner=active.getBoundingClientRect(); return inner.left >= outer.left && inner.right <= outer.right; })()`, 'active mobile conformance navigation');
-    await wait(`(() => { const brand=document.querySelector('.brand'); const mark=brand?.querySelector('.brand-mark'); const label=brand?.querySelector('span'); if(!brand||!mark||!label)return false; const outer=brand.getBoundingClientRect(); const icon=mark.getBoundingClientRect(); return getComputedStyle(label).display === 'none' && icon.width >= 24 && icon.height >= 24 && icon.left >= outer.left && icon.right <= outer.right; })()`, 'visible mobile MCP Riksa mark');
-    await wait(`document.documentElement.scrollWidth <= window.innerWidth + 1`, 'mobile conformance layout without horizontal overflow');
     await navigate('suites');
     await click('open-suite-generator');
     await wait(`(() => { const dialog=document.querySelector('.suite-launchpad[open]'); return dialog && dialog.scrollWidth <= dialog.clientWidth + 1 && document.documentElement.scrollWidth <= window.innerWidth + 1; })()`, 'mobile suite launchpad without horizontal overflow');

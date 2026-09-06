@@ -133,25 +133,6 @@ export type Run = {
   progress?: RunProgress;
 };
 
-export type ConformanceCheck = {
-  sequence: number; scenario: string; id: string; name: string; description: string;
-  status: 'passed' | 'failed' | 'warning' | 'skipped' | 'harness_error'; timestamp?: string;
-  specReferences: Array<{ id: string; url?: string }>; error?: string; details?: unknown;
-};
-
-export type ConformanceReportSummary = {
-  id: string; serverId: string; endpoint: string;
-  selection: { kind: 'suite'; suite: 'active' } | { kind: 'scenario'; scenario: string };
-  status: 'running' | 'passed' | 'failed' | 'warning' | 'harness_error' | 'cancelled' | 'timed_out' | 'interrupted';
-  startedAt: string; completedAt?: string; runnerVersion: string;
-  summary: { total: number; passed: number; failed: number; warnings: number; skipped: number; harnessErrors: number };
-  diagnostic?: string;
-};
-
-export type ConformanceReport = ConformanceReportSummary & {
-  checks: ConformanceCheck[]; rawReport?: unknown;
-};
-
 export type PlaygroundResult = {
   output: string;
   toolCalls: Array<{ name: string; arguments: unknown; result?: unknown; durationMs?: number }>;
@@ -225,5 +206,4 @@ export type Bootstrap = {
   providers: ProviderSummary[];
   suites: string[];
   runs: Run[];
-  conformanceReports: ConformanceReportSummary[];
 };

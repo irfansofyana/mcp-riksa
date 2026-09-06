@@ -31,9 +31,8 @@ import {
 } from '../web/src/theme.js';
 
 describe('workbench browser view model', () => {
-  test('normalizes hash navigation including dedicated conformance page', () => {
+  test('normalizes hash navigation', () => {
     expect(normalizePage('#/playground')).toBe('Playground');
-    expect(normalizePage('#/conformance')).toBe('Conformance');
     expect(normalizePage('#/secrets')).toBe('Secrets');
     expect(pages).toContain('Secrets');
     expect(normalizePage('#/not-real')).toBe('Servers');

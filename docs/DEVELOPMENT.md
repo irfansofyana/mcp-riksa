@@ -53,7 +53,6 @@ Publishing requires an `NPM_TOKEN` repository secret (an npm automation token wi
 - Anthropic-compatible endpoints don't expose a standard model-list route, so their connection test sends a short completion request instead.
 - JSONPath assertions support property access, array indexes, and quoted bracket keys only — filter expressions and scripts are out of scope.
 - Cost is computed from the local prices in provider config. A provider response with no usage data reports zero tokens and zero estimated cost.
-- Official conformance testing currently supports unauthenticated loopback Streamable HTTP servers only — stdio, OAuth, custom headers, and frozen dated requirement sets aren't supported.
 - The app owns and stops stdio child processes it spawns. It doesn't manage the lifecycle of external HTTP MCP servers you point it at.
 
 ## Project history
